@@ -1,0 +1,13 @@
+# Normaliza fim de linha. Sem isso, arquivos com CRLF clonados na VM Ubuntu
+# quebram: bash reclama de '\r' e o systemd não lê a unit direito.
+* text=auto
+
+*.sh      text eol=lf
+*.service text eol=lf
+Caddyfile text eol=lf
+Procfile  text eol=lf
+*.ps1     text eol=crlf
+
+*.js  text
+*.css text
+*.html text

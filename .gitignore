@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.log
+.env
+trading.db
+trading.db-wal
+trading.db-shm
+dados_cache/
+_test_*.py
+analise_dia.py
+
+# estado e dados gerados em execução
+estado_live.json
+equity_curve.csv
+*.db
+*.db-wal
+*.db-shm
+.vercel/

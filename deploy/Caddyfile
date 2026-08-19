@@ -1,0 +1,8 @@
+# Caddy = proxy reverso com HTTPS automático (Let's Encrypt, renovação sozinho).
+# Troque pelo SEU domínio DNS da Azure (Public IP -> Configuration -> DNS name label).
+# Copiar pra /etc/caddy/Caddyfile e: sudo systemctl reload caddy
+
+meu-bot.brazilsouth.cloudapp.azure.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8000
+}

@@ -1,0 +1,20 @@
+[Unit]
+Description=Cripto Bot (paper trading) - FastAPI + worker 24/7
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/cripto-bot
+EnvironmentFile=/home/ubuntu/cripto-bot/.env
+# Escuta só em localhost: quem fala com a internet é o Caddy (TLS) na frente.
+# Sem Caddy (acesso direto por http://IP:8000), troque para --host 0.0.0.0.
+ExecStart=/home/ubuntu/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+# nunca derruba por uso de memória idiota; o app é leve
+MemoryMax=900M
+
+[Install]
+WantedBy=multi-user.target

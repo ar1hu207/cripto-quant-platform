@@ -1,0 +1,126 @@
+# Plataforma de Pesquisa Quant + Paper Trading (cripto)
+
+Sistema de **paper trading** e validação de estratégias em cripto. Dinheiro fictício, sem chave
+de exchange, sem ordem real — só dados públicos da Binance via `ccxt`.
+
+O objetivo do projeto **não é** um robô lucrativo. É um instrumento honesto: um framework que
+mede estratégias com rigor estatístico e **mata as ruins antes que elas custem dinheiro real**.
+
+---
+
+## O veredito (o resultado mais importante do projeto)
+
+Todas as estratégias implementadas foram testadas com **walk-forward** (parâmetros escolhidos
+só no passado, avaliados no futuro não-visto), **Deflated Sharpe Ratio** e bootstrap:
+
+| Estratégia | Veredito | Evidência |
+|---|---|---|
+| Tendência (EMA/ADX/Donchian/RSI) | ❌ sem edge | 370 trades OOS, win 25,4%, PnL −R$807, IC95% [−7,4; +3,5] inclui 0, **DSR = 0,004** |
+| Reversão à média (RSI + Bollinger) | ❌ breakeven | Melhor caso +R$73 in-sample / −R$76 OOS em ~1100 trades |
+| Funding arb (cash & carry) | ❌ não-deployável | +1,9%/ano líquido; versão *gated* fica negativa (4 pernas de taxa comem o funding) |
+
+**Não existe edge deployável.** Isso não é fracasso — é o resultado com maior valor econômico
+do projeto, obtido sem torrar banca real. Duas lições que se sustentaram em todos os testes:
+
+1. **A taxa decide.** O mesmo sinal rendeu −R$589 (taker) e +R$73 (maker). Toda estratégia
+   entra com ordem limite.
+2. **Alavancagem amplifica risco, não edge.** Em 100% dos backtests, 2x deu retorno pior *e*
+   drawdown pior que 1x.
+
+---
+
+## Arquitetura
+
+```
+web/index.html ──► FastAPI (api.py) ──► SQLite (WAL)
+                        │
+                        └── worker (15s): marca posições, fecha stop/liquidação,
+                                          escaneia sinais, grava equity
+```
+
+### Módulos
+
+| Arquivo | Papel |
+|---|---|
+| `api.py` | Backend FastAPI + worker em background + autenticação |
+| `db.py` | SQLite (posições, trades, sinais, equity, config, banca) e métricas |
+| `scoring.py` | Pontuação de convicção — **compartilhada** entre live e backtest (é a paridade) |
+| `signal_engine.py` | Varredura ao vivo, portões de confirmação, gestor de saída |
+| `simulador.py` | Abertura/fechamento, P&L com alavancagem/taxa/funding, liquidação, guarda de risco |
+| `autotrader.py` | Modo automático (desligado por padrão) |
+| `mercado.py` | Order book, fluxo taker, funding, sentimento |
+| `dca.py` | Acumulação periódica sem alavancagem |
+| `validacao.py` | **Walk-forward + Deflated Sharpe + bootstrap** — a régua que barra ideia ruim |
+| `backtest_plataforma.py` | Backtest com paridade: sinal no candle fechado, execução no open seguinte |
+| `indicadores.py` | EMA, ATR, ADX, RSI, Donchian, Bollinger |
+
+### Gestão de risco (o tripé)
+- **Sizing por risco** — R fixo por trade, dimensionado por ATR
+- **Trava diária** — bloqueia novos trades ao passar do limite de perda do dia
+- **Teto de exposição aberta** — soma o risco-até-o-stop de todas as posições
+
+---
+
+## Rodar local
+
+```bash
+pip install -r requirements.txt
+uvicorn api:app --port 8000
+```
+Painel em <http://localhost:8000>. Sem `DASH_PASS` definido, o app aceita **apenas acesso
+local** — requisição externa ou via proxy recebe 503.
+
+### Validar uma estratégia
+```bash
+python validacao.py            # walk-forward + DSR + bootstrap
+python backtest_plataforma.py  # backtest com paridade live<->histórico
+```
+
+---
+
+## Deploy
+
+VM Ubuntu na Azure + Caddy (TLS automático) + front estático no Vercel.
+
+- **[PLANO-DEPLOY-AZURE.md](PLANO-DEPLOY-AZURE.md)** — plano completo com decisões justificadas
+- **[DEPLOY-VERCEL-AZURE.md](DEPLOY-VERCEL-AZURE.md)** — passo a passo operacional
+- `deploy/provisionar-azure.sh` — provisionamento via Azure CLI
+
+```bash
+bash deploy/provisionar-azure.sh
+```
+
+---
+
+## Documentação
+
+| Documento | Conteúdo |
+|---|---|
+| [BASE-CONHECIMENTO-TRADING.md](BASE-CONHECIMENTO-TRADING.md) | Base teórica: AT, microestrutura, risco/validação, cripto on-chain, o que funciona vs mito |
+| [AUDITORIA-SISTEMA.md](AUDITORIA-SISTEMA.md) | Auditoria: 21 bugs + 6 gargalos sistêmicos, com as correções aplicadas |
+| [PLANO-REPOS-QUANT.md](PLANO-REPOS-QUANT.md) | Próximos passos de pesquisa (Reality Check, Ornstein-Uhlenbeck, dollar bars) |
+
+---
+
+## Critério de aceite para qualquer estratégia nova
+
+Uma estratégia só é considerada com edge se **todas** as condições valerem:
+
+1. Validada por walk-forward (nunca split por moeda no mesmo período)
+2. Bootstrap de bloco IC95% da média/trade **não inclui 0**
+3. **DSR > 0,95** com `n_trials` contando as tentativas honestamente
+4. White's Reality Check **p ≤ 0,05**
+5. Ao menos uma config sobrevive ao **FDR** (Benjamini-Hochberg, q = 0,10)
+6. Custo **maker** modelado, com o número correto de pernas
+7. Sem look-ahead: sinal em candle fechado, execução no open seguinte + slippage
+8. Alavancagem **1x** na validação
+
+Falhou em qualquer uma → não tem edge. Documentar e seguir.
+
+---
+
+## Aviso
+
+Software de pesquisa e educação. Não é recomendação de investimento. O próprio projeto
+concluiu, com dados, que não encontrou vantagem operacional — trate qualquer resultado aqui
+como hipótese a ser refutada, não como sinal para arriscar dinheiro.
