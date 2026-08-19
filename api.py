@@ -226,6 +226,19 @@ def reset():
     return {"ok": True}
 
 
+def _amostrar(seq, alvo=125):
+    """Reduz a série para ~alvo pontos, preservando o intervalo e o ponto mais recente.
+    A curva de equity é reenviada inteira a cada poll de 3s e sozinha era 72% do payload
+    (51 KB de 71 KB). Com franquia de saída de 15 GB/mês na Azure, isso importa."""
+    if len(seq) <= alvo:
+        return seq
+    passo = len(seq) // alvo
+    amostra = seq[::passo]
+    if amostra[-1] is not seq[-1]:
+        amostra.append(seq[-1])
+    return amostra
+
+
 @app.get("/estado")
 def estado():
     """Tudo que a UI precisa num request só."""
@@ -236,7 +249,7 @@ def estado():
         "pendentes": db.listar("sinais", 30, "WHERE status='novo'"),
         "posicoes": db.listar("posicoes", 50, "WHERE status='aberta'"),
         "trades": db.listar("trades", 30),
-        "equity_hist": db.listar("equity", 500)[::-1],
+        "equity_hist": _amostrar(db.listar("equity", 500)[::-1]),
         "metricas": db.metricas(),
         "risco": simulador.guarda_risco(),
         "dca": dca.listar(),
