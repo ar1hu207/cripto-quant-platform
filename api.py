@@ -150,17 +150,23 @@ async def auth_basica(request: Request, call_next):
                                  status_code=429, headers={"Retry-After": str(int(espera) + 1)})
 
     h = request.headers.get("authorization", "")
+    tentou = h.startswith("Basic ")        # mandou credencial (ainda que errada)?
     ok = False
-    if h.startswith("Basic "):
+    if tentou:
         try:
             u, _, p = base64.b64decode(h[6:]).decode("utf-8", "ignore").partition(":")
             ok = secrets.compare_digest(u, DASH_USER) and secrets.compare_digest(p, DASH_PASS)
         except Exception:
             ok = False
     if not ok:
-        n = _registrar_falha(ip)
-        if n >= AUTH_MAX_FALHAS:
-            log(f"IP {ip} bloqueado por {AUTH_BLOQUEIO_S}s após {n} falhas de login", "error")
+        # Só conta como tentativa de invasão quem MANDOU credencial errada. Requisição sem
+        # credencial nenhuma é só a primeira batida na porta — o próprio painel faz ~5 delas
+        # por ciclo antes do login, e contá-las bloqueava o usuário legítimo em segundos.
+        # Força bruta precisa enviar senhas para testá-las, então a proteção continua inteira.
+        if tentou:
+            n = _registrar_falha(ip)
+            if n >= AUTH_MAX_FALHAS:
+                log(f"IP {ip} bloqueado por {AUTH_BLOQUEIO_S}s após {n} senhas erradas", "error")
         return PlainTextResponse("Auth necessária", status_code=401,
                                  headers={"WWW-Authenticate": 'Basic realm="Cripto Bot"'})
     with _falhas_lock:

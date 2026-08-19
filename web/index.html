@@ -864,6 +864,10 @@ function iniciarPolling(){ if(_timers.length)return;
     setInterval(carregarFunding,60000), setInterval(carregarSaidas,8000), setInterval(carregarPrecos,8000)); }
 function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
 function cargaInicial(){ carregar(); carregarSentimento(); carregarFunding(); carregarSaidas(); carregarPrecos(); }
+// Backend remoto sem credencial salva: pede ANTES do primeiro poll. Sem isso o painel
+// dispara ~5 requisições sem Authorization por ciclo, o backend responde 401 em todas, e
+// o usuário legítimo se autobloqueia no throttle antes de conseguir digitar a senha.
+if(API && !_cred) pedirLogin();
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
 document.addEventListener('visibilitychange',()=>{ if(document.hidden){ pararPolling(); } else { cargaInicial(); iniciarPolling(); } });
