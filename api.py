@@ -87,10 +87,18 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*
 # Local fica sem senha. O navegador guarda o login e o manda nos fetch automaticamente.
 DASH_USER = os.environ.get("DASH_USER", "admin")
 DASH_PASS = os.environ.get("DASH_PASS", "")
+# Escolha DELIBERADA de rodar sem autenticação num backend exposto. Existe porque a guarda
+# abaixo (que recusa acesso externo sem DASH_PASS) protege contra esquecimento, e esquecer
+# é diferente de decidir. Com isto em "1", o painel fica aberto para qualquer um na internet.
+SEM_SENHA_OK = os.environ.get("PERMITIR_SEM_SENHA", "") == "1"
 
 LOOPBACK = {"127.0.0.1", "::1"}
-AUTH_MAX_FALHAS = 8        # tentativas erradas antes de bloquear o IP
-AUTH_BLOQUEIO_S = 300      # duração do bloqueio
+# A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
+# por construção, então o throttle serve para conter scanner barulhento, não como defesa
+# principal. Valores folgados porque o painel dispara ~5 requisições paralelas por ciclo
+# e uma credencial velha no localStorage gastaria o limite antes da pessoa recarregar.
+AUTH_MAX_FALHAS = 15       # senhas erradas antes de bloquear o IP
+AUTH_BLOQUEIO_S = 120      # duração do bloqueio
 _falhas = {}               # ip -> (n_falhas, bloqueado_ate)
 _falhas_lock = threading.Lock()
 
@@ -130,6 +138,8 @@ async def auth_basica(request: Request, call_next):
         return await call_next(request)
 
     if not DASH_PASS:
+        if SEM_SENHA_OK:                                     # aberto por decisão explícita
+            return await call_next(request)
         # SEM SENHA: só acesso local direto. Se veio de fora (IP não-loopback) ou por proxy,
         # RECUSA em vez de servir o painel aberto pra internet. Esquecer o DASH_PASS no .env
         # é o erro mais provável do deploy — aqui ele falha alto em vez de falhar aberto.
@@ -219,7 +229,12 @@ def health():
 
 @app.get("/status")
 def status():
-    return {**_health, "worker_on": _worker_on["v"],
+    sc = signal_engine.ultimo_scan
+    # cego = o scan rodou e NENHUMA moeda respondeu (rede, geo-bloqueio, exchange fora).
+    # Sem este sinal, o /status dizia "0 erros" com o bot sem enxergar o mercado.
+    cego = sc["total"] > 0 and sc["ok"] == 0
+    return {**_health, "worker_on": _worker_on["v"], "scan": sc,
+            "saudavel": not cego,
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
 

@@ -16,6 +16,7 @@ import ccxt
 import pandas as pd
 
 import db
+from logbot import log
 import mercado
 from scoring import preparar, pontuar, pontuar_reversao
 
@@ -172,18 +173,31 @@ def analise(ativo, tf="15m", limite=200):
             "bb_mid": serie("bb_mid"), "bb_lo": serie("bb_lo"), "snapshot": snap, "leitura": leitura}
 
 
+# Saúde do último scan. Sem isto, uma falha total de rede/exchange fica invisível: o loop
+# do worker completa "com sucesso" (o except de cada moeda engolia tudo num print) e o
+# /status reporta 0 erros enquanto o bot está cego. Foi exatamente o que aconteceu quando
+# a Binance devolveu 451 para o IP da VM.
+ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
+
+
 def scan():
     cfg = db.get_config()
     ativos = [a.strip() for a in cfg["ativos"].split(",") if a.strip()]
     tfs = [t.strip() for t in cfg.get("timeframes", cfg.get("timeframe", "15m")).split(",") if t.strip()]
     ts = str(pd.Timestamp.now())
+    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0)    # zera a cada varredura
     resultados, novos = [], 0
     for a in ativos:
         for tf in tfs:                                   # alargamento: varre cada timeframe
+            ultimo_scan["total"] += 1
             try:
                 sigs = analisa(a, tf)                    # tendência + reversão
+                ultimo_scan["ok"] += 1
             except Exception as e:
-                print(f"  falha {a} {tf}: {e}"); continue
+                ultimo_scan["falhas"] += 1
+                ultimo_scan["ultimo_erro"] = f"{a} {tf}: {type(e).__name__}: {str(e)[:140]}"
+                log(f"scan falhou {a} {tf}: {e}", "error")
+                continue
             for s in sigs:
                 resultados.append(s)
                 ok, motivo_rej = confirmado(s, a, cfg)

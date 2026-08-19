@@ -333,15 +333,27 @@ function sairLogin(){localStorage.removeItem('cbAuth');_cred='';location.reload(
 async function apiFetch(path,opts={}){
   const mk=()=>({...opts,headers:{...(opts.headers||{}),...(_cred?{Authorization:_cred}:{})}});
   let r=await fetch(API+path,mk());
-  // 401: credencial ausente/trocada. Pede uma vez e repete. Cooldown de 30s pra não
-  // virar chuva de prompt — o polling roda a cada 3s e dispararia um por ciclo.
-  if(r.status===429){toast(await r.clone().text());return r;}
-  if(r.status===401&&!_pedindo&&Date.now()>_semLoginAte){
-    _pedindo=true;
-    try{
-      localStorage.removeItem('cbAuth'); _cred='';
-      if(pedirLogin()) r=await fetch(API+path,mk()); else _semLoginAte=Date.now()+30000;
-    }finally{_pedindo=false;}
+
+  // Bloqueado pelo throttle: parar de bater, senão o poll renova o bloqueio pra sempre.
+  if(r.status===429){ pararPolling(); toast(await r.clone().text()); return r; }
+
+  // 401: NUNCA insistir com a mesma credencial. O poll dispara ~5 requisições a cada 3s
+  // e 8 senhas erradas bloqueiam o IP por 5 min — um typo viraria lockout. Então: para o
+  // polling, descarta a credencial, pede de novo UMA vez, e só religa se o login passar.
+  if(r.status===401){
+    pararPolling();
+    localStorage.removeItem('cbAuth'); _cred='';
+    if(!_pedindo){
+      _pedindo=true;
+      try{
+        if(pedirLogin()){
+          r=await fetch(API+path,mk());
+          if(r.ok){ cargaInicial(); iniciarPolling(); }
+          else { localStorage.removeItem('cbAuth'); _cred='';
+                 toast('Senha incorreta — recarregue a página para tentar de novo'); }
+        }
+      }finally{_pedindo=false;}
+    }
   }
   return r;
 }
@@ -864,10 +876,9 @@ function iniciarPolling(){ if(_timers.length)return;
     setInterval(carregarFunding,60000), setInterval(carregarSaidas,8000), setInterval(carregarPrecos,8000)); }
 function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
 function cargaInicial(){ carregar(); carregarSentimento(); carregarFunding(); carregarSaidas(); carregarPrecos(); }
-// Backend remoto sem credencial salva: pede ANTES do primeiro poll. Sem isso o painel
-// dispara ~5 requisições sem Authorization por ciclo, o backend responde 401 em todas, e
-// o usuário legítimo se autobloqueia no throttle antes de conseguir digitar a senha.
-if(API && !_cred) pedirLogin();
+// Sem prompt preventivo: se o backend exigir senha, o tratamento de 401 no apiFetch pede
+// uma vez e para o polling. Com o backend aberto, nenhum prompt aparece.
+localStorage.removeItem('cbAuth'); _cred='';   // descarta credencial velha de sessões anteriores
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
 document.addEventListener('visibilitychange',()=>{ if(document.hidden){ pararPolling(); } else { cargaInicial(); iniciarPolling(); } });
