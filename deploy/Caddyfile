@@ -2,7 +2,7 @@
 # Troque pelo SEU domínio DNS da Azure (Public IP -> Configuration -> DNS name label).
 # Copiar pra /etc/caddy/Caddyfile e: sudo systemctl reload caddy
 
-cripto-bot-11490.northcentralus.cloudapp.azure.com {
+cripto-bot-24517.southafricanorth.cloudapp.azure.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:8000
 }

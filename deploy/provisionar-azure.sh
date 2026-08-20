@@ -4,8 +4,15 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------- parâmetros
-RG="rg-cripto-bot"
-LOCAL="northcentralus"             # Brazil South NÃO oferece a família B (a única gratuita)
+RG="${RG:-rg-cripto-bot}"
+# A região é ditada por DUAS restrições, não uma:
+#  1) precisa oferecer a família B (a única gratuita) — Brazil South não oferece;
+#  2) a Binance geo-bloqueia (HTTP 451) EUA, Canadá, Holanda e a UE — então o bot fica
+#     CEGO nessas regiões, por mais que a VM funcione. Aprendido na prática em US.
+#  3) a assinatura tem Azure Policy "Allowed resource deployment regions" e só aceita
+#     canadacentral, centralus, northcentralus, southafricanorth, spaincentral.
+# A interseção das três restrições deixa UMA opção: southafricanorth.
+LOCAL="${LOCAL:-southafricanorth}"
 VM="vm-cripto-bot"
 TAMANHO="Standard_B2ats_v2"        # 2 vCPU / 1 GiB, AMD x64 — 750 h/mês grátis
 IMAGEM="Canonical:ubuntu-24_04-lts:server:latest"
