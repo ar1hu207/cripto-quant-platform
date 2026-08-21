@@ -320,23 +320,40 @@ tail -f ~/cripto-bot/plataforma.log
 scp -i chave.pem *.py ubuntu@SEU_IP:/home/ubuntu/cripto-bot/
 ssh -i chave.pem ubuntu@SEU_IP "sudo systemctl restart cripto-bot"
 
-# atualizar front (obrigatorio: o deploy automatico ainda nao roda, ver 5.1)
+# atualizar front: nada a fazer, merge na main publica sozinho (ver 5.1).
+# so para forcar um deploy fora do fluxo do git:
 cd web && vercel --prod
 ```
 
-### 5.1 Deploy automatico (GitHub -> Vercel): metade pronta
+### 5.1 O front publica sozinho (GitHub -> Vercel)
 
-**Hoje o front ainda sobe na mao** (`cd web && vercel --prod`). Merge na `main` NAO publica.
+**Merge na `main` publica o front.** O `cd web && vercel --prod` continua valendo, mas so para
+forcar um deploy fora do fluxo do git.
 
-O projeto ja esta conectado ao repositorio (`vercel git connect`) e o push cria o registro do
-deployment, mas **o build nunca inicia**: fica em `UNKNOWN`, duracao `?`, sem uma linha de log.
-Sintoma classico de o Vercel nao conseguir ler o repo — o GitHub App do Vercel nao tem acesso a
-`ar1hu207/cripto-quant-platform`, tipicamente porque a conta GitHub ligada ao Vercel e outra
-(email diferente) ou porque o App foi instalado so em repositorios selecionados.
+O que faz isso funcionar nao esta no dashboard, esta versionado — sao **dois** `vercel.json`, e a
+diferenca entre eles nao e acidente:
 
-Para destravar, em github.com/settings/installations -> Vercel -> dar acesso a este repositorio
-(e conferir em vercel.com -> Settings -> Git que a conta conectada e a dona do repo). Feito isso,
-push na `main` passa a publicar sozinho e a linha manual vira opcional.
+| arquivo | quem usa | `outputDirectory` |
+|---|---|---|
+| `vercel.json` (raiz) | build pelo GitHub, que le a raiz do repo | `web` |
+| `web/vercel.json` | `cd web && vercel --prod` (CLI, roda dentro de `web/`) | `.` |
+
+O Root Directory do projeto e `.`, entao o build vindo do GitHub le a **raiz**. Sem o
+`vercel.json` da raiz apontando `outputDirectory` para `web`, ele publicaria a raiz — onde **nao
+existe `index.html`** (a URL de producao daria 404) e onde estao `api.py`, `signal_engine.py` e os
+documentos de estrategia, que virariam publicos. Credencial e banco nao: `.env` e `*.db` estao no
+`.gitignore` e nem chegam ao GitHub.
+
+Os dois arquivos publicam exatamente o mesmo site; existem porque cada caminho enxerga a arvore a
+partir de um lugar diferente. **Mexeu num, confira o outro.**
+
+Conferir que um deploy veio do git: `vercel inspect <url>` e procurar o alias
+`...-git-main-...`, que so existe em deployment de origem git.
+
+> **Nao confie no `vercel ls` para previews.** Deployments de preview ficam atras do SSO do
+> Vercel e aparecem como `UNKNOWN` com duracao `?` mesmo tendo construido bem. Isso ja foi lido
+> como "o build nao roda" e mandou a investigacao para o lado errado. Producao aparece `Ready`
+> normalmente; e nela que se confirma.
 
 O ajuste que faz isso funcionar nao esta no dashboard, e sim versionado — sao **dois**
 `vercel.json`, e a diferenca entre eles nao e acidente:
