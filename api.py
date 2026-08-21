@@ -94,8 +94,9 @@ app = FastAPI(title="Cripto Bot API", version="0.3", lifespan=lifespan,
               openapi_url=None if DASH_PASS else "/openapi.json")
 # Origens do front. Local/monolito: "*". Front separado (Vercel): liste a origem exata,
 # ex CORS_ORIGINS="https://meu-bot.vercel.app" (várias separadas por vírgula).
+# O add_middleware do CORS mora DEPOIS de auth_basica (fim deste bloco): a ordem decide
+# quem embrulha quem, e o CORS precisa embrulhar a auth. Ver a nota lá embaixo.
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 LOOPBACK = {"127.0.0.1", "::1"}
 # A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
@@ -137,8 +138,9 @@ def _registrar_falha(ip: str):
 
 @app.middleware("http")
 async def auth_basica(request: Request, call_next):
-    # OPTIONS = preflight do CORS: o navegador manda SEM Authorization. Se responder 401 aqui,
-    # o CORSMiddleware (mais interno) nunca roda e todo fetch do front separado morre.
+    # OPTIONS = preflight do CORS: o navegador manda SEM Authorization, e exigir credencial
+    # nele mataria todo fetch do front separado. Com o CORSMiddleware por fora, o preflight
+    # do navegador já é respondido lá e nem chega aqui; isto cobre o OPTIONS avulso.
     if request.url.path == "/health" or request.method == "OPTIONS":
         return await call_next(request)
 
@@ -185,6 +187,18 @@ async def auth_basica(request: Request, call_next):
     with _falhas_lock:
         _falhas.pop(ip, None)                                    # login certo zera o contador
     return await call_next(request)
+
+
+# CORS registrado DEPOIS da auth de propósito: no Starlette o último middleware adicionado é
+# o mais EXTERNO, então assim o CORS embrulha a auth em vez de ficar por dentro dela.
+#
+# Por dentro, toda resposta que a auth devolve sozinha — 401, 429, 503 — saía sem o header
+# Access-Control-Allow-Origin, porque o CORSMiddleware nunca chegava a rodar. Para o painel
+# no Vercel isso não é "401": é falha de CORS. O fetch REJEITA, o `if(r.status===401)` do
+# front nunca executa, o prompt de senha nunca aparece e o painel parece backend fora do ar.
+# Ficou latente enquanto o backend respondia tudo aberto (200 sempre passava pelo CORS) e
+# apareceu inteiro no primeiro deploy com DASH_PASS: ligar a senha derrubou o login.
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
 # ---------- modelos ----------
