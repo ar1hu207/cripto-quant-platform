@@ -4,25 +4,56 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cripto Bot — Terminal</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Space Grotesk = titulo/marca (display). Inter = dado (tabular-nums). JetBrains Mono = celula
+     numerica densa. Stylesheet de fonte e a unica excecao a regra "nada de terceiro": ela nao
+     executa JS, entao nao e vetor para roubar a credencial do localStorage, que e o motivo da
+     regra. Ver DESIGN.md > Typography. -->
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- libs servidas por nós (chart.js 4.4.1, lightweight-charts 4.1.3): sem CDN de terceiro,
      que seria um vetor de XSS capaz de roubar a credencial guardada no localStorage. -->
 <script src="vendor/chart.umd.min.js"></script>
 <script src="vendor/lightweight-charts.standalone.production.js"></script>
 <script src="config.js"></script>
 <style>
+  /* Tokens do tema "mesa de trading a meia-noite". Fonte da verdade: DESIGN.md na raiz do
+     repositorio -- se este bloco e o DESIGN.md divergirem, o DESIGN.md vence. */
   :root{
-    --bg:#0a0d14;--bg2:#0e121b;--card:#131825;--card2:#171d2c;--border:#222a3a;--border2:#2c3650;
-    --txt:#e6e9f0;--muted:#7c869c;--muted2:#7e89a3;--green:#16c784;--green-bg:rgba(22,199,132,.12);
-    --red:#ea3943;--red-bg:rgba(234,57,67,.12);--accent:#2dd4bf;--gold:#f0b90b;
-    --mono:ui-monospace,'SF Mono','Cascadia Mono',monospace;
+    /* canvas / atmosfera */
+    --bg:#0a1020;--bg-grad-top:#0e1730;--aura:rgba(59,130,246,.18);
+    /* superficies: vidro SO no resumo, solido sob qualquer numero que se le */
+    --glass:rgba(23,33,58,.55);--glass-border:rgba(255,255,255,.08);
+    --surface:#131c30;--surface2:#182337;
+    --border:#233150;--border2:#2e3d5e;
+    --txt:#e8ecf5;--muted:#94a1bd;--muted2:#aab4cc;
+    /* azul = marca, nav ativa, foco, acao primaria */
+    --accent:#3b82f6;--accent2:#60a5fa;--accent-bg:rgba(59,130,246,.14);
+    /* verde/vermelho = SO dinheiro e direcao. #f2555e e nao #ea3943 porque o original da 4.18:1
+       sobre --surface e reprova o gate de 4.5:1; este da 5.04:1. Ver DESIGN.md > Color. */
+    --green:#16c784;--green-bg:rgba(22,199,132,.12);
+    --red:#f2555e;--red-bg:rgba(234,57,67,.12);
+    --gold:#f0b90b;
+    --r-card:16px;--r-inner:10px;
+    --shadow:0 10px 30px rgba(0,0,0,.35);
+    --blur:14px;
+    --font-display:'Space Grotesk',system-ui,sans-serif;
+    --font-ui:'Inter',system-ui,sans-serif;
+    --font-mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',monospace;
+    /* Aliases de transicao: os paineis ainda nao migrados (P2-22 a P2-24) miram estes nomes.
+       Somem quando o ultimo painel migrar. Nao usar em codigo novo. */
+    --bg2:var(--surface);--card:var(--surface);--card2:var(--surface2);--mono:var(--font-mono);
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;
-    padding:22px;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden;
-    background-image:radial-gradient(1200px 600px at 80% -10%,rgba(45,212,191,.06),transparent),
-                     radial-gradient(900px 500px at -10% 110%,rgba(22,199,132,.05),transparent);}
-  .wrap{max-width:1200px;margin:0 auto}
+  body{font-family:var(--font-ui);background:var(--bg);color:var(--txt);min-height:100vh;
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden;
+    background-image:radial-gradient(1100px 600px at 85% -10%,var(--aura),transparent),
+                     linear-gradient(180deg,var(--bg-grad-top),var(--bg) 640px);
+    background-attachment:fixed}
+  /* minmax(0,1fr) e obrigatorio: sem ele a coluna de conteudo e dimensionada por max-content e
+     qualquer tabela larga empurra a pagina para o scroll horizontal. */
+  .shell{display:grid;grid-template-columns:232px minmax(0,1fr);align-items:start}
+  .main{min-width:0;padding:22px 26px 40px}
   .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
   .pos{color:var(--green)}.neg{color:var(--red)}.mut{color:var(--muted)}
   button{font-family:inherit;cursor:pointer;border:none;border-radius:9px;font-weight:600;transition:.15s}
@@ -51,33 +82,81 @@
     border-radius:9px;padding:11px 13px;font-size:16px;width:100%}
   input:focus{outline:none;border-color:var(--accent)}
 
-  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px}
-  .brand{display:flex;align-items:center;gap:12px}
-  .logo{width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,#16c784,#2dd4bf);
-    display:grid;place-items:center;font-size:21px;box-shadow:0 6px 22px rgba(22,199,132,.35)}
-  .brand h1{font-size:18px;font-weight:700}.brand .sub{font-size:11.5px;color:var(--muted);margin-top:1px}
-  /* wrap porque o botao Sair virou o 5o item: sem isto a fila estoura a largura no celular */
-  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .badge{display:flex;align-items:center;gap:7px;background:var(--green-bg);color:var(--green);
-    padding:7px 13px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid rgba(22,199,132,.25)}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.8s infinite}
+  /* ---------- sidebar (substitui header + toolbar + abas) ----------
+     Chrome, nao dado: por isso pode ser translucida. A regra "vidro so no resumo" existe para
+     proteger a legibilidade de numero, e aqui nao assenta numero nenhum. */
+  .nav{position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column;gap:22px;
+    padding:20px 14px;border-right:1px solid var(--border);background:rgba(13,20,40,.78);
+    backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur))}
+  .brand{display:flex;align-items:center;gap:11px;padding:0 5px}
+  .logo{width:38px;height:38px;flex:none;border-radius:11px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;font-size:20px}
+  .bname{font-family:var(--font-display);font-size:16px;font-weight:700;letter-spacing:-.2px;line-height:1.2}
+  .brand .sub{font-size:10.5px;color:var(--muted);letter-spacing:.9px;text-transform:uppercase;margin-top:2px}
+  .nav-sec{display:flex;flex-direction:column;gap:5px}
+  .nav-lbl{font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+    color:var(--muted);padding:0 11px;margin-bottom:3px}
+  .nav-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px}
+  /* item de nav: mantem a classe .tab porque aba() mira document.querySelectorAll('.tab') */
+  .tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;
+    background:transparent;color:var(--muted2);padding:10px 11px;border:1px solid transparent;
+    font-size:13.5px;font-weight:600;border-radius:var(--r-inner)}
+  .tab svg,.nav button svg{width:18px;height:18px;flex:none}
+  @media(hover:hover){.tab:hover{background:var(--surface2);color:var(--txt);filter:none}}
+  .tab.on{background:var(--accent-bg);color:var(--accent2);border-color:rgba(59,130,246,.28)}
+  .nav button{width:100%;display:flex;align-items:center;gap:10px;text-align:left;font-size:13px}
+  .badge{display:flex;align-items:center;gap:8px;background:var(--surface2);color:var(--muted2);
+    padding:8px 12px;border-radius:var(--r-inner);font-size:11.5px;font-weight:600;
+    border:1px solid var(--border);letter-spacing:.4px}
+  .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--green);animation:pulse 1.8s infinite}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,199,132,.6)}70%{box-shadow:0 0 0 9px rgba(22,199,132,0)}100%{box-shadow:0 0 0 0 rgba(22,199,132,0)}}
-  .btn-sec{background:var(--card2);color:var(--muted);padding:9px 14px;border:1px solid var(--border)}
-  .btn-danger{background:var(--red-bg);color:var(--red);padding:9px 14px;border:1px solid rgba(234,57,67,.3)}
+  .btn-sec{background:var(--surface2);color:var(--muted2);padding:9px 12px;border:1px solid var(--border)}
+  .btn-danger{background:transparent;color:var(--muted2);padding:9px 12px;border:1px solid var(--border)}
+  @media(hover:hover){.btn-danger:hover{color:var(--red);border-color:rgba(242,85,94,.38);filter:none}}
 
-  .cards{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:14px}
-  @media(max-width:860px){.cards{grid-template-columns:1fr 1fr}}
-  .card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--border);border-radius:14px;padding:18px 20px}
-  .card.hero{background:linear-gradient(135deg,#10283a,#0e1626);border-color:var(--border2)}
-  .card .lbl{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
-  .card .val{font-size:30px;font-weight:700;margin-top:8px;letter-spacing:-1px}
-  .card.hero .val{background:linear-gradient(90deg,#fff,#9fe9d4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-  .card .small{font-size:24px}.card .delta{font-size:14px;font-weight:600;margin-top:6px}
+  /* ---------- topbar ---------- */
+  .topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+  .topbar h1{font-family:var(--font-display);font-size:21px;font-weight:700;letter-spacing:-.3px}
+  .topbar .sub{font-size:11.5px;color:var(--muted);margin-top:4px}
 
-  .panel{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin-top:14px}
-  .panel h2{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:8px;justify-content:space-between}
-  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
-  @media(max-width:920px){.two{grid-template-columns:1fr}}
+  /* ---------- bento ----------
+     Linha de resumo (hero + 3 stats) e, abaixo, coluna principal + trilho. O que se le em
+     sequencia fica na coluna larga; o que se consulta de relance fica no trilho. */
+  .bento-top{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:14px;margin-bottom:22px}
+  .bento{display:grid;grid-template-columns:minmax(0,1fr) 372px;gap:14px;align-items:start}
+  .col{min-width:0}
+  .col>.panel:first-child{margin-top:0}
+
+  /* hero: o unico elemento de vidro+aura da tela. Signature move do DESIGN.md. */
+  .hero{position:relative;overflow:hidden;display:flex;flex-direction:column;min-height:178px;
+    background:var(--glass);border:1px solid var(--glass-border);border-radius:var(--r-card);
+    padding:18px 20px 0;box-shadow:var(--shadow);
+    backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur))}
+  .hero::before{content:"";position:absolute;top:-55%;right:-20%;width:75%;height:170%;pointer-events:none;
+    background:radial-gradient(closest-side,rgba(59,130,246,.32),transparent)}
+  .hero>*{position:relative}
+  /* stat card: superficie solida, borda definida, NENHUMA sombra (uma coisa por elemento) */
+  /* centrado na vertical: o stat card estica ate a altura do hero, e com o conteudo ancorado no
+     topo sobrava um vazio de ~90px embaixo do numero. */
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+    padding:18px 20px;display:flex;flex-direction:column;justify-content:center}
+  .lbl{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  /* sem font-family aqui de proposito: o .mono do HTML vence e da tabular-nums, senao o valor
+     muda de largura a cada poll de 3s. Space Grotesk fica nos titulos, nao nos numeros. */
+  .hero .val{font-size:38px;font-weight:700;line-height:1.05;margin-top:9px;letter-spacing:-1.2px}
+  .stat .val{font-size:26px;font-weight:700;line-height:1.1;margin-top:9px;letter-spacing:-.5px}
+  .delta{font-size:13.5px;font-weight:600;margin-top:7px}
+  /* sangra ate a borda do card: a curva encosta no vidro em vez de flutuar num padding */
+  .spark{margin:auto -20px 0;height:54px;pointer-events:none}
+  .spark svg{display:block;width:100%;height:54px}
+
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:18px 20px;margin-top:14px}
+  /* flex-wrap: no trilho de 372px o subtitulo espremia o titulo ate quebrar "AUTO-TRADE" no meio
+     da palavra. Agora o subtitulo desce pra propria linha e o titulo fica inteiro. */
+  .panel h2{font-family:var(--font-display);font-size:12.5px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
+  /* no trilho de 372px uma tabela de 540px rolaria pra sempre; 300px cabe sem scroll */
+  .rail #dca>table,.rail #metricas table{min-width:300px}
 
   .sig{background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px}
   .sig:last-child{margin-bottom:0}
@@ -113,8 +192,10 @@
   .mstat span{font-size:11px}.mstat b{font-size:20px;font-weight:700;letter-spacing:-.5px}
   #tv-ativo{background:var(--card2);border:1px solid var(--border);color:var(--txt);border-radius:8px;
     padding:6px 11px;font-family:inherit;font-weight:600;font-size:13px}
-  #tvchart{width:100%;height:calc(100vh - 188px);min-height:420px}
-  #view-grafico{width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);padding:0 16px}
+  #tvchart{width:100%;height:calc(100vh - 210px);min-height:420px}
+  /* o full-bleed de 100vw morreu com o .wrap: dentro do shell com sidebar ele vazava por baixo
+     da nav. A coluna de conteudo ja da a largura toda. */
+  #view-grafico{width:100%;padding:0}
   .tv-tfs{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
   .tv-tfs button{background:var(--card2);color:var(--muted);border:1px solid var(--border);font-size:11px;padding:4px 9px;border-radius:6px;font-weight:600;cursor:pointer}
   .tv-tfs button.on{background:var(--green-bg);color:var(--green);border-color:rgba(22,199,132,.3)}
@@ -141,18 +222,15 @@
   .btn-sug{background:var(--green-bg);color:var(--green);border:1px solid rgba(22,199,132,.3);padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;margin-left:7px}
   .aviso-liq{background:rgba(234,57,67,.13);color:var(--red);font-size:11.5px;padding:8px 11px;border-radius:7px;margin:7px 0;line-height:1.45}
   .btn-panico{background:rgba(234,57,67,.15);color:var(--red);padding:9px 14px;border:1px solid rgba(234,57,67,.35);font-weight:700}
-  .rg-banner{padding:11px 14px;border-radius:9px;font-weight:600;font-size:13px;margin-bottom:14px}
-  .rg-banner.trava{background:rgba(234,57,67,.15);color:var(--red);border:1px solid rgba(234,57,67,.4)}
-  .rg-line{display:flex;align-items:center;gap:12px;font-size:12px;margin-bottom:14px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 14px}
-  .rg-bar{flex:1;height:7px;background:var(--card2);border-radius:4px;overflow:hidden}
+  .rg-banner{padding:11px 14px;border-radius:var(--r-inner);font-weight:600;font-size:13px;margin-bottom:14px}
+  .rg-banner.trava{background:rgba(242,85,94,.13);color:var(--red);border:1px solid rgba(242,85,94,.42)}
+  .rg-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-inner);padding:9px 14px}
+  .rg-bar{flex:1;min-width:80px;height:7px;background:var(--surface2);border-radius:4px;overflow:hidden}
   .rg-bar i{display:block;height:100%;background:var(--red);border-radius:4px}
   .hidden{display:none}
-  .tabs{display:flex;gap:8px;margin-bottom:16px}
-  .tab{background:var(--card2);color:var(--muted);padding:9px 18px;border:1px solid var(--border);font-size:13px;border-radius:9px}
-  .tab.on{background:var(--green-bg);color:var(--green);border-color:rgba(22,199,132,.3)}
   .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
   @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
-  .grafico-side{max-height:calc(100vh - 188px);overflow:auto}
+  .grafico-side{max-height:calc(100vh - 210px);overflow:auto}
   .gs-titulo{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px}
   .why-lbl{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-right:4px}
   .tf-badge{background:#1c2332;color:#7c869c;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600}
@@ -175,6 +253,39 @@
   .saida-alvo td,.saida-alvo.saida-side{background:rgba(240,185,11,.08);color:#caa23a}
   .saida-risco td,.saida-risco.saida-side{background:rgba(234,57,67,.14);color:#ea3943}
   .btn-vender{background:#16c784;color:#04130c;border:none;padding:3px 11px;border-radius:6px;font-weight:700;font-size:11px;float:right;cursor:pointer}
+
+  /* ---------- responsivo ----------
+     1180px: o trilho desce e vira largura cheia. 900px: a sidebar vira barra de topo.
+     560px: os stat cards empilham. Em nenhuma largura a PAGINA rola na horizontal: tabela larga
+     rola dentro do proprio wrapper (#posicoes/#trades/#dca/#metricas ja tem overflow-x:auto). */
+  @media(max-width:1240px){.bento{grid-template-columns:minmax(0,1fr) 330px}}
+  @media(max-width:1180px){
+    .bento{grid-template-columns:minmax(0,1fr)}
+    .rail{margin-top:14px}
+    /* de volta a largura cheia, a tabela nao precisa mais do min-width apertado do trilho */
+    .rail #dca>table,.rail #metricas table{min-width:540px}
+  }
+  @media(max-width:1080px){.bento-top{grid-template-columns:1fr 1fr}.hero{grid-column:1/-1}}
+  @media(max-width:900px){
+    .shell{grid-template-columns:minmax(0,1fr)}
+    .nav{position:static;height:auto;overflow:visible;flex-direction:row;flex-wrap:wrap;
+      align-items:center;gap:10px;padding:12px 16px;border-right:none;border-bottom:1px solid var(--border)}
+    .nav-sec{flex-direction:row;flex-wrap:wrap;gap:6px}
+    .nav-lbl{display:none}
+    .nav-foot{margin-top:0;flex-direction:row;align-items:center;gap:8px;margin-left:auto}
+    .nav button,.tab{width:auto}
+    .brand{margin-right:6px}
+    .main{padding:18px 16px 34px}
+    #tvchart{height:calc(100vh - 270px)}
+    .grafico-side{max-height:none}
+  }
+  @media(max-width:560px){
+    .bento-top{grid-template-columns:1fr}
+    .hero .val{font-size:32px}
+    .hero{min-height:0}
+    .nav-foot{margin-left:0;width:100%}
+    .main{padding:16px 12px 30px}
+  }
 
   /* modal */
   .overlay{position:fixed;inset:0;background:rgba(4,7,12,.75);backdrop-filter:blur(4px);display:none;
@@ -206,8 +317,8 @@
     grid-template-columns:minmax(0,1fr);
     place-items:safe center;
     background:var(--bg);
-    background-image:radial-gradient(900px 500px at 50% -10%,rgba(45,212,191,.10),transparent),
-                     radial-gradient(760px 420px at 50% 110%,rgba(22,199,132,.07),transparent);}
+    background-image:radial-gradient(900px 500px at 50% -10%,rgba(59,130,246,.14),transparent),
+                     radial-gradient(760px 420px at 50% 110%,rgba(59,130,246,.07),transparent);}
   #gate.on{display:grid}
   /* malha tecnica quase invisivel: textura de instrumento sem competir com o card */
   #gate::before{content:"";position:absolute;inset:0;pointer-events:none;
@@ -218,7 +329,7 @@
             mask-image:radial-gradient(620px 460px at 50% 45%,#000,transparent 78%);}
   /* varredura lenta descendo a tela: o terminal procurando a sessao */
   #gate::after{content:"";position:absolute;top:0;left:0;right:0;height:1px;pointer-events:none;
-    background:linear-gradient(90deg,transparent,rgba(45,212,191,.45),transparent);
+    background:linear-gradient(90deg,transparent,rgba(59,130,246,.45),transparent);
     animation:gateScan 7s linear infinite}
   @keyframes gateScan{0%{top:-2%;opacity:0}8%{opacity:1}92%{opacity:1}100%{top:102%;opacity:0}}
 
@@ -245,10 +356,10 @@
   @keyframes gateShake{10%,90%{transform:translateX(-2px)}30%,70%{transform:translateX(4px)}50%{transform:translateX(-5px)}}
 
   .gate-mark{width:56px;height:56px;margin:0 auto 15px;border-radius:16px;position:relative;
-    background:linear-gradient(135deg,var(--green),var(--accent));display:grid;place-items:center;
-    font-size:28px;box-shadow:0 12px 34px -8px rgba(22,199,132,.6)}
+    background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;
+    font-size:28px;box-shadow:0 12px 34px -8px rgba(59,130,246,.55)}
   .gate-mark::after{content:"";position:absolute;inset:-6px;border-radius:22px;
-    border:1px solid rgba(45,212,191,.28);animation:gateRing 3s ease-out infinite}
+    border:1px solid rgba(59,130,246,.30);animation:gateRing 3s ease-out infinite}
   @keyframes gateRing{0%{transform:scale(.92);opacity:.9}70%{transform:scale(1.14);opacity:0}100%{opacity:0}}
 
   .gate-h{text-align:center;font-size:20px;font-weight:700;letter-spacing:-.4px}
@@ -272,7 +383,7 @@
   .gate-f label{display:block;font-size:10.5px;font-weight:600;color:var(--muted);
     text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
   .gate-f input{padding:12px 13px;font-size:15px}
-  .gate-f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(45,212,191,.13)}
+  .gate-f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.16)}
   .gate-f input:disabled{opacity:.55}
   .gate-eye{position:absolute;right:4px;top:26px;height:38px;width:40px;background:transparent;
     color:var(--muted2);font-size:15px;display:grid;place-items:center;border-radius:8px;padding:0}
@@ -280,11 +391,12 @@
   .gate-caps{font-family:var(--mono);font-size:10.5px;color:var(--gold);margin-top:7px;display:none}
   .gate-caps.on{display:block}
 
-  .gate-btn{width:100%;padding:13px;font-size:15px;font-weight:700;color:#06281f;margin-top:4px;
-    background:linear-gradient(135deg,var(--green),var(--accent));
+  /* azul solido com texto escuro: 5.15:1. Branco sobre #3b82f6 daria 3.68:1 e reprova o gate. */
+  .gate-btn{width:100%;padding:13px;font-size:15px;font-weight:700;color:var(--bg);margin-top:4px;
+    background:var(--accent);
     display:flex;align-items:center;justify-content:center;gap:9px}
-  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(6,40,31,.35);
-    border-top-color:#06281f;animation:gateSpin .6s linear infinite;display:none}
+  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(10,16,32,.35);
+    border-top-color:var(--bg);animation:gateSpin .6s linear infinite;display:none}
   .gate-btn.loading .gate-spin{display:block}
   @keyframes gateSpin{to{transform:rotate(360deg)}}
 
@@ -329,35 +441,62 @@
     <div class="gate-foot" id="gate-foot"></div>
   </form>
 </div>
-<div class="wrap">
-  <header>
-    <div class="brand"><div class="logo">🤖</div>
-      <div><h1>Cripto Bot <span class="mut" style="font-weight:500">Terminal</span></h1>
-      <div class="sub" id="cfg">paper trading · preço real Binance</div></div></div>
-    <div class="toolbar">
-      <div class="badge"><span class="dot"></span> AO VIVO</div>
-      <button class="btn-sec" onclick="escanear()">🔍 Escanear</button>
-      <button class="btn-panico" onclick="panico()">🛑 Pânico</button>
-      <button class="btn-danger" onclick="resetar()">↻ Resetar</button>
-      <button class="btn-sec" onclick="sairLogin()" title="Encerrar a sessão neste navegador">🔒 Sair</button>
-    </div>
-  </header>
+<div class="shell">
+  <!-- Sidebar. Os botoes de nav mantem class="tab" e data-v porque aba() mira
+       document.querySelectorAll('.tab') e liga/desliga o .on por dataset.v. -->
+  <aside class="nav">
+    <div class="brand"><div class="logo" aria-hidden="true">🤖</div>
+      <div><div class="bname">Cripto Bot</div><div class="sub">Terminal</div></div></div>
 
-  <div class="tabs">
-    <button class="tab on" data-v="painel" aria-pressed="true" onclick="aba('painel')">📊 Painel</button>
-    <button class="tab" data-v="grafico" aria-pressed="false" onclick="aba('grafico')">🕯️ Gráfico</button>
+    <div class="nav-sec">
+      <div class="nav-lbl">Vistas</div>
+      <button class="tab on" data-v="painel" aria-pressed="true" onclick="aba('painel')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7.5" height="9" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="3" y="15" width="7.5" height="6" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/></svg> Painel</button>
+      <button class="tab" data-v="grafico" aria-pressed="false" onclick="aba('grafico')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2.5v3.2M7 18.3v3.2M17 4.5v2.2M17 17.3v3.2"/><rect x="4.2" y="5.7" width="5.6" height="12.6" rx="1.4"/><rect x="14.2" y="6.7" width="5.6" height="10.6" rx="1.4"/></svg> Gráfico</button>
+    </div>
+
+    <div class="nav-sec">
+      <div class="nav-lbl">Ações</div>
+      <button class="btn-sec" onclick="escanear()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="M20.5 20.5l-4.5-4.5"/></svg> Escanear</button>
+      <button class="btn-panico" onclick="panico()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 2.8h6.6L20.5 8v6.6l-5.2 5.2H8.7L3.5 14.6V8z"/><path d="M12 7.6v5.2"/><path d="M12 16.1h.01"/></svg> Pânico</button>
+      <button class="btn-danger" onclick="resetar()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 12a8.8 8.8 0 1 0 2.6-6.3"/><path d="M3.2 4.4V10h5.6"/></svg> Resetar</button>
+    </div>
+
+    <div class="nav-foot">
+      <div class="badge"><span class="dot"></span> AO VIVO</div>
+      <button class="btn-sec" onclick="sairLogin()" title="Encerrar a sessão neste navegador"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.6 3.5h3.9A1.6 1.6 0 0 1 20.1 5v14a1.6 1.6 0 0 1-1.6 1.5h-3.9"/><path d="M9.6 8.2L5.8 12l3.8 3.8"/><path d="M5.8 12h10"/></svg> Sair</button>
+    </div>
+  </aside>
+
+  <main class="main">
+  <div class="topbar">
+    <div><h1 id="view-titulo">Painel</h1>
+      <div class="sub" id="cfg">paper trading · preço real Binance</div></div>
   </div>
 
   <div id="view-painel">
   <div id="risco-guard"></div>
-  <div class="cards">
-    <div class="card hero"><div class="lbl">Equity total</div><div class="val mono" id="equity">R$ —</div>
-      <div class="delta mono" id="pnl">—</div></div>
-    <div class="card"><div class="lbl">Banca (caixa)</div><div class="val small mono" id="banca">R$ —</div></div>
-    <div class="card"><div class="lbl">Posições abertas</div><div class="val small mono" id="npos">—</div></div>
-    <div class="card"><div class="lbl">Sinais p/ confirmar</div><div class="val small mono" id="npend">—</div></div>
-  </div>
+  <section class="bento-top">
+    <article class="hero"><div class="lbl">Equity total</div><div class="val mono" id="equity">R$ —</div>
+      <div class="delta mono" id="pnl">—</div>
+      <div class="spark" id="spark" aria-hidden="true"></div></article>
+    <article class="stat"><div class="lbl">Banca (caixa)</div><div class="val mono" id="banca">R$ —</div></article>
+    <article class="stat"><div class="lbl">Posições abertas</div><div class="val mono" id="npos">—</div></article>
+    <article class="stat"><div class="lbl">Sinais p/ confirmar</div><div class="val mono" id="npend">—</div></article>
+  </section>
 
+  <div class="bento">
+  <div class="col">
+
+  <div class="panel"><h2>📈 Curva de capital</h2><div style="height:230px"><canvas id="chart"></canvas></div></div>
+
+  <div class="panel"><h2>🔔 Sinais — Confirmar trade</h2><div id="pendentes"><div class="skel-wrap"><div class="skel lg"></div><div class="skel" style="width:80%"></div><div class="skel lg"></div></div></div></div>
+
+  <div class="panel"><h2>🎯 Posições abertas</h2><div id="posicoes"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:75%"></div></div></div></div>
+
+  <div class="panel"><h2>📋 Journal (trades)</h2><div id="trades"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:65%"></div></div></div></div>
+  </div><!-- /col principal -->
+
+  <div class="col rail">
   <div class="panel" id="auto-panel"><h2>🤖 Auto-trade <span class="mut" style="font-size:11px;font-weight:400">— experimento: o bot abre/fecha sozinho (paper)</span></h2>
     <div class="auto-row">
       <button id="auto-toggle" class="btn-auto" onclick="toggleAuto()" aria-pressed="false">Ativar bot 🤖</button>
@@ -391,16 +530,9 @@
     </div>
   </div>
 
-  <div class="panel"><h2>📈 Curva de capital</h2><div style="height:230px"><canvas id="chart"></canvas></div></div>
-
   <div class="panel"><h2>📊 Métricas & Tunagem</h2><div id="metricas"><div class="skel-wrap"><div class="skel lg"></div><div class="skel"></div><div class="skel" style="width:80%"></div></div></div></div>
-
-  <div class="two">
-    <div class="panel"><h2>🔔 Sinais — Confirmar trade</h2><div id="pendentes"><div class="skel-wrap"><div class="skel lg"></div><div class="skel" style="width:80%"></div><div class="skel lg"></div></div></div></div>
-    <div class="panel"><h2>🎯 Posições abertas</h2><div id="posicoes"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:75%"></div></div></div></div>
-  </div>
-
-  <div class="panel"><h2>📋 Journal (trades)</h2><div id="trades"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:65%"></div></div></div></div>
+  </div><!-- /rail -->
+  </div><!-- /bento -->
   </div><!-- /view-painel -->
 
   <div id="view-grafico" class="hidden">
@@ -421,6 +553,7 @@
       <div class="mut" style="font-size:11.5px;margin-top:10px">Linha cheia = entrada · tracejada = stop · seta = trade. Verde LONG, vermelho SHORT.</div>
     </div>
   </div>
+  </main>
 </div>
 
 <!-- MODAL CONFIRMAR -->
@@ -589,6 +722,27 @@ function statusEntrada(s, pa){
   return {txt:'✓ ainda dá pra entrar', cls:'st-ok'};
 }
 
+// Sparkline do card hero. Desenha a curva de equity que o /estado JA traz (e.equity_hist), sem
+// lib e sem requisicao extra. SVG em vez de canvas porque escala junto com o CSS, sem precisar
+// medir o elemento nem reagir a resize. Verde/vermelho aqui e legitimo: e direcao de dinheiro.
+function sparkline(h){
+  const el=document.getElementById('spark'); if(!el) return;
+  const v=(h||[]).map(x=>x.equity_total).filter(n=>typeof n==='number'&&isFinite(n));
+  if(v.length<2){ el.innerHTML=''; return; }
+  const W=100,H=32,min=Math.min(...v),max=Math.max(...v),amp=(max-min)||1;
+  const d=v.map((n,i)=>`${i?'L':'M'}${(i/(v.length-1)*W).toFixed(2)} ${(H-(n-min)/amp*H).toFixed(2)}`).join('');
+  const alta=v[v.length-1]>=v[0];
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" focusable="false">`+
+    `<defs><linearGradient id="spark-g" x1="0" y1="0" x2="0" y2="1">`+
+    `<stop offset="0" stop-color="${alta?'rgba(22,199,132,.32)':'rgba(242,85,94,.32)'}"/>`+
+    `<stop offset="1" stop-color="${alta?'rgba(22,199,132,0)':'rgba(242,85,94,0)'}"/>`+
+    `</linearGradient></defs>`+
+    `<path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#spark-g)"/>`+
+    // non-scaling-stroke: sem isso o preserveAspectRatio="none" estica a linha junto com o card
+    `<path d="${d}" fill="none" stroke="${alta?'var(--green)':'var(--red)'}" stroke-width="1.5"`+
+    ` vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
 async function carregar(){
   let e; try{ e=await api('/estado'); }catch{
     document.getElementById('cfg').textContent='⚠️ backend offline — reconectando…';
@@ -612,6 +766,7 @@ async function carregar(){
       options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},
         tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:'#1a2030'},ticks:{color:'#7e89a3',callback:v=>brl(v)}}}}});}
   const h=e.equity_hist||[]; chart.data.labels=h.map(x=>x.ts); chart.data.datasets[0].data=h.map(x=>x.equity_total); chart.update('none');
+  sparkline(h);
 
   // guarda de risco (drawdown do dia)
   const rg=e.risco, rgEl=document.getElementById('risco-guard');
@@ -779,6 +934,8 @@ function aba(v){
   document.getElementById('view-painel').classList.toggle('hidden',v!=='painel');
   document.getElementById('view-grafico').classList.toggle('hidden',v!=='grafico');
   document.querySelectorAll('.tab').forEach(b=>{const sel=b.dataset.v===v;b.classList.toggle('on',sel);b.setAttribute('aria-pressed',sel);});
+  // a marca vive na sidebar; o titulo da topbar diz onde voce esta, entao segue a vista
+  const vt=document.getElementById('view-titulo'); if(vt)vt.textContent=v==='painel'?'Painel':'Gráfico';
   if(v==='grafico'&&window.LightweightCharts){
     if(!_tv)initTV();
     if(_est)prepararSelector(_est);
