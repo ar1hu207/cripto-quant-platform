@@ -320,15 +320,23 @@ tail -f ~/cripto-bot/plataforma.log
 scp -i chave.pem *.py ubuntu@SEU_IP:/home/ubuntu/cripto-bot/
 ssh -i chave.pem ubuntu@SEU_IP "sudo systemctl restart cripto-bot"
 
-# atualizar front: nada a fazer, push na main publica sozinho (ver abaixo)
-# para forcar um deploy fora do fluxo do git:
+# atualizar front (obrigatorio: o deploy automatico ainda nao roda, ver 5.1)
 cd web && vercel --prod
 ```
 
-### 5.1 O front publica sozinho (GitHub -> Vercel)
+### 5.1 Deploy automatico (GitHub -> Vercel): metade pronta
 
-O projeto do Vercel esta conectado ao repositorio: **merge na `main` publica o front**. Nao ha
-passo manual.
+**Hoje o front ainda sobe na mao** (`cd web && vercel --prod`). Merge na `main` NAO publica.
+
+O projeto ja esta conectado ao repositorio (`vercel git connect`) e o push cria o registro do
+deployment, mas **o build nunca inicia**: fica em `UNKNOWN`, duracao `?`, sem uma linha de log.
+Sintoma classico de o Vercel nao conseguir ler o repo — o GitHub App do Vercel nao tem acesso a
+`ar1hu207/cripto-quant-platform`, tipicamente porque a conta GitHub ligada ao Vercel e outra
+(email diferente) ou porque o App foi instalado so em repositorios selecionados.
+
+Para destravar, em github.com/settings/installations -> Vercel -> dar acesso a este repositorio
+(e conferir em vercel.com -> Settings -> Git que a conta conectada e a dona do repo). Feito isso,
+push na `main` passa a publicar sozinho e a linha manual vira opcional.
 
 O ajuste que faz isso funcionar nao esta no dashboard, e sim versionado — sao **dois**
 `vercel.json`, e a diferenca entre eles nao e acidente:
