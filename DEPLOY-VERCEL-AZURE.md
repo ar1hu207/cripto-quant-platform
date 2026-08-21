@@ -320,9 +320,32 @@ tail -f ~/cripto-bot/plataforma.log
 scp -i chave.pem *.py ubuntu@SEU_IP:/home/ubuntu/cripto-bot/
 ssh -i chave.pem ubuntu@SEU_IP "sudo systemctl restart cripto-bot"
 
-# atualizar front
+# atualizar front: nada a fazer, push na main publica sozinho (ver abaixo)
+# para forcar um deploy fora do fluxo do git:
 cd web && vercel --prod
 ```
+
+### 5.1 O front publica sozinho (GitHub -> Vercel)
+
+O projeto do Vercel esta conectado ao repositorio: **merge na `main` publica o front**. Nao ha
+passo manual.
+
+O ajuste que faz isso funcionar nao esta no dashboard, e sim versionado — sao **dois**
+`vercel.json`, e a diferenca entre eles nao e acidente:
+
+| arquivo | quem usa | `outputDirectory` |
+|---|---|---|
+| `vercel.json` (raiz) | deploy automatico pelo GitHub | `web` |
+| `web/vercel.json` | `cd web && vercel --prod` (CLI) | `.` |
+
+O Root Directory do projeto e `.`, entao o build vindo do GitHub le a **raiz** do repositorio.
+Sem o `vercel.json` da raiz apontando `outputDirectory` para `web`, esse build publicaria a raiz
+— onde **nao existe `index.html`** (a URL de producao daria 404) e onde estao `api.py`,
+`signal_engine.py` e os documentos de estrategia, que virariam publicos. Credencial e banco nao:
+`.env` e `*.db` estao no `.gitignore` e nem chegam no GitHub.
+
+Os dois arquivos publicam exatamente o mesmo site; existem porque cada caminho enxerga a arvore
+a partir de um lugar diferente. **Mexeu num, confira o outro.**
 
 **O front no Vercel e a cópia em `~/cripto-bot/web/` são o mesmo arquivo.** Se editar o
 `index.html`, publique nos dois — ou aceite que o acesso direto pela URL da Azure fique
