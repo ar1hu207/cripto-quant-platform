@@ -56,7 +56,8 @@
   .logo{width:40px;height:40px;border-radius:11px;background:linear-gradient(135deg,#16c784,#2dd4bf);
     display:grid;place-items:center;font-size:21px;box-shadow:0 6px 22px rgba(22,199,132,.35)}
   .brand h1{font-size:18px;font-weight:700}.brand .sub{font-size:11.5px;color:var(--muted);margin-top:1px}
-  .toolbar{display:flex;align-items:center;gap:10px}
+  /* wrap porque o botao Sair virou o 5o item: sem isto a fila estoura a largura no celular */
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .badge{display:flex;align-items:center;gap:7px;background:var(--green-bg);color:var(--green);
     padding:7px 13px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid rgba(22,199,132,.25)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.8s infinite}
@@ -193,9 +194,141 @@
   #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--card2);
     border:1px solid var(--border2);border-radius:11px;padding:13px 20px;font-weight:600;opacity:0;transition:.3s;z-index:60}
   #toast.on{transform:translateX(-50%) translateY(0);opacity:1}
+  /* ---------- gate de login ----------
+     Tela cheia, nao modal: sem credencial nao existe painel atras para espiar, entao nao
+     faz sentido desenhar um card flutuando sobre dados. Tudo aqui sai dos tokens do :root
+     -- quando o redesign de PLANO-FRONTEND-REDESIGN.md trocar a paleta, esta tela troca
+     junto, sem tocar numa linha. Nenhuma cor solta. */
+  #gate{position:fixed;inset:0;z-index:100;display:none;place-items:center;padding:20px;overflow-y:auto;
+    /* minmax(0,1fr): sem isso a coluna implicita e dimensionada por max-content (os 404px do
+       card), fica MAIOR que a tela, e ai o max-width:100% do card resolve contra a coluna
+       inflada em vez da viewport -- no celular o card vazava 34px pra fora. */
+    grid-template-columns:minmax(0,1fr);
+    place-items:safe center;
+    background:var(--bg);
+    background-image:radial-gradient(900px 500px at 50% -10%,rgba(45,212,191,.10),transparent),
+                     radial-gradient(760px 420px at 50% 110%,rgba(22,199,132,.07),transparent);}
+  #gate.on{display:grid}
+  /* malha tecnica quase invisivel: textura de instrumento sem competir com o card */
+  #gate::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background-image:linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);
+    background-size:34px 34px;
+    -webkit-mask-image:radial-gradient(620px 460px at 50% 45%,#000,transparent 78%);
+            mask-image:radial-gradient(620px 460px at 50% 45%,#000,transparent 78%);}
+  /* varredura lenta descendo a tela: o terminal procurando a sessao */
+  #gate::after{content:"";position:absolute;top:0;left:0;right:0;height:1px;pointer-events:none;
+    background:linear-gradient(90deg,transparent,rgba(45,212,191,.45),transparent);
+    animation:gateScan 7s linear infinite}
+  @keyframes gateScan{0%{top:-2%;opacity:0}8%{opacity:1}92%{opacity:1}100%{top:102%;opacity:0}}
+
+  .gate-card{position:relative;width:404px;max-width:100%;padding:32px 30px 20px;
+    background:linear-gradient(180deg,var(--card),var(--bg2));
+    border:1px solid var(--border2);border-radius:18px;
+    box-shadow:0 34px 90px -24px rgba(0,0,0,.85),inset 0 1px 0 rgba(255,255,255,.03);
+    animation:gateIn .5s cubic-bezier(.2,.8,.25,1) both}
+  @keyframes gateIn{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
+  /* fio de luz no topo: o equipamento energizado */
+  .gate-card::before{content:"";position:absolute;top:-1px;left:26px;right:26px;height:1px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.75}
+  /* entrada em cascata: o card monta de cima pra baixo, como um boot */
+  .gate-card>*{animation:gateUp .45s cubic-bezier(.2,.8,.25,1) both}
+  @keyframes gateUp{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+  .gate-card>*:nth-child(1){animation-delay:.05s}
+  .gate-card>*:nth-child(2){animation-delay:.10s}
+  .gate-card>*:nth-child(3){animation-delay:.15s}
+  .gate-card>*:nth-child(4){animation-delay:.20s}
+  .gate-card>*:nth-child(5){animation-delay:.25s}
+  .gate-card>*:nth-child(6){animation-delay:.30s}
+  .gate-card>*:nth-child(7){animation-delay:.35s}
+  .gate-card.shake{animation:gateShake .4s}
+  @keyframes gateShake{10%,90%{transform:translateX(-2px)}30%,70%{transform:translateX(4px)}50%{transform:translateX(-5px)}}
+
+  .gate-mark{width:56px;height:56px;margin:0 auto 15px;border-radius:16px;position:relative;
+    background:linear-gradient(135deg,var(--green),var(--accent));display:grid;place-items:center;
+    font-size:28px;box-shadow:0 12px 34px -8px rgba(22,199,132,.6)}
+  .gate-mark::after{content:"";position:absolute;inset:-6px;border-radius:22px;
+    border:1px solid rgba(45,212,191,.28);animation:gateRing 3s ease-out infinite}
+  @keyframes gateRing{0%{transform:scale(.92);opacity:.9}70%{transform:scale(1.14);opacity:0}100%{opacity:0}}
+
+  .gate-h{text-align:center;font-size:20px;font-weight:700;letter-spacing:-.4px}
+  .gate-h span{color:var(--muted);font-weight:500}
+  .gate-sub{text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--muted2);
+    text-transform:uppercase;letter-spacing:1.7px;margin-top:6px}
+
+  /* Estado do backend ao vivo. /health e a unica rota sem autenticacao, entao da pra dizer
+     "o backend esta de pe" ANTES de a pessoa digitar -- e nao confundir senha errada com
+     servico fora do ar, que e o que os dois prompt() do navegador nunca souberam fazer. */
+  .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:17px auto 20px;
+    width:fit-content;font-family:var(--mono);font-size:11px;font-weight:600;padding:7px 13px;
+    border-radius:20px;border:1px solid var(--border);background:var(--card2);color:var(--muted)}
+  .gate-status .dot{background:var(--muted2);animation:none}
+  .gate-status.up{color:var(--green);background:var(--green-bg);border-color:rgba(22,199,132,.28)}
+  .gate-status.up .dot{background:var(--green);animation:pulse 1.8s infinite}
+  .gate-status.down{color:var(--red);background:var(--red-bg);border-color:rgba(234,57,67,.3)}
+  .gate-status.down .dot{background:var(--red)}
+
+  .gate-f{position:relative;margin-bottom:13px}
+  .gate-f label{display:block;font-size:10.5px;font-weight:600;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
+  .gate-f input{padding:12px 13px;font-size:15px}
+  .gate-f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(45,212,191,.13)}
+  .gate-f input:disabled{opacity:.55}
+  .gate-eye{position:absolute;right:4px;top:26px;height:38px;width:40px;background:transparent;
+    color:var(--muted2);font-size:15px;display:grid;place-items:center;border-radius:8px;padding:0}
+  @media (hover:hover){.gate-eye:hover{color:var(--txt);background:var(--card2)}}
+  .gate-caps{font-family:var(--mono);font-size:10.5px;color:var(--gold);margin-top:7px;display:none}
+  .gate-caps.on{display:block}
+
+  .gate-btn{width:100%;padding:13px;font-size:15px;font-weight:700;color:#06281f;margin-top:4px;
+    background:linear-gradient(135deg,var(--green),var(--accent));
+    display:flex;align-items:center;justify-content:center;gap:9px}
+  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(6,40,31,.35);
+    border-top-color:#06281f;animation:gateSpin .6s linear infinite;display:none}
+  .gate-btn.loading .gate-spin{display:block}
+  @keyframes gateSpin{to{transform:rotate(360deg)}}
+
+  .gate-msg{display:none;margin-top:14px;padding:11px 13px;border-radius:10px;font-size:12.5px;
+    line-height:1.55;border:1px solid transparent}
+  .gate-msg.on{display:block}
+  .gate-msg.err{color:var(--red);background:var(--red-bg);border-color:rgba(234,57,67,.28)}
+  .gate-msg.warn{color:var(--gold);background:rgba(240,185,11,.08);border-color:rgba(240,185,11,.22)}
+  .gate-msg.info{color:var(--muted2);background:var(--card2);border-color:var(--border)}
+  .gate-msg b{font-family:var(--mono);font-weight:700}
+
+  .gate-foot{margin-top:18px;padding-top:13px;border-top:1px solid var(--border);text-align:center;
+    font-family:var(--mono);font-size:10px;color:var(--muted2);line-height:1.7;word-break:break-all}
+  @media(max-width:440px){.gate-card{padding:26px 20px 16px}.gate-mark{width:50px;height:50px;font-size:25px}}
 </style>
 </head>
 <body>
+<!-- Gate de login. Fora do .wrap de proposito: e tela cheia, nao um modal do painel. So
+     aparece quando o backend devolve 401 -- em dev sem senha ninguem ve isto. -->
+<div id="gate" role="dialog" aria-modal="true" aria-labelledby="gate-h">
+  <form class="gate-card" id="gate-form">
+    <div class="gate-mark" aria-hidden="true">🤖</div>
+    <div>
+      <h2 class="gate-h" id="gate-h">Cripto Bot <span>Terminal</span></h2>
+      <div class="gate-sub">acesso restrito</div>
+    </div>
+    <div class="gate-status" id="gate-status"><span class="dot"></span><span id="gate-status-txt">verificando backend…</span></div>
+    <div class="gate-f">
+      <label for="gate-user">Usuário</label>
+      <input id="gate-user" name="username" autocomplete="username" value="admin" spellcheck="false" autocapitalize="off" autocorrect="off">
+    </div>
+    <div class="gate-f">
+      <label for="gate-pass">Senha</label>
+      <input id="gate-pass" name="password" type="password" autocomplete="current-password" spellcheck="false">
+      <button type="button" class="gate-eye" id="gate-eye" aria-label="Mostrar senha">👁</button>
+      <div class="gate-caps" id="gate-caps">⇪ Caps Lock ligado</div>
+    </div>
+    <div>
+      <button type="submit" class="gate-btn" id="gate-btn"><span class="gate-spin" aria-hidden="true"></span><span id="gate-btn-txt">Entrar no terminal</span></button>
+      <div class="gate-msg" id="gate-msg" role="alert" aria-live="polite"></div>
+    </div>
+    <div class="gate-foot" id="gate-foot"></div>
+  </form>
+</div>
 <div class="wrap">
   <header>
     <div class="brand"><div class="logo">🤖</div>
@@ -206,6 +339,7 @@
       <button class="btn-sec" onclick="escanear()">🔍 Escanear</button>
       <button class="btn-panico" onclick="panico()">🛑 Pânico</button>
       <button class="btn-danger" onclick="resetar()">↻ Resetar</button>
+      <button class="btn-sec" onclick="sairLogin()" title="Encerrar a sessão neste navegador">🔒 Sair</button>
     </div>
   </header>
 
@@ -321,14 +455,101 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 // do Basic Auth passam a ir no header explicitamente (o navegador não as anexa sozinho
 // em requisição cross-origin).
 const API=(window.API_BASE||'').replace(/\/+$/,'');
-let _cred=localStorage.getItem('cbAuth')||'', _pedindo=false, _semLoginAte=0;
+let _cred=localStorage.getItem('cbAuth')||'';
 
-function pedirLogin(){
-  const u=prompt('Usuário do painel:','admin'); if(u===null) return false;
-  const p=prompt('Senha:'); if(p===null) return false;
-  _cred='Basic '+btoa(u+':'+p); localStorage.setItem('cbAuth',_cred); return true;
+// ---------- gate de login ----------
+// Substitui os dois prompt() do navegador. O ganho não é só estético: prompt() não sabe a
+// diferença entre senha errada, IP bloqueado pelo throttle, backend sem DASH_PASS e backend
+// fora do ar — devolve as quatro como "não entrou". Aqui cada uma tem a sua mensagem, e o
+// /health (única rota que dispensa credencial) diz ao vivo se o serviço está de pé ANTES de
+// a pessoa digitar. Foi exatamente essa confusão que custou uma madrugada de investigação.
+const $g=id=>document.getElementById(id);
+let _gateSessao=null, _gateTimer=null, _gateHealth=null;
+
+function gateMsg(html,tipo){ const m=$g('gate-msg'); m.innerHTML=html; m.className='gate-msg on '+(tipo||'err'); }
+function gateLimpa(){ $g('gate-msg').className='gate-msg'; }
+function gateOcupado(on,rotulo,girando){
+  $g('gate-btn').disabled=on;
+  $g('gate-btn').classList.toggle('loading',!!(on&&girando));
+  $g('gate-btn-txt').textContent=rotulo||'Entrar no terminal';
+  $g('gate-user').disabled=on; $g('gate-pass').disabled=on;
 }
-function sairLogin(){localStorage.removeItem('cbAuth');_cred='';location.reload();}
+function gateSacode(){ const c=$g('gate-form');
+  c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake');
+  c.addEventListener('animationend',()=>c.classList.remove('shake'),{once:true}); }
+
+// /health não passa pela autenticação (é o que o monitoramento consome), então serve de
+// prova de vida do backend mesmo com o painel trancado.
+async function gateSaude(){ const s=$g('gate-status'), t=$g('gate-status-txt');
+  try{
+    const j=await (await fetch(API+'/health',{cache:'no-store'})).json();
+    s.className='gate-status up'; t.textContent='backend online · v'+j.versao;
+  }catch{ s.className='gate-status down'; t.textContent='backend sem resposta'; } }
+
+// 429 = throttle do backend (15 senhas erradas bloqueiam o IP). Trava o botão e conta o
+// tempo em vez de deixar a pessoa martelar e renovar o próprio bloqueio.
+function gateEspera(seg){
+  clearInterval(_gateTimer);
+  const tick=()=>{ if(seg<=0){ clearInterval(_gateTimer); gateOcupado(false); gateLimpa(); $g('gate-pass').focus(); return; }
+    gateMsg('Tentativas demais. O backend libera de novo em <b>'+seg+'s</b>.','warn'); seg--; };
+  gateOcupado(true,'Aguarde',false); tick(); _gateTimer=setInterval(tick,1000);
+}
+
+async function gateEntrar(ev){
+  ev.preventDefault();
+  const u=$g('gate-user').value.trim(), p=$g('gate-pass').value;
+  if(!p){ gateMsg('Digite a senha.','info'); $g('gate-pass').focus(); return; }
+  const cand='Basic '+btoa(u+':'+p);
+  gateLimpa(); gateOcupado(true,'Verificando…',true);
+  let r;
+  // /status é a rota autenticada mais barata que existe: valida a credencial sem arrastar
+  // a curva de equity inteira só para descobrir se a senha presta.
+  try{ r=await fetch(API+'/status',{headers:{Authorization:cand}}); }
+  catch{ gateOcupado(false); gateSaude();
+    gateMsg('Sem resposta do backend. Ou o serviço está fora do ar, ou a origem deste painel não está liberada no <b>CORS_ORIGINS</b> da VM.','err'); return; }
+
+  if(r.ok){ _cred=cand; localStorage.setItem('cbAuth',cand);
+    gateOcupado(true,'Entrando…',false); gateFecha(true);
+    cargaInicial(); iniciarPolling(); return; }
+
+  gateOcupado(false);
+  if(r.status===401){ gateSacode(); gateMsg('Usuário ou senha incorretos.','err');
+    const c=$g('gate-pass'); c.focus(); c.select(); }
+  else if(r.status===429){ const txt=await r.text().catch(()=>'');
+    // Retry-After não atravessa o CORS sem expose_headers, mas o backend repete o tempo no corpo.
+    const m=txt.match(/(\d+)\s*s/); gateEspera(m?+m[1]:120); }
+  else if(r.status===503){ gateMsg('O backend está no ar, mas sem <b>DASH_PASS</b> definido — e sem senha ele recusa qualquer acesso externo. Defina a senha no <b>.env</b> da VM e reinicie o serviço.','warn'); }
+  else{ gateMsg('Resposta inesperada do backend (HTTP '+r.status+').','err'); }
+}
+
+// Single-flight: o poll dispara ~5 requisições por ciclo e todas levam 401 juntas. Quem
+// chegar com o gate já aberto espera o MESMO login em vez de empilhar telas.
+function gateAbre(){
+  if(_gateSessao) return _gateSessao.promessa;
+  let resolver; const promessa=new Promise(res=>{resolver=res;});
+  _gateSessao={promessa,resolver};
+  $g('gate').classList.add('on'); document.body.style.overflow='hidden';
+  $g('gate-foot').innerHTML='autenticando em<br>'+(API||location.origin);
+  gateLimpa(); gateOcupado(false); $g('gate-pass').value='';
+  ($g('gate-user').value.trim()?$g('gate-pass'):$g('gate-user')).focus();
+  gateSaude(); clearInterval(_gateHealth); _gateHealth=setInterval(gateSaude,15000);
+  return promessa;
+}
+function gateFecha(ok){
+  clearInterval(_gateHealth); clearInterval(_gateTimer);
+  $g('gate').classList.remove('on'); document.body.style.overflow='';
+  $g('gate-pass').value='';
+  if(_gateSessao){ const r=_gateSessao.resolver; _gateSessao=null; r(!!ok); }
+}
+
+async function sairLogin(){
+  localStorage.removeItem('cbAuth'); _cred=''; pararPolling();
+  // Backend sem senha (dev/monolito local) não tem sessão pra encerrar: mostrar o gate ali
+  // seria pedir uma credencial que ninguém vai conferir.
+  try{ if((await fetch(API+'/status')).ok){ cargaInicial(); iniciarPolling();
+        toast('Este backend não pede senha — não há sessão para encerrar'); return; } }catch{}
+  gateAbre();
+}
 
 async function apiFetch(path,opts={}){
   const mk=()=>({...opts,headers:{...(opts.headers||{}),...(_cred?{Authorization:_cred}:{})}});
@@ -337,23 +558,14 @@ async function apiFetch(path,opts={}){
   // Bloqueado pelo throttle: parar de bater, senão o poll renova o bloqueio pra sempre.
   if(r.status===429){ pararPolling(); toast(await r.clone().text()); return r; }
 
-  // 401: NUNCA insistir com a mesma credencial. O poll dispara ~5 requisições a cada 3s
-  // e 8 senhas erradas bloqueiam o IP por 5 min — um typo viraria lockout. Então: para o
-  // polling, descarta a credencial, pede de novo UMA vez, e só religa se o login passar.
+  // 401: NUNCA insistir com a mesma credencial. O poll dispara ~5 requisições a cada 3s e
+  // 15 senhas erradas bloqueiam o IP por 2 min — um typo repetido viraria lockout. Então:
+  // para o polling, descarta a credencial e abre o gate. Quem religa o painel é o próprio
+  // gate quando a credencial nova passa, uma vez só, e não cada requisição que esperou.
   if(r.status===401){
     pararPolling();
     localStorage.removeItem('cbAuth'); _cred='';
-    if(!_pedindo){
-      _pedindo=true;
-      try{
-        if(pedirLogin()){
-          r=await fetch(API+path,mk());
-          if(r.ok){ cargaInicial(); iniciarPolling(); }
-          else { localStorage.removeItem('cbAuth'); _cred='';
-                 toast('Senha incorreta — recarregue a página para tentar de novo'); }
-        }
-      }finally{_pedindo=false;}
-    }
+    if(await gateAbre()) r=await fetch(API+path,mk());
   }
   return r;
 }
@@ -876,11 +1088,19 @@ function iniciarPolling(){ if(_timers.length)return;
     setInterval(carregarFunding,60000), setInterval(carregarSaidas,8000), setInterval(carregarPrecos,8000)); }
 function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
 function cargaInicial(){ carregar(); carregarSentimento(); carregarFunding(); carregarSaidas(); carregarPrecos(); }
-// Sem prompt preventivo: se o backend exigir senha, o tratamento de 401 no apiFetch pede
-// uma vez e para o polling. Com o backend aberto, nenhum prompt aparece. A credencial do
+// Sem gate preventivo: se o backend exigir senha, o tratamento de 401 no apiFetch abre a
+// tela de login e para o polling. Com o backend aberto, ela nunca aparece. A credencial do
 // localStorage é reaproveitada: descartá-la aqui obrigava a redigitar login a cada F5, e
 // foi essa fricção que levou a desligar a senha no servidor. Credencial que não serve mais
 // é limpa no tratamento de 401, que é onde se descobre isso.
+$g('gate-form').addEventListener('submit',gateEntrar);
+$g('gate-eye').addEventListener('click',()=>{ const i=$g('gate-pass'), oculto=i.type==='password';
+  i.type=oculto?'text':'password'; const b=$g('gate-eye');
+  b.textContent=oculto?'\u{1F648}':'\u{1F441}'; b.setAttribute('aria-label',oculto?'Ocultar senha':'Mostrar senha'); i.focus(); });
+// Caps Lock explica metade dos "a senha está certa e não entra".
+['keydown','keyup'].forEach(ev=>$g('gate-pass').addEventListener(ev,e=>{
+  $g('gate-caps').classList.toggle('on', !!(e.getModifierState&&e.getModifierState('CapsLock'))); }));
+
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
 document.addEventListener('visibilitychange',()=>{ if(document.hidden){ pararPolling(); } else { cargaInicial(); iniciarPolling(); } });
