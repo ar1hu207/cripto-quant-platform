@@ -13,7 +13,7 @@ import time
 from contextlib import asynccontextmanager
 
 import pandas as pd
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -77,20 +77,25 @@ async def lifespan(app):
     _worker_on["v"] = False
 
 
-app = FastAPI(title="Cripto Bot API", version="0.3", lifespan=lifespan)
+# Login básico (HTTP Basic): ativo só quando DASH_PASS está setado (deploy público).
+# Local fica sem senha. O navegador guarda o login e o manda nos fetch automaticamente.
+# Lido ANTES de criar o app porque decide se /docs e /openapi.json existem.
+DASH_USER = os.environ.get("DASH_USER", "admin")
+DASH_PASS = os.environ.get("DASH_PASS", "")
+
+# Não existe bandeira para servir o painel sem senha na internet. Existiu uma
+# (PERMITIR_SEM_SENHA) e foi exatamente ela que deixou /reset, /panico, /config e /auto
+# abertos para qualquer um em produção: a guarda que recusa acesso externo sem DASH_PASS
+# só protege se não houver como desligá-la. Sem senha, o backend atende só loopback.
+# Com senha, /docs e /openapi.json somem — mapa da API não é coisa de deploy público.
+app = FastAPI(title="Cripto Bot API", version="0.3", lifespan=lifespan,
+              docs_url=None if DASH_PASS else "/docs",
+              redoc_url=None if DASH_PASS else "/redoc",
+              openapi_url=None if DASH_PASS else "/openapi.json")
 # Origens do front. Local/monolito: "*". Front separado (Vercel): liste a origem exata,
 # ex CORS_ORIGINS="https://meu-bot.vercel.app" (várias separadas por vírgula).
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
-
-# Login básico (HTTP Basic): ativo só quando DASH_PASS está setado (deploy público).
-# Local fica sem senha. O navegador guarda o login e o manda nos fetch automaticamente.
-DASH_USER = os.environ.get("DASH_USER", "admin")
-DASH_PASS = os.environ.get("DASH_PASS", "")
-# Escolha DELIBERADA de rodar sem autenticação num backend exposto. Existe porque a guarda
-# abaixo (que recusa acesso externo sem DASH_PASS) protege contra esquecimento, e esquecer
-# é diferente de decidir. Com isto em "1", o painel fica aberto para qualquer um na internet.
-SEM_SENHA_OK = os.environ.get("PERMITIR_SEM_SENHA", "") == "1"
 
 LOOPBACK = {"127.0.0.1", "::1"}
 # A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
@@ -138,8 +143,6 @@ async def auth_basica(request: Request, call_next):
         return await call_next(request)
 
     if not DASH_PASS:
-        if SEM_SENHA_OK:                                     # aberto por decisão explícita
-            return await call_next(request)
         # SEM SENHA: só acesso local direto. Se veio de fora (IP não-loopback) ou por proxy,
         # RECUSA em vez de servir o painel aberto pra internet. Esquecer o DASH_PASS no .env
         # é o erro mais provável do deploy — aqui ele falha alto em vez de falhar aberto.
@@ -201,6 +204,10 @@ class DcaReq(BaseModel):
     freq_dias: float = 7
 
 
+class ResetReq(BaseModel):
+    confirmar: str = ""
+
+
 # ---------- leitura ----------
 @app.get("/")
 def home():
@@ -239,7 +246,12 @@ def status():
 
 
 @app.post("/reset")
-def reset():
+def reset(req: ResetReq):
+    """Apaga sinais, posições, trades e a curva de equity, e devolve a banca ao inicial.
+    Irreversível e sem backup do trading.db: exige confirmação no corpo para que um POST
+    solto — curl, scanner, clique errado — não apague meses de histórico de pesquisa."""
+    if req.confirmar != "RESET":
+        raise HTTPException(400, 'Reset apaga todo o histórico. Envie {"confirmar": "RESET"}.')
     with db.conectar() as c:
         for t in ("sinais", "posicoes", "trades", "equity"):
             c.execute(f"DELETE FROM {t}")

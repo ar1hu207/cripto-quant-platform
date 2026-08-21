@@ -782,7 +782,7 @@ async function pular(id){await api('/pular',{id});carregar();}
 async function fechar(id){const r=await api('/fechar',{id});toast(`Posição fechada — P&L ${brl(r.pnl)}`);carregar();}
 async function escanear(){toast('🔍 escaneando...');await api('/scan',{});carregar();}
 async function resetar(){if(!confirm('Resetar a simulação? (zera banca, posições e trades)'))return;
-  await api('/reset',{});toast('↻ simulação resetada');carregar();}
+  await api('/reset',{confirmar:'RESET'});toast('↻ simulação resetada');carregar();}
 async function criarDca(){if(_busy)return;
   const ativo=document.getElementById('dca-ativo').value, valor=+document.getElementById('dca-valor').value, freq=+document.getElementById('dca-freq').value;
   if(!ativo||valor<=0||freq<=0){toast('preencha ativo/valor/frequência');return;}
@@ -877,8 +877,10 @@ function iniciarPolling(){ if(_timers.length)return;
 function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
 function cargaInicial(){ carregar(); carregarSentimento(); carregarFunding(); carregarSaidas(); carregarPrecos(); }
 // Sem prompt preventivo: se o backend exigir senha, o tratamento de 401 no apiFetch pede
-// uma vez e para o polling. Com o backend aberto, nenhum prompt aparece.
-localStorage.removeItem('cbAuth'); _cred='';   // descarta credencial velha de sessões anteriores
+// uma vez e para o polling. Com o backend aberto, nenhum prompt aparece. A credencial do
+// localStorage é reaproveitada: descartá-la aqui obrigava a redigitar login a cada F5, e
+// foi essa fricção que levou a desligar a senha no servidor. Credencial que não serve mais
+// é limpa no tratamento de 401, que é onde se descobre isso.
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
 document.addEventListener('visibilitychange',()=>{ if(document.hidden){ pararPolling(); } else { cargaInicial(); iniciarPolling(); } });
