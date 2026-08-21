@@ -58,13 +58,39 @@ App Service daria HTTPS grátis e Easy Auth, mas o `/home` persistente dele é *
 memória compartilhada que o share não oferece. Risco de lock e corrupção de banco. VM com disco
 local resolve.
 
-### 3.2 Região: **North Central US** (não Brazil South)
+### 3.2 Região: **South Africa North**
+
+> ⚠️ **Revisado em 2026-08-20.** Esta seção dizia *"North Central US (não Brazil South)"* e
+> justificava a escolha com uma afirmação **falsa** — que Brazil South não teria nenhum SKU da
+> família B. Foi essa frase que pôs a VM nos EUA e deixou o bot cego por HTTP 451 durante todo
+> o primeiro deploy (ver `STATUS-SISTEMA-2026-08-19.md`, cards [P0-2] e [P2-4] no Trello).
+> A região em produção hoje é **`southafricanorth`** (commit `a84af4f`), e a decisão real é a
+> interseção de duas restrições:
+>
+> 1. **Azure Policy da assinatura** (*"Allowed resource deployment regions"*) só aceita
+>    `canadacentral`, `centralus`, `northcentralus`, `southafricanorth`, `spaincentral`.
+> 2. **A Binance devolve 451** para IPs dos EUA e do Canadá — a VM funciona, mas o bot fica
+>    cego. Isso elimina `centralus`, `northcentralus` e `canadacentral`.
+>
+> Sobra `southafricanorth` (`spaincentral` está na UE, também geo-bloqueada pela Binance).
+>
+> **Sobre a frase errada.** Brazil South *tem* a família B: a API `Microsoft.Compute/skus` lista
+> **32 SKUs B** na região, o `B2ats_v2` inclusive. O que é verdade é uma coisa diferente — nesta
+> **assinatura** todos os 32 voltam com `NotAvailableForSubscription`, e é por isso que
+> `az vm list-skus -l brazilsouth` (sem `--all`) devolve lista vazia e o levantamento original
+> concluiu "nenhum da família B". A conclusão operacional estava certa; o motivo, não. E a
+> diferença importa: um limite de assinatura se resolve com quota/suporte, uma região que não tem
+> o SKU, não. De todo modo a Azure Policy acima já barra `brazilsouth` antes disso.
+>
+> *Verificado em 2026-08-20 com `Microsoft.Compute/skus?$filter=location eq 'brazilsouth'` e
+> `az policy assignment list`.* O parágrafo abaixo fica como registro do raciocínio original.
 
 O usuário está em São Paulo, então Brazil South era o default óbvio. **Não é viável.**
 
-Levantamento via `az vm list-skus` na assinatura real: Brazil South oferece 492 SKUs de VM,
+~~Levantamento via `az vm list-skus` na assinatura real: Brazil South oferece 492 SKUs de VM,
 **nenhum da família B** — a única família dentro do tier gratuito. O menor SKU disponível lá é
-2 vCPU / 4 GiB. Preços reais (Azure Retail Prices API, Linux, consumo):
+2 vCPU / 4 GiB.~~ *(incorreto — ver a revisão acima)* Preços reais (Azure Retail Prices API,
+Linux, consumo):
 
 | SKU (menor disponível em Brazil South) | US$/h | US$/mês | Crédito de US$ 100 dura |
 |---|---|---|---|
@@ -83,10 +109,19 @@ com `NotAvailableForSubscription` e foram excluídas): `northcentralus`, `westce
 `canadaeast`, `chilecentral`, `koreacentral`, `swedencentral`, `southafricanorth`,
 `polandcentral`, `eastasia`, entre outras.
 
-`northcentralus` escolhida por ser região madura e sem restrição. `chilecentral` (mais próxima
-do Brasil) foi descartada por ser região nova — risco de falta de capacidade.
+~~`northcentralus` escolhida por ser região madura e sem restrição.~~ **Escolha revista em
+2026-08-20: `southafricanorth`** — `northcentralus` é geo-bloqueada pela Binance (451) e a maior
+parte da lista acima não passa na Azure Policy da assinatura. `chilecentral` (mais próxima do
+Brasil) já havia sido descartada por ser região nova — risco de falta de capacidade — e também
+não consta na policy.
 
 ### 3.3 Tamanho: `Standard_B2ats_v2` (AMD x64)
+
+> **Nota de 2026-08-20 (card [P2-5]).** Em `southafricanorth` a assinatura tem liberado, entre
+> outros, o `Standard_B2als_v2` (2 vCPU / **4 GiB**) — mesma região, resolvível com
+> `az vm resize` e um reboot, sem reprovisionar nada. O custo da troca é sair das 750 h/mês
+> gratuitas (que cobrem só `B2ats_v2` e `B2pts_v2`) e passar a consumir o crédito. É essa a
+> decisão do [P2-5], depois de medir o pico de memória com o scan rodando de verdade.
 
 O tier gratuito do Azure for Students dá **750 h/mês** de `B2pts v2` (ARM) **e** `B2ats v2`
 (AMD). O mês tem ~730 h, então **uma** VM 24/7 cabe.
@@ -105,7 +140,7 @@ bloqueado pelo navegador). Logo o backend precisa de HTTPS — o que exige um ho
 Let's Encrypt não emite para IP puro.
 
 Solução sem custo: o **DNS name label** do Public IP da Azure gera
-`<label>.northcentralus.cloudapp.azure.com`, e o Caddy emite/renova o certificado sozinho.
+`<label>.southafricanorth.cloudapp.azure.com`, e o Caddy emite/renova o certificado sozinho.
 
 ### 3.5 Nota sobre o split front/backend
 O backend já serve o front sozinho. Separar não traz ganho técnico neste momento — o backend
@@ -140,7 +175,7 @@ para outra região da lista da §3.2.
 set -euo pipefail
 
 RG="rg-cripto-bot"
-LOCAL="northcentralus"
+LOCAL="southafricanorth"
 VM="vm-cripto-bot"
 TAMANHO="Standard_B2ats_v2"
 IMAGEM="Canonical:ubuntu-24_04-lts:server:latest"
@@ -291,7 +326,7 @@ sudo apt update && sudo apt install -y caddy
 
 `/etc/caddy/Caddyfile`:
 ```
-cripto-bot-XXXX.northcentralus.cloudapp.azure.com {
+cripto-bot-XXXX.southafricanorth.cloudapp.azure.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:8000
 }

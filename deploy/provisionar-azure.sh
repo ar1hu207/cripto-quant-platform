@@ -5,19 +5,27 @@ set -euo pipefail
 
 # ------------------------------------------------------------------- parâmetros
 RG="${RG:-rg-cripto-bot}"
-# A região é ditada por DUAS restrições, não uma:
-#  1) precisa oferecer a família B (a única gratuita) — Brazil South não oferece;
+# A região é ditada por DUAS restrições:
+#  1) a assinatura tem Azure Policy "Allowed resource deployment regions" e só aceita
+#     canadacentral, centralus, northcentralus, southafricanorth, spaincentral;
 #  2) a Binance geo-bloqueia (HTTP 451) EUA, Canadá, Holanda e a UE — então o bot fica
 #     CEGO nessas regiões, por mais que a VM funcione. Aprendido na prática em US.
-#  3) a assinatura tem Azure Policy "Allowed resource deployment regions" e só aceita
-#     canadacentral, centralus, northcentralus, southafricanorth, spaincentral.
-# A interseção das três restrições deixa UMA opção: southafricanorth.
+# A interseção das duas deixa UMA opção: southafricanorth.
+#
+# Correção de 2026-08-20: este comentário afirmava que "Brazil South NÃO oferece a família B".
+# Como afirmação sobre a REGIÃO, é falsa — a API de Compute SKUs lista 32 SKUs da família B em
+# brazilsouth, o B2ats_v2 inclusive. O que é verdade é sobre a ASSINATURA: todos os 32 voltam com
+# `NotAvailableForSubscription`, e por isso `az vm list-skus -l brazilsouth` (sem `--all`) devolve
+# lista vazia. Some-se a isso a Azure Policy da restrição 1, que já barra brazilsouth de saída.
+# Conclusão prática igual, motivo diferente — e o motivo errado no comentário foi o que empurrou
+# o primeiro deploy para northcentralus e deixou o bot cego por 451 (STATUS-SISTEMA-2026-08-19.md).
+# Verificado em 2026-08-20 via Microsoft.Compute/skus e `az policy assignment list`.
 LOCAL="${LOCAL:-southafricanorth}"
 VM="vm-cripto-bot"
 TAMANHO="Standard_B2ats_v2"        # 2 vCPU / 1 GiB, AMD x64 — 750 h/mês grátis
 IMAGEM="Canonical:ubuntu-24_04-lts:server:latest"
 USUARIO="ubuntu"                   # NÃO mudar: cripto-bot.service depende deste nome
-DNS_LABEL="cripto-bot-${RANDOM}"   # vira <label>.northcentralus.cloudapp.azure.com
+DNS_LABEL="cripto-bot-${RANDOM}"   # vira <label>.${LOCAL}.cloudapp.azure.com
 CHAVE="$HOME/.ssh/cripto-bot"
 # IP liberado no SSH. Detectado na hora — IP residencial é dinâmico e hardcodar
 # significa script quebrado na próxima vez. Sobrescreva com: MEU_IP=1.2.3.4 bash ...
