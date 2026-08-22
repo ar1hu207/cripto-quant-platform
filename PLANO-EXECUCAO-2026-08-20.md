@@ -455,6 +455,97 @@ redesign. **Decidir antes de soltar o agente do M5**, não durante.
 
 ---
 
+#### 4e. `T-FRONT-PERF` — território do `P2-37`, declarado em 2026-08-22
+
+O M5/M6 fechou o front, e a primeira medição externa dele — Lighthouse 13.4.0 no domínio de
+produção, rodada pelo dono em 2026-08-22 20:48 — deu **performance 0,86**. Este território existe
+para atacar isso. Ele é **paralelo a tudo pela mesma razão que o M5 sempre foi** (§4, M5): o front
+tem território exclusivo e não encosta em backend, endpoint ou dado.
+
+| Território | Card | Arquivos que pode escrever |
+|---|---|---|
+| **`T-FRONT-PERF`** | `P2-37` (`rpABcTFh`) | `web/index.html` · `web/vendor/` · `PERF-FRONT-2026-08-22.md` (novo) |
+
+Fora da lista, e o motivo de cada um: `README.md` é do `T-DOCS` na onda 3 do M3, que roda agora;
+`DESIGN.md` é a fonte da verdade visual e **o resultado visível não pode mudar** — se para ganhar
+performance for preciso mudar o que se vê, o worker para e reporta; e nada de backend, porque o
+card é de front e a §4 do M5 diz "zero mudança de backend, endpoint ou dado".
+
+**A aritmética do 0,86, para não se atacar o número errado.** O peso é `TBT 30 · LCP 25 · CLS 25 ·
+FCP 10 · SI 10`, e três das cinco métricas já estão em 1,00:
+
+| Métrica | Valor | Score | Perde |
+|---|---|---|---|
+| Total Blocking Time | 0 ms | 1,00 | — |
+| Cumulative Layout Shift | 0 | 1,00 | — |
+| Largest Contentful Paint | 1,1 s | 0,91 | 2,2 pts |
+| First Contentful Paint | 1,1 s | 0,78 | 2,2 pts |
+| **Speed Index** | **7,2 s** | **0,00** | **10 pts** |
+
+**Todo o buraco é o Speed Index**, e os 4,4 pontos restantes são FCP e LCP empatados em 1,1 s.
+
+**⚠️ A medição é suspeita, e conferir isso é o primeiro passo do card — não o último.** O relatório
+denuncia a própria máquina: `benchmarkIndex` 2496, `lh:storage:clearBrowserCaches` levando **4,06 s**
+e `lh:gather:getBenchmarkIndex` **1,02 s**. O `fetchTime` é 20:48 de 2026-08-22 — o mesmo intervalo
+em que esta máquina rodava os workers do M3 e várias execuções da suíte de testes. E o sintoma
+combina com máquina saturada, não com front lento: `observedFirstPaint` = `observedFirstContentfulPaint`
+= **11.560 ms**, ou seja **nem o fundo da página pintou** por 11,5 s, enquanto a thread principal
+ficava **ociosa** entre 1.440 ms e 4.164 ms (tabela `main-thread-tasks`). Os sete primeiros quadros
+do filmstrip são o mesmo JPEG de cor chapada. Página que não pinta com CPU ociosa e rede terminada
+não é página lenta; é ambiente de medição ruim.
+
+**Regra que decorre: nada se conserta antes de a medição ser reproduzida com a máquina quieta.** Se
+o Speed Index voltar ao normal sozinho, o card muda de tamanho — vira FCP+LCP, que é real e vale
+4,4 pontos — e a conclusão "o 0,86 era a máquina" é uma entrega tão legítima quanto um patch.
+
+**O que é defeito de verdade, medido e independente do ruído da máquina.** Estes saem do relatório e
+não dependem de cronômetro:
+
+1. **Quatro recursos bloqueiam a renderização no `<head>`**, e o Lighthouse estima 840 ms de FCP/LCP
+   nisso: `vendor/chart.umd.min.js` (72,6 KB transferidos), `vendor/lightweight-charts...js`
+   (51,9 KB), `config.js` e a folha do Google Fonts. Os três scripts são `<script src>` **síncronos**
+   em `web/index.html:15-17`, antes de existir uma linha de markup.
+   ⚠️ **A armadilha do `defer`, e ela é real:** o código da aplicação é um `<script>` **inline no fim
+   do `<body>`**, e script inline roda **antes** de qualquer script `defer`. Pôr `defer` no
+   `config.js` faz o `API` sumir na hora do boot. As duas bibliotecas são outro caso — o inline só
+   as usa quando desenha gráfico —, mas isso tem que ser **verificado**, não suposto.
+2. **124 KB do que bloqueia é código que a primeira tela não usa.** `unused-javascript` mede
+   `lightweight-charts` **92,3% não usado** (47,9 KB) e `chart.umd.min.js` **58,4%** (34,2 KB). São
+   as bibliotecas de gráfico, e gráfico não é a primeira coisa que a página mostra. Carregá-las sob
+   demanda tira o peso do caminho crítico inteiro, em vez de só adiá-lo.
+3. **A animação `pulse` não é composta.** `web/index.html:197` anima `box-shadow`, que o compositor
+   não sabe fazer — cada quadro do ponto "ao vivo" repinta. O `non-composited-animations` aponta
+   exatamente `body > div.statusbar > span.sb-live > span.dot`. O equivalente composto anima
+   `opacity`/`transform` num pseudo-elemento, e **o resultado visível tem que ser o mesmo**.
+4. **Um reflow forçado de 103 ms no boot.** `forced-reflow-insight` aponta `web/index.html:1691`, que
+   é a `folgaStatusBar()` lendo `sb.offsetHeight` de forma síncrona logo depois de mexer no DOM. O
+   segundo, de 4 ms, é o `TEMA` na linha 939 lendo `getComputedStyle` — pequeno, mas é a mesma classe.
+
+**O que NÃO se conserta, e por quê — decisão registrada antes da implementação.** O
+`unminified-css` promete 5,7 KB minificando o `<style>` inline. **Não minifique.** Aquele bloco é
+comentado linha a linha com o porquê de cada token medido do CoinMarketCap, e o `DESIGN.md` §
+Typography depende de ele continuar legível; trocar 5,7 KB pela justificativa das decisões de design
+é o negócio errado num projeto onde a próxima sessão chega sem histórico. Se o dono quiser os 5,7 KB,
+o caminho é minificar **no build**, não na fonte — e isso é outro card.
+
+**Duas coisas que o relatório mostra e não são do front — reportar, não consertar.** Toda primeira
+chamada ao backend paga um **preflight CORS** (cinco deles no trace: `/estado`, `/sentimento`,
+`/funding`, `/saidas`, `/precos`), cada um custando um round-trip inteiro — o `/estado` gasta
+420→769 ms no preflight antes de 769→1142 ms na chamada real. Some-se a isso `serverResponseTime` de
+**334,8 ms** na VM. Os dois são backend (`Access-Control-Max-Age` e latência do uvicorn), fora do
+território, e viram card novo se o worker os confirmar.
+
+**Portão do `P2-37`:** Lighthouse rodado pelo próprio worker, na mesma URL de produção, **com a
+máquina quieta**, antes e depois, com os dois JSONs resumidos no `PERF-FRONT-2026-08-22.md` e a
+saída colada no relatório. Passa com **performance ≥ 0,95 e as cinco métricas nomeadas**, ou com a
+demonstração de que o valor de origem não reproduz — e aí o veredito é esse, escrito.
+
+**⚠️ Merge deste território É publicação.** O `web/` sobe sozinho para o Vercel ao entrar na `main`
+(§9.9). Aqui o merge não é retrabalho se errar: é produção. O portão roda antes, e o dono decide o
+merge.
+
+---
+
 ## 5. Ordem geral
 
 ```
