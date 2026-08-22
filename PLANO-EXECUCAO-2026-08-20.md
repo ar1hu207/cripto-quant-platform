@@ -283,6 +283,59 @@ o que está deployado) e **depois do M1** (não quebrar a guarda enquanto move a
 deploy é cópia manual: mover 50 arquivos sem saber qual commit está na VM é como o deploy vira
 irreconciliável.
 
+#### 4c. Territórios do M3 — declarados em 2026-08-22, antes do despacho
+
+Os três cards do M3 **não aparecem na tabela da §3**, e isso não é descuido: a §3 foi extraída das
+citações `arquivo:linha` dos documentos de investigação, e teste, reorganização e documento
+descrevem **código que ainda não existe** — não têm o que citar (§9.2, ponto cego estrutural).
+Território atribuído à mão, portanto, e **é esta tabela que o portão P2 cruza** — não o briefing.
+
+Como o marco é **serial**, os três territórios se sobrepõem no tempo zero: cada um só nasce quando
+o anterior mergeou. A sobreposição de arquivo entre eles (`README.md` nos três, `tests/` em dois)
+é legal por isso, e **só** por isso.
+
+| Onda | Território | Card | Arquivos que pode escrever |
+|---|---|---|---|
+| 1 | **`T-TESTE`** | `P2-6` (`TKSi8LdA`) | `tests/` (novo) · `pytest.ini` (novo) · `requirements-dev.txt` (novo) · `test_sim.py` · `test_auth.py` · `README.md` |
+| 2 ▸ | **`T-ESTRUTURA`** | `P2-16` (`cnImNkC1`) | todo `*.py` da raiz · `pesquisa/` e `legado/` (novos) · `estrategias/` · `tests/` **só para consertar import** · `deploy/atualizar.sh` · `README.md` · `Procfile` · `DEPLOY-RAILWAY.md` · `DEPLOY-ORACLE.md` |
+| 3 ▸ | **`T-DOCS`** | `P2-17` (`oFiBZJSE`) | `ARQUITETURA.md` (novo) · `CLAUDE.md` · `README.md` |
+
+**Três decisões registradas antes da implementação** — o padrão que o `P2-9` estabeleceu no M2:
+
+1. **O `T-TESTE` não edita módulo de plataforma.** Existem cinco provas versionadas e
+   reexecutáveis, escritas no M1 e no M2: `python prova_m1.py` (7 asserções), `python simulador.py`
+   (11, via `_prova_funding()`), `python db.py prova` (18, via `_prova_p2_11()`), `python api.py`
+   (27, via `_prova_api()`) e `python test_auth.py` (3 cenários, subprocesso por cenário). O pytest
+   **as embrulha** — importa a função privada ou chama o script por subprocesso — e **não as move**
+   para dentro de `tests/`. Mover exigiria escrever em `api.py`, `db.py` e `simulador.py`, que é
+   território de plataforma viva; embrulhar custa um arquivo e mantém o diff auditável. Os testes
+   novos dos itens 1-4 do card nascem em `tests/`, importando os módulos sem alterá-los.
+2. **O `T-ESTRUTURA` herda `tests/` para consertar import, e isso é o ponto do marco.** Mover
+   `validacao.py` para `pesquisa/` quebra qualquer teste que o importe. É exatamente a "rede de
+   segurança da mudança seguinte" da ordem acima: **o critério de aceite do `P2-16` inclui `pytest`
+   verde depois da mudança**, e é ele que prova que o repositório reorganizado ainda é o mesmo
+   repositório. O que o `T-ESTRUTURA` **não** pode é alterar a asserção de um teste para fazê-lo
+   passar — só o `import`.
+3. **A plataforma viva não sai da raiz, e o motivo é o deploy.** O `deploy/cripto-bot.service` roda
+   `uvicorn api:app` com `WorkingDirectory=/home/ubuntu/cripto-bot`, e o `deploy/atualizar.sh:51`
+   compila `./*.py` — glob de raiz, não recursivo. Manter `api`, `db`, `simulador`, `signal_engine`,
+   `scoring`, `indicadores`, `mercado`, `dca`, `autotrader`, `logbot`, `alertas` e `prova_m1.py` na
+   raiz é o que torna a reorganização invisível para a VM. Se o worker mover pesquisa para
+   `pesquisa/`, o `py_compile` deixa de cobri-la: ou estende o glob no `atualizar.sh`, ou **declara
+   no commit** que pesquisa não é código de produção e por isso não precisa do portão de compilação.
+
+**O `T-ESTRUTURA` não deleta nem move sem a decisão do dono registrada.** O card recomenda deletar o
+legado ("o git guarda tudo"); a alternativa é `legado/` com um README declarando que nada ali é
+importado pela plataforma. É a única escolha do marco que o agente não toma sozinho — vai no
+briefing já decidida.
+
+**Um fato do `P2-17` que o card não sabia: o `CLAUDE.md` já existe.** Foi escrito pela matriz do M2
+(148 linhas, dentro do teto de ~150 do card). O `P2-17` deixa de ser "criar dois documentos" e passa
+a ser **criar o `ARQUITETURA.md` e reconciliar o `CLAUDE.md` com o critério de aceite** — que hoje
+falha em três itens: não tem mapa de módulos, não tem a seção de comandos, e a lista de invariantes
+não menciona CDN no `web/` nem a franquia de banda. Vale a regra do §13 do `ORQUESTRACAO-ORCA.md`:
+card pode estar errado sobre um fato, e o fato manda.
+
 **Portão do M3:** sessão nova, prompt frio, faz um fix — e o teste pega uma regressão plantada de propósito.
 
 ---
