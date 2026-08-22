@@ -24,6 +24,11 @@ from backtest_plataforma import backtest_ativo
 COINS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT",
          "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]
 TF, DIAS, VALOR, LEV = "1h", 180, 100, 10
+# [P2-10] O backtest_ativo tem o parâmetro funding_8h desde a auditoria de junho, e este
+# script nunca o passou — rodava no default 0.0. Uma validação walk-forward que não paga o
+# carry que o live paga mede uma estratégia que não existe. 0,0001/8h é a mediana histórica
+# de perpétuo que o config.py legado já documentava (config.py:28).
+FUNDING_8H = 0.0001
 GRID = [{"min_conv": mc, "adx_min": ax} for mc in (50, 55, 65) for ax in (22, 25)]
 N_FOLDS = 5
 PPA = 24 * 365 / 1   # períodos/ano aproximado p/ anualizar (1h) — usado só pra leitura
@@ -110,23 +115,29 @@ def bootstrap_ci(pnls, n=5000):
 
 
 # ---------- walk-forward ----------
-def walk_forward(estrategia):
-    print(f"baixando {len(COINS)} moedas ({TF}, {DIAS}d)...")
-    dfs = {c: scoring.preparar(dados.baixar_ohlcv(c, TF, dias=DIAS)) for c in COINS}
-    # roda backtest por config (full timeline), trades com ts
+def _rodar_grid(dfs, estrategia, funding_8h):
+    """Backtest de cada config do GRID na timeline inteira, pagando o funding informado.
+    Extraído de walk_forward() porque o [P2-10] precisa rodar a MESMA timeline duas vezes
+    (com e sem carry) — não é reorganização, é o que torna o contraste possível."""
     por_cfg = {}
     for g in GRID:
         tr = []
         for c in COINS:
             try:
                 tr += backtest_ativo(c, g["min_conv"], VALOR, LEV, estrategia=estrategia,
-                                     df=dfs[c], adx_min=g["adx_min"])
+                                     df=dfs[c], adx_min=g["adx_min"], funding_8h=funding_8h)
             except Exception:
                 pass
         por_cfg[(g["min_conv"], g["adx_min"])] = tr
+    return por_cfg
+
+
+def _oos_walk_forward(por_cfg):
+    """Escolhe a config SÓ no treino (passado) e aplica no teste (futuro não-visto).
+    Devolve (trades OOS, detalhe por fold) — ou (None, None) se não houver trades."""
     todos_ts = sorted(t["ts"] for tr in por_cfg.values() for t in tr)
     if len(todos_ts) < 30:
-        print("poucos trades — sem dados pra walk-forward."); return
+        return None, None
     t0, t1 = todos_ts[0], todos_ts[-1]
     bordas = [t0 + (t1 - t0) * k / (N_FOLDS + 1) for k in range(N_FOLDS + 2)]
 
@@ -141,6 +152,16 @@ def walk_forward(estrategia):
         teste = [t for t in por_cfg[melhor] if tr_lim <= t["ts"] < te_lim]  # aplica no FUTURO não-visto
         oos += teste
         detalhe.append((i + 1, melhor, len(teste), round(sum(t["pnl"] for t in teste), 2)))
+    return oos, detalhe
+
+
+def walk_forward(estrategia, funding_8h=FUNDING_8H):
+    print(f"baixando {len(COINS)} moedas ({TF}, {DIAS}d)...")
+    dfs = {c: scoring.preparar(dados.baixar_ohlcv(c, TF, dias=DIAS)) for c in COINS}
+    por_cfg = _rodar_grid(dfs, estrategia, funding_8h)
+    oos, detalhe = _oos_walk_forward(por_cfg)
+    if oos is None:
+        print("poucos trades — sem dados pra walk-forward."); return
 
     # naive (melhor config no período INTEIRO) — pra mostrar o quanto o data-snooping infla
     naive_cfg = max(por_cfg, key=lambda k: sum(t["pnl"] for t in por_cfg[k]))
@@ -148,7 +169,8 @@ def walk_forward(estrategia):
     oos_pnls = [t["pnl"] for t in oos]
     n_trials = len(GRID) * N_FOLDS
 
-    print(f"\n=== WALK-FORWARD: {estrategia} | {TF} {DIAS}d | {LEV}x | {len(GRID)} configs × {N_FOLDS} folds ===\n")
+    print(f"\n=== WALK-FORWARD: {estrategia} | {TF} {DIAS}d | {LEV}x | {len(GRID)} configs × {N_FOLDS} folds "
+          f"| funding {funding_8h * 100:.4f}%/8h ===\n")
     print(f"{'fold':>5}  {'config (conv/adx)':>18}  {'trades':>7}  {'pnl OOS':>9}")
     for f, cfg, n, p in detalhe:
         print(f"{f:>5}  {str(cfg):>18}  {n:>7}  R${p:>+7.0f}")
@@ -162,6 +184,21 @@ def walk_forward(estrategia):
     sn = stats(naive)
     print(f"\nNAIVE (melhor config {naive_cfg} no período INTEIRO, in-sample): {sn['n']}t win {sn['win']}% PnL R${sn['pnl']:+.0f}")
     print(f"  -> a diferença OOS vs naive mede a INFLAÇÃO do data-snooping.\n")
+
+    # [P2-10] MESMO walk-forward com funding zerado — que é o que este script media antes,
+    # por usar o default do backtest_ativo. A diferença é o carry que a pesquisa não pagava.
+    if funding_8h:
+        oos0, _ = _oos_walk_forward(_rodar_grid(dfs, estrategia, 0.0))
+        s0 = stats([t["pnl"] for t in oos0]) if oos0 else None
+        if s0:
+            efeito = so["pnl"] - s0["pnl"]      # >0 = a carteira RECEBEU funding líquido
+            lado = ("net-SHORT no período: recebeu mais do que pagou" if efeito > 0
+                    else "net-LONG no período: pagou o carry")
+            print(f"COM × SEM funding (mesmo walk-forward): R${so['pnl']:+.0f} pagando "
+                  f"{funding_8h * 100:.4f}%/8h  ×  R${s0['pnl']:+.0f} com funding 0 "
+                  f"({s0['n']} × {so['n']} trades)")
+            print(f"  -> efeito do carry no P&L OOS: R${efeito:+.0f} — {lado}.\n")
+
     if ci[0] > 0 and ds["dsr"] > 0.95:
         print("=> VEREDITO: edge SOBREVIVE ao walk-forward + DSR. Vale calibrar/operar.")
     else:
