@@ -8,7 +8,7 @@ try:
 except Exception:
     pass
 
-from backtest_plataforma import backtest_ativo, ATIVOS
+from pesquisa.backtest_plataforma import backtest_ativo, ATIVOS
 
 DIAS = {"15m": 60, "1h": 180, "4h": 365}   # mais histórico p/ timeframe maior
 

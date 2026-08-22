@@ -38,6 +38,24 @@ web/index.html ──► FastAPI (api.py) ──► SQLite (WAL)
                                           escaneia sinais, grava equity
 ```
 
+### Mapa de pastas
+
+Três eras do projeto, e a divisória é explícita desde o `[P2-16]`. Qual arquivo você edita
+depende de qual destas você está tocando:
+
+| Onde | O que é | Regra |
+|---|---|---|
+| **raiz** (`*.py`) | **plataforma viva** — os 11 módulos que o `api.py` alcança, mais as provas que se rodam por `python <arquivo>` | é o que roda na VM; o `deploy/cripto-bot.service` sobe `uvicorn api:app` daqui, e por isso a plataforma **não** sai da raiz |
+| **`pesquisa/`** | **pesquisa viva** — a régua que mede estratégia (`validacao`, `backtest_plataforma`, `tune`, `dados`, `validar_*`) | pacote Python; roda por `python -m pesquisa.<modulo>` **da raiz**. Não é código de produção |
+| **`legado/`** | fases 1-2 — motor próprio, `estrategias/`, `config.py`, scripts de varredura | **nada ali é importado pela plataforma, e nada ali roda mais onde está.** Leia o [`legado/README.md`](legado/README.md) antes de mexer |
+| **`tests/`** | a suíte do `pytest` | ver *Testes*, abaixo |
+| **`web/`** | front estático (Vercel) | merge na `main` **é** a publicação |
+| **`deploy/`** | service, Caddyfile e `atualizar.sh` (deploy de um comando) | roda na VM |
+
+**A fonte da verdade dos parâmetros é `db.CONFIG_PADRAO` + a tabela `config`**, validada no
+`POST /config` — não há outra. `legado/config.py` reivindicava o mesmo posto com valores
+diferentes (risco 0,5% × 3%, alavancagem 1× × 10×); o `[P2-16]` tirou a reivindicação dele.
+
 ### Módulos
 
 | Arquivo | Papel |
@@ -50,8 +68,8 @@ web/index.html ──► FastAPI (api.py) ──► SQLite (WAL)
 | `autotrader.py` | Modo automático (desligado por padrão) |
 | `mercado.py` | Order book, fluxo taker, funding, sentimento |
 | `dca.py` | Acumulação periódica sem alavancagem |
-| `validacao.py` | **Walk-forward + Deflated Sharpe + bootstrap** — a régua que barra ideia ruim |
-| `backtest_plataforma.py` | Backtest com paridade: sinal no candle fechado, execução no open seguinte |
+| `pesquisa/validacao.py` | **Walk-forward + Deflated Sharpe + bootstrap** — a régua que barra ideia ruim |
+| `pesquisa/backtest_plataforma.py` | Backtest com paridade: sinal no candle fechado, execução no open seguinte |
 | `indicadores.py` | EMA, ATR, ADX, RSI, Donchian, Bollinger |
 
 ### Gestão de risco (o tripé)
@@ -71,10 +89,18 @@ Painel em <http://localhost:8000>. Sem `DASH_PASS` definido, o app aceita **apen
 local** — requisição externa ou via proxy recebe 503.
 
 ### Validar uma estratégia
+
+`pesquisa/` é um pacote e roda com `-m`, **a partir da raiz do repositório**:
+
 ```bash
-python validacao.py            # walk-forward + DSR + bootstrap
-python backtest_plataforma.py  # backtest com paridade live<->histórico
+python -m pesquisa.validacao             # walk-forward + DSR + bootstrap
+python -m pesquisa.backtest_plataforma   # backtest com paridade live<->histórico
 ```
+
+`python pesquisa/validacao.py` **não** funciona, e isso é por construção: rodar por caminho
+põe `pesquisa/` no `sys.path` em vez da raiz, e o `import scoring` falha. `scoring.py` e
+`indicadores.py` ficam na raiz porque são compartilhados entre live e backtest — esse
+compartilhamento é a paridade, e o motivo completo está em `pesquisa/__init__.py`.
 
 ---
 

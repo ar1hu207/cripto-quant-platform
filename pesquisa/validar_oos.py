@@ -9,7 +9,7 @@ try:
 except Exception:
     pass
 
-from backtest_plataforma import backtest_ativo
+from pesquisa.backtest_plataforma import backtest_ativo
 
 # moedas NOVAS (não estavam nos 8 ativos da tunagem)
 NOVOS = ["DOT/USDT", "ATOM/USDT", "NEAR/USDT", "FIL/USDT",

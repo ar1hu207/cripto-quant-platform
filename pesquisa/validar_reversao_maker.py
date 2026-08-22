@@ -3,7 +3,7 @@ Teste decisivo da reversão: ela perde com taker 0,05%/lado no 15m. Será que MA
 (ordem limite, ~0,02%/lado) e/ou TIMEFRAME maior (1h, movimentos maiores diluem a
 taxa) salvam? Matriz 15m/1h × maker/taker, in-sample vs OUT-OF-SAMPLE.
 
-Rodar:  python validar_reversao_maker.py
+Rodar (da RAIZ do repo):  python -m pesquisa.validar_reversao_maker
 """
 import sys
 try:
@@ -11,9 +11,9 @@ try:
 except Exception:
     pass
 
-import dados
+from pesquisa import dados
 import scoring
-from backtest_plataforma import backtest_ativo
+from pesquisa.backtest_plataforma import backtest_ativo
 
 IN_SAMPLE = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT",
              "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]

@@ -9,7 +9,7 @@ try:
 except Exception:
     pass
 
-from backtest_plataforma import backtest_ativo, ATIVOS
+from pesquisa.backtest_plataforma import backtest_ativo, ATIVOS
 
 NOVOS = ["DOT/USDT", "ATOM/USDT", "NEAR/USDT", "FIL/USDT",
          "INJ/USDT", "UNI/USDT", "AAVE/USDT", "APT/USDT"]
