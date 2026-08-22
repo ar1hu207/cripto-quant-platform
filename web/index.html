@@ -141,8 +141,12 @@
   .auto-log:empty{display:none}
   .auto-warn{font-size:var(--fs-75);color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-b);
     border-radius:var(--r-sm);padding:10px 12px;margin-top:16px;line-height:1.5}
-  .auto-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
-  .auto-badge.on{background:var(--pos);animation:pulse 2s infinite}
+  .auto-badge{position:relative;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
+  /* mesmo anel do .dot, mesmo motivo (ver o bloco do .dot): quem pulsa e o ::after, com
+     opacity+transform, e nao o box-shadow do proprio circulo. Fora do .on o ::after existe
+     mas fica em opacity 0, exatamente como o box-shadow ausente de antes. */
+  .auto-badge.on{background:var(--pos)}
+  .auto-badge.on::after{animation:pulse 2s infinite}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   /* prefers-reduced-motion zera animacao E shimmer. O ::after/::before precisa estar no
      seletor: o `*` sozinho nao alcanca pseudo-elemento, e o shimmer do skeleton mora num. */
@@ -206,9 +210,19 @@
   .sb-cfg{color:var(--txt3)}
   .sb-hora{margin-left:auto;color:var(--txt3);flex:none}
   #risco-guard{display:contents}
-  /* o anel do pulso e variacao de alpha DECLARADA do --pos, montada a partir de --pos-rgb */
-  .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos);animation:pulse 1.8s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(var(--pos-rgb),.6)}70%{box-shadow:0 0 0 9px rgba(var(--pos-rgb),0)}100%{box-shadow:0 0 0 0 rgba(var(--pos-rgb),0)}}
+  /* o anel do pulso e variacao de alpha DECLARADA do --pos, montada a partir de --pos-rgb.
+     O anel vive num ::after e anima opacity+transform, que o compositor sabe fazer sozinho.
+     Antes era box-shadow no proprio .dot, e box-shadow nao e composto: cada quadro do ponto
+     "ao vivo" repintava, 1,8s em loop infinito e para sempre (non-composited-animations).
+     A geometria e a MESMA: spread de 0 -> 9px num circulo de 8px leva o diametro de 8 a 26,
+     que e escala 3,25; a tinta e rgba(--pos-rgb,.6) com opacity indo de 1 a 0, os mesmos
+     .6 -> 0 de antes. No instante 0 o anel cobre o ponto com a propria cor do ponto a 60%,
+     e rgba(--pos,.6) sobre --pos solido devolve --pos: nao ha diferenca visivel. */
+  .dot{position:relative;width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos)}
+  .dot::after,.auto-badge::after{content:'';position:absolute;inset:0;border-radius:50%;
+    background:rgba(var(--pos-rgb),.6);opacity:0;pointer-events:none}
+  .dot::after{animation:pulse 1.8s infinite}
+  @keyframes pulse{0%{transform:scale(1);opacity:1}70%{transform:scale(3.25);opacity:0}100%{transform:scale(1);opacity:0}}
   .btn-sec{background:var(--surface2);color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   .btn-danger{background:transparent;color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   @media(hover:hover){.btn-danger:hover{color:var(--neg);border-color:var(--neg-b);filter:none}}
@@ -558,9 +572,13 @@
   .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:18px auto 20px;
     width:fit-content;font-size:var(--fs-75);font-weight:600;padding:6px 12px;
     border-radius:var(--r-pill);border:1px solid var(--line);background:var(--surface2);color:var(--txt2)}
-  .gate-status .dot{background:var(--txt2);animation:none}
+  /* o pulso agora mora no ::after (ver o bloco do .dot): quem liga e desliga o anel e o
+     pseudo-elemento, nao mais o proprio circulo. */
+  .gate-status .dot{background:var(--txt2)}
+  .gate-status .dot::after{animation:none}
   .gate-status.up{color:var(--pos);background:var(--pos-bg);border-color:var(--pos-b)}
-  .gate-status.up .dot{background:var(--pos);animation:pulse 1.8s infinite}
+  .gate-status.up .dot{background:var(--pos)}
+  .gate-status.up .dot::after{animation:pulse 1.8s infinite}
   .gate-status.down{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
   .gate-status.down .dot{background:var(--neg)}
 
