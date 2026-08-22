@@ -7,7 +7,7 @@ cripto é correlacionada e o corte era escolhido olhando o OOS. Aqui os parâmet
 escolhidos SÓ no treino (passado) e avaliados no teste (futuro), nunca peeking. Separa
 'tem edge' de 'teve sorte / overfit'.
 
-Rodar:  python validacao.py
+Rodar (da RAIZ do repo):  python -m pesquisa.validacao
 """
 import sys
 import math
@@ -17,9 +17,9 @@ try:
 except Exception:
     pass
 
-import dados
+from pesquisa import dados
 import scoring
-from backtest_plataforma import backtest_ativo
+from pesquisa.backtest_plataforma import backtest_ativo
 
 COINS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT",
          "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]

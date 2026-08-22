@@ -4,7 +4,7 @@ Valida a estratégia de REVERSÃO out-of-sample. Treina/observa num conjunto de 
 in-sample e quebra no OOS => overfitting / sem edge real (a mesma armadilha que pegamos
 na estratégia de tendência). Roda vários cortes de convicção pra achar config robusta.
 
-Rodar:  python validar_reversao.py
+Rodar (da RAIZ do repo):  python -m pesquisa.validar_reversao
 """
 import sys
 try:
@@ -12,9 +12,9 @@ try:
 except Exception:
     pass
 
-import dados
+from pesquisa import dados
 import scoring
-from backtest_plataforma import backtest_ativo
+from pesquisa.backtest_plataforma import backtest_ativo
 
 IN_SAMPLE = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "ADA/USDT",
              "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT"]

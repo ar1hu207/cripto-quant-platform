@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS dca(
   ultimo_aporte TEXT, criado_em TEXT, status TEXT DEFAULT 'ativo');  -- acumulacao DCA (sem alavancagem)
 """
 
+# Fonte UNICA da verdade dos parametros do sistema. [P2-16]
+#
+# Nao e enfeite: ate 2026-08-22 o repositorio tinha DOIS arquivos reivindicando esta frase.
+# O outro era o `config.py` da raiz (dataclass do trilho legado das fases 1-2), e os valores
+# discordavam -- risco por trade 3% aqui contra 0,5% la, alavancagem 10x aqui contra 1x la.
+# Uma sessao de agente sem memoria do projeto tinha chance concreta de editar o errado. O
+# [P2-16] mandou aquele arquivo para `legado/config.py` e tirou a frase de la; a partir daqui
+# ela existe num lugar so, este.
+#
+# O que "fonte unica" significa na pratica: este dicionario e o DEFAULT, e o valor vigente
+# mora na tabela `config` do banco (`get_config`/`set_config`), alterado pelo `POST /config`,
+# que valida chave e faixa por catalogo antes de gravar [P1-8]. Codigo de plataforma le
+# config do banco -- nunca constante literal espalhada pelo modulo.
 CONFIG_PADRAO = {
     "risco_por_trade": "0.03",
     "alavancagem_padrao": "10",

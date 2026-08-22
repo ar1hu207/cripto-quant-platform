@@ -4,7 +4,7 @@ matemática de P&L (alavancagem + taxa + liquidação) da plataforma ao vivo, so
 histórico. Auto-confirma sinais >= corte. Reporta WIN RATE POR CONVICÇÃO — a tunagem,
 agora com centenas de trades em vez de esperar o paper acumular.
 
-Rodar:  python backtest_plataforma.py
+Rodar (da RAIZ do repo):  python -m pesquisa.backtest_plataforma
 """
 import sys
 try:
@@ -12,7 +12,7 @@ try:
 except Exception:
     pass
 
-from dados import baixar_ohlcv
+from pesquisa.dados import baixar_ohlcv
 from scoring import preparar, pontuar, pontuar_reversao
 
 TAXA = 0.0005          # igual à plataforma (0,05%/lado)

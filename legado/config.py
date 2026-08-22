@@ -1,6 +1,17 @@
 """
-Fonte UNICA da verdade dos parametros do sistema.
-Mexa aqui, nao espalhe numero magico pelo codigo.
+LEGADO -- parametros do trilho das fases 1-2. NAO e a fonte da verdade do sistema. [P2-16]
+
+Este arquivo se declarava a fonte unica da verdade dos parametros, e era mentira desde
+que a plataforma nasceu: quem manda nos parametros que rodam e `db.CONFIG_PADRAO` mais a
+tabela `config` do banco, validada por catalogo no `POST /config` (ver `db.py`). Os dois
+discordavam em numero, nao so em estilo -- risco por trade 0,5% aqui contra 3% la,
+alavancagem 1x aqui contra 10x la.
+
+Duas declaracoes de autoridade sobre a mesma coisa, com valores diferentes, num repositorio
+onde o trabalho e feito por sessoes de agente sem memoria: e o convite a editar o arquivo
+errado que o [P2-16] veio remover. Nada da plataforma viva importa este modulo -- so
+`live_engine`, `monte_carlo`, `otimizar_risco`, `run_*`, `validar`, `validar_fase2` e
+`validar_periodos_fase2`, todos aqui no `legado/`. Ver `legado/README.md`.
 """
 from dataclasses import dataclass
 

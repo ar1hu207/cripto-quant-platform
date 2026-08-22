@@ -48,6 +48,17 @@ DEPOIS=$(git rev-parse --short HEAD)
 echo "HEAD: $ANTES -> $DEPOIS"
 
 echo "== 4. compila com o venv de PRODUCAO antes de subir =="
+# `./*.py` e glob de RAIZ, nao recursivo, e continua assim de proposito depois do [P2-16].
+#
+# Desde o [P2-16] a raiz e exatamente a plataforma viva (os 11 modulos do fecho de `api.py`)
+# mais as tres provas que se rodam por `python <arquivo>` -- ou seja, este glob passou a ser
+# "tudo que o servico pode importar", que e mais preciso do que era antes da reorganizacao.
+# `pesquisa/` e `legado/` ficam de fora, e isso e a decisao, nao o esquecimento dela:
+# pesquisa nao e codigo de producao (nada em `api.py` alcanca `pesquisa/`, verificado por AST)
+# e legado nem sequer e executavel onde esta (`legado/README.md`). Estender o glob para
+# `pesquisa/*.py` abortaria um deploy de PRODUCAO por causa de um script de pesquisa quebrado
+# que a producao nunca carrega -- acoplaria a disponibilidade do bot a um arquivo que nao
+# participa dele. Quem quiser o portao para pesquisa, o lugar e o pytest/CI, nao aqui.
 ./venv/bin/python -m py_compile ./*.py || {
   echo "ABORTADO na compilacao. Voltando para $ANTES."; git checkout --quiet "$ANTES"; exit 1; }
 echo "compila ok"
