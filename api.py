@@ -462,14 +462,19 @@ def reset(req: ResetReq):
 def _amostrar(seq, alvo=125):
     """Reduz a série para ~alvo pontos, preservando o intervalo e o ponto mais recente.
     A curva de equity é reenviada inteira a cada poll de 3s e sozinha era 72% do payload
-    (51 KB de 71 KB). Com franquia de saída de 15 GB/mês na Azure, isso importa."""
-    if len(seq) <= alvo:
+    (51 KB de 71 KB). Com franquia de saída de 15 GB/mês na Azure, isso importa.
+
+    [P1-4] Passo FRACIONÁRIO. Era `passo = len(seq) // alvo` + `seq[::passo]`: divisão
+    inteira, então qualquer len entre `alvo` e `2*alvo - 1` dava passo=1 e a série voltava
+    INTEIRA — a função não reduzia nada justamente na faixa em que ela começa a ser
+    necessária, e a economia só ligava no dobro do alvo (medido: 200 -> 200, 249 -> 249).
+    Indexar por `round(i * n / alvo)` faz o passo médio ser n/alvo mesmo quando ele é
+    fracionário. O `| {n - 1}` garante o ponto mais recente, que é o requisito original."""
+    n = len(seq)
+    if n <= alvo:
         return seq
-    passo = len(seq) // alvo
-    amostra = seq[::passo]
-    if amostra[-1] is not seq[-1]:
-        amostra.append(seq[-1])
-    return amostra
+    idx = sorted({min(round(i * n / alvo), n - 1) for i in range(alvo)} | {n - 1})
+    return [seq[i] for i in idx]
 
 
 @app.get("/estado")
@@ -713,3 +718,72 @@ def dca_aportar(req: IdReq):
 def dca_remover(req: IdReq):
     dca.remover(req.id)
     return {"ok": True}
+
+
+# ---------- provas de regressao do territorio T-API-DADOS ----------
+# No proprio modulo, e nao num script solto, porque prova fora do repositorio nao e
+# reexecutavel. Importar api.py nao abre banco nem rede (init_db so roda no lifespan).
+#
+#     python api.py           # asseracoes; exit 1 se qualquer uma falhar
+
+
+def _prova_api():
+    ok = fail = 0
+
+    def check(nome, cond, detalhe=""):
+        nonlocal ok, fail
+        print(("  PASSA  " if cond else "  FALHA  ") + nome + ("" if cond else "  <- " + str(detalhe)))
+        if cond:
+            ok += 1
+        else:
+            fail += 1
+
+    # ---------- [P1-4] _amostrar reduz na faixa em que antes nao reduzia nada
+    # A tabela de medicao do card (2026-08-19) e o teste: era 200 -> 200 e 249 -> 249.
+    print("  [P1-4] _amostrar(alvo=125)")
+    print("      entrada -> saida:", {n: len(_amostrar(list(range(n)))) for n in
+                                      (124, 125, 126, 200, 249, 250, 500)})
+    for n in (200, 249):
+        check("%d pontos reduzem para ~125" % n, len(_amostrar(list(range(n)))) <= 126,
+              str(len(_amostrar(list(range(n))))))
+    check("124 pontos passam intactos (abaixo do alvo)", _amostrar(list(range(124))) == list(range(124)))
+    check("250 e 500 continuam em ~125",
+          len(_amostrar(list(range(250)))) <= 126 and len(_amostrar(list(range(500)))) <= 126)
+    # varredura: as tres propriedades que a funcao promete, para todo tamanho ate 3x o alvo
+    falhou_ult = falhou_teto = falhou_ordem = falhou_1o = None
+    for n in range(1, 601):
+        seq = list(range(n))
+        a = _amostrar(seq)
+        if a[-1] != seq[-1]:
+            falhou_ult = n
+        if len(a) > 126:
+            falhou_teto = (n, len(a))
+        if a != sorted(a):
+            falhou_ordem = n
+        if a[0] != seq[0]:
+            falhou_1o = n
+    check("o ultimo ponto da serie esta SEMPRE na amostra", falhou_ult is None, "n=%s" % falhou_ult)
+    check("o primeiro ponto tambem (preserva o intervalo)", falhou_1o is None, "n=%s" % falhou_1o)
+    check("nenhum tamanho ate 600 passa de 126 pontos", falhou_teto is None, str(falhou_teto))
+    check("a ordem cronologica e preservada", falhou_ordem is None, "n=%s" % falhou_ordem)
+    # criterio "o grafico mantem a mesma forma visual": a amostragem e uniforme, entao
+    # media e extremos da amostra acompanham os da serie inteira.
+    import math
+    curva = [1000 + 200 * math.sin(i / 40) for i in range(500)]
+    am = _amostrar(curva)
+    dm = abs(sum(am) / len(am) - sum(curva) / len(curva))
+    check("a forma da curva sobrevive (media %.2f, topo %.2f, fundo %.2f de erro)"
+          % (dm, abs(max(am) - max(curva)), abs(min(am) - min(curva))),
+          dm < 1 and abs(max(am) - max(curva)) < 1 and abs(min(am) - min(curva)) < 1)
+
+    print("\n  %d passaram, %d falharam" % (ok, fail))
+    return 1 if fail else 0
+
+
+if __name__ == "__main__":
+    import sys
+    try:                                   # console do Windows em cp1252 mutila o acento
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    sys.exit(_prova_api())
