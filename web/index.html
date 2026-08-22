@@ -1771,7 +1771,14 @@ function folgaStatusBar(){ const sb=document.querySelector('.statusbar'); if(!sb
   const h=sb.offsetHeight;
   document.body.style.paddingBottom=(h+8)+'px';
   document.documentElement.style.setProperty('--sb-h',h+'px'); }
-folgaStatusBar();
+// A PRIMEIRA medida vai em requestAnimationFrame; as outras (ResizeObserver) já chegam pelo
+// caminho do próprio browser. Ler offsetHeight aqui, direto no boot, forçava o layout do
+// documento inteiro no meio do script — 82 ms medidos em produção (forced-reflow-insight) —
+// e as duas linhas que vêm logo abaixo, que disparam as requisições, só saíam depois disso.
+// O layout tem que acontecer de qualquer jeito; o que muda é a ORDEM: agora a rede começa
+// primeiro e a medida ocorre no quadro seguinte. O callback de rAF roda ANTES da pintura
+// desse quadro, então a folga já está aplicada quando a tela aparece: nada salta.
+requestAnimationFrame(folgaStatusBar);
 if(window.ResizeObserver){ const sb=document.querySelector('.statusbar');
   if(sb)new ResizeObserver(folgaStatusBar).observe(sb); }
 else window.addEventListener('resize',folgaStatusBar);
