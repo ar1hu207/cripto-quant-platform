@@ -194,9 +194,13 @@ gigante de equity.
 +----------------------------------------------------------------+
 ```
 
-- **Topbar** (64px): marca a esquerda, nav principal (Painel / Grafico) ao lado, acoes a direita.
-  Borda de 1px embaixo, fundo `--bg`. Substitui a sidebar.
-- **Tab bar**: navega entre blocos de dado. Item ativo = `--txt` peso 600 + sublinhado de 2px em
+- **Topbar** (56px min): marca a esquerda, nav principal (Painel / Grafico) ao lado, acoes a
+  direita. Borda de 1px embaixo, fundo `--bg-el`. Substitui a sidebar.
+  **Nao gruda no topo** (decisao do P2-28): com a tab bar o conteudo virou uma tela por bloco e a
+  rolagem ficou curta, enquanto um topo grudado obrigaria o `th` sticky da tabela a conhecer a
+  altura da topbar - numero magico que quebra assim que ela quebra de linha em 390px.
+- **Tab bar**: fica logo abaixo da topbar e acima da fileira de tiles, como no diagrama.
+  Navega entre blocos de dado. Item ativo = `--txt` peso 600 + sublinhado de 2px em
   `--accent`; inativo = `--txt2` peso 500. Sem fundo, sem pilula.
 - **Fileira de tiles**: caixas de borda hairline, raio 8, sem sombra. Rotulo 12px `--txt3`,
   valor 20-25px peso 700, delta com triangulo colorido, e um sparkline ou barra na base.
@@ -209,6 +213,16 @@ gigante de equity.
 - **Status bar** fixa no rodape: 12px, `--txt2`, borda em cima, fundo `--bg-el`. Carrega o que
   precisa estar sempre visivel (banca, exposicao, risco do dia, AO VIVO, hora do ultimo poll).
   **Substitui os banners de risco** que hoje empurram o conteudo para baixo.
+
+### Onde a curva de capital foi parar
+
+O diagrama nao tem lugar para o grafico de equity, e ele nao pode simplesmente sumir: `#chart` e
+um dos IDs que o `carregar()` escreve. Ele mora na aba **Metricas** - e a versao detalhada do que
+o tile de equity resume, e Metricas e o bloco que fala de desempenho. Fora de uma aba ele
+devolveria a pagina de 8000px que a tab bar existe para acabar.
+
+Consequencia tecnica: o Chart.js mede o container na criacao, e dentro de uma aba escondida essa
+medida e zero. O `subaba()` chama `chart.resize()` ao entrar em Metricas.
 
 ### O que isso custa
 
@@ -319,6 +333,12 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-28): casca nova. Sai a sidebar de 232px, sai o bento de duas colunas, saem os
+  banners de risco de largura cheia; entram topbar, tab bar de sete blocos e status bar fixa.
+  Os dois botoes de vista continuam `class="tab"` + `data-v` porque `aba()` mira aquele seletor;
+  as abas de conteudo usam `.subtab`/`data-sub`, classe diferente de proposito. A folga do rodape
+  e **medida em JS**, nao fixa: a status bar quebra de linha em tela estreita e um valor chutado
+  cobriria a ultima linha da tabela.
 - 2026-08-22 (P2-27): tokens, tipografia e base implantados em `web/index.html`. O `:root` do tema
   navy saiu inteiro, junto com os aliases de transicao (`--card`, `--card2`, `--bg2`, `--mono`) e
   com Space Grotesk e JetBrains Mono. `.mono` sobrevive como classe - o JS escreve `class="mono"`

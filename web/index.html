@@ -68,10 +68,10 @@
   body{font-family:var(--font);background:var(--bg);color:var(--txt);min-height:100vh;
     font-size:var(--fs-100);font-weight:500;line-height:var(--lh-body);
     font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;overflow-x:hidden}
-  /* minmax(0,1fr) e obrigatorio: sem ele a coluna de conteudo e dimensionada por max-content e
-     qualquer tabela larga empurra a pagina para o scroll horizontal. */
-  .shell{display:grid;grid-template-columns:232px minmax(0,1fr);align-items:start}
-  .main{min-width:0;padding:22px 26px 40px}
+  /* minmax(0,1fr) nas grades de conteudo continua obrigatorio: sem ele a coluna e
+     dimensionada por max-content e qualquer tabela larga empurra a pagina para o scroll
+     horizontal. A casca em si nao e mais grade -- topbar, conteudo e status bar empilham. */
+  .main{min-width:0;padding:20px 24px 24px;max-width:1600px;margin:0 auto}
   /* .mono continua existindo porque o JS escreve class="mono" em dezenas de lugares e nao
      pode ser tocado. O que mudou e o que a classe FAZ: nao ha mais familia monoespacada,
      so a garantia de numero tabular sobre a Inter. */
@@ -114,32 +114,55 @@
     border-radius:var(--r-sm);padding:11px 13px;font-size:var(--fs-100);width:100%}
   input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,97,251,.3)}
 
-  /* ---------- sidebar (substitui header + toolbar + abas) ----------
-     Chrome, nao dado: por isso pode ser translucida. A regra "vidro so no resumo" existe para
-     proteger a legibilidade de numero, e aqui nao assenta numero nenhum. */
-  .nav{position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column;gap:22px;
-    padding:20px 14px;border-right:1px solid var(--line);background:var(--bg-el)}
-  .brand{display:flex;align-items:center;gap:11px;padding:0 5px}
-  .logo{width:38px;height:38px;flex:none;border-radius:11px;
-    background:linear-gradient(135deg,var(--accent),var(--accent-txt));
-    display:grid;place-items:center;font-size:20px}
-  .bname{font-size:16px;font-weight:700;letter-spacing:-.2px;line-height:1.2}
-  .brand .sub{font-size:10.5px;color:var(--txt3);letter-spacing:.9px;text-transform:uppercase;margin-top:2px}
-  .nav-sec{display:flex;flex-direction:column;gap:5px}
-  .nav-lbl{font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
-    color:var(--txt3);padding:0 11px;margin-bottom:3px}
-  .nav-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px}
-  /* item de nav: mantem a classe .tab porque aba() mira document.querySelectorAll('.tab') */
-  .tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;
-    background:transparent;color:var(--txt2);padding:10px 11px;border:1px solid transparent;
-    font-size:13.5px;font-weight:600;border-radius:var(--r-sm)}
-  .tab svg,.nav button svg{width:18px;height:18px;flex:none}
-  @media(hover:hover){.tab:hover{background:var(--surface2);color:var(--txt);filter:none}}
-  .tab.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
-  .nav button{width:100%;display:flex;align-items:center;gap:10px;text-align:left;font-size:13px}
-  .badge{display:flex;align-items:center;gap:8px;background:var(--surface2);color:var(--txt2);
-    padding:8px 12px;border-radius:var(--r-sm);font-size:11.5px;font-weight:600;
-    border:1px solid var(--line);letter-spacing:.4px}
+  /* ---------- topbar (56px) ----------
+     Substitui a sidebar de 232px. Marca a esquerda, nav principal ao lado, acoes a direita,
+     hairline embaixo. Nao gruda no topo de proposito: com a tab bar o conteudo virou uma tela
+     por bloco, a rolagem e curta, e um topo grudado obrigaria o `th` sticky da tabela a
+     conhecer a altura da topbar -- numero magico que quebra assim que ela quebra de linha. */
+  .topbar{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;
+    min-height:56px;padding:8px 24px;background:var(--bg-el);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:9px;margin-right:8px}
+  /* quadrado --accent de raio 4: a marca e o unico lugar onde o azul preenche sem ser acao */
+  .logo{width:26px;height:26px;flex:none;border-radius:var(--r-sm);background:var(--accent);
+    display:grid;place-items:center;font-size:15px}
+  .bname{font-size:var(--fs-200);font-weight:700;letter-spacing:-.2px;line-height:var(--lh-head)}
+  .brand .sub{font-size:var(--fs-75);color:var(--txt3);font-weight:500}
+  .topnav{display:flex;gap:2px}
+  /* item de nav principal: mantem class="tab" e data-v porque aba() mira
+     document.querySelectorAll('.tab') e liga o .on por dataset.v. As abas de CONTEUDO usam
+     .subtab/data-sub, classe diferente de proposito, para nao caírem nesse seletor. */
+  .tab{background:transparent;color:var(--txt2);padding:8px 12px;border:1px solid transparent;
+    font-size:var(--fs-100);font-weight:500;border-radius:var(--r-sm)}
+  @media(hover:hover){.tab:hover{background:var(--surface);color:var(--txt);filter:none}}
+  .tab.on{background:var(--surface);color:var(--txt);font-weight:600}
+  .topacts{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+
+  /* ---------- tab bar: navega entre blocos de dado ----------
+     Ativo = --txt peso 600 + sublinhado de 2px em --accent. Sem fundo, sem pilula. */
+  .tabbar{display:flex;gap:2px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    border-bottom:1px solid var(--line);margin-bottom:20px;scrollbar-width:none}
+  .tabbar::-webkit-scrollbar{display:none}
+  .subtab{flex:none;background:transparent;color:var(--txt2);font-size:var(--fs-100);
+    font-weight:500;padding:11px 14px;border:none;border-radius:0;white-space:nowrap;
+    border-bottom:2px solid transparent;margin-bottom:-1px}
+  @media(hover:hover){.subtab:hover{color:var(--txt);filter:none}}
+  .subtab.on{color:var(--txt);font-weight:600;border-bottom-color:var(--accent)}
+  .subview[hidden]{display:none}
+
+  /* ---------- status bar fixa ----------
+     Carrega o que precisa estar sempre visivel e SUBSTITUI os banners de risco, que hoje
+     empurram o conteudo para baixo. #risco-guard mora aqui dentro: o carregar() continua
+     escrevendo nele (o render final e do P2-31). O padding-bottom do body e medido em JS
+     porque a barra quebra de linha em tela estreita e um valor fixo cobriria a ultima linha
+     da tabela -- exatamente o que o criterio de aceite proibe. */
+  .statusbar{position:fixed;left:0;right:0;bottom:0;z-index:20;
+    display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;
+    padding:7px 24px;background:var(--bg-el);border-top:1px solid var(--line);
+    font-size:var(--fs-75);color:var(--txt2)}
+  .sb-live{display:flex;align-items:center;gap:7px;font-weight:600;flex:none}
+  .sb-cfg{color:var(--txt3)}
+  .sb-hora{margin-left:auto;color:var(--txt3);flex:none}
+  #risco-guard{display:contents}
   /* o anel do pulso e variacao de alpha DECLARADA do --pos (#16C784 = 22,199,132): keyframes
      nao aceita var() dentro de box-shadow em todo browser sem reflow, entao fica literal aqui. */
   .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos);animation:pulse 1.8s infinite}
@@ -148,46 +171,25 @@
   .btn-danger{background:transparent;color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   @media(hover:hover){.btn-danger:hover{color:var(--neg);border-color:var(--neg-b);filter:none}}
 
-  /* ---------- topbar ---------- */
-  .topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:22px}
-  .topbar h1{font-size:21px;font-weight:700;letter-spacing:-.3px}
-  .topbar .sub{font-size:11.5px;color:var(--txt3);margin-top:4px}
+  /* ---------- fileira de tiles ----------
+     Herda a marcacao do resumo antigo com superficie plana; os cinco tiles finais, com
+     sparkline e barra, sao o P2-29. */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:20px}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:14px 16px;display:flex;flex-direction:column;min-width:0}
+  .lbl{font-size:var(--fs-75);color:var(--txt3);font-weight:500}
+  .tile .val{font-size:var(--fs-600);font-weight:700;line-height:var(--lh-head);margin-top:6px;letter-spacing:-.3px}
+  .delta{font-size:var(--fs-75);font-weight:600;margin-top:5px}
+  .spark{margin:auto -16px -14px;height:40px;pointer-events:none}
+  .spark svg{display:block;width:100%;height:40px}
 
-  /* ---------- bento ----------
-     Linha de resumo (hero + 3 stats) e, abaixo, coluna principal + trilho. O que se le em
-     sequencia fica na coluna larga; o que se consulta de relance fica no trilho. */
-  .bento-top{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:14px;margin-bottom:22px}
-  .bento{display:grid;grid-template-columns:minmax(0,1fr) 372px;gap:14px;align-items:start}
-  .col{min-width:0}
-  .col>.panel:first-child{margin-top:0}
-
-  /* hero: o unico elemento de vidro+aura da tela. Signature move do DESIGN.md. */
-  .hero{position:relative;overflow:hidden;display:flex;flex-direction:column;min-height:178px;
-    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-    padding:18px 20px 0}
-  .hero::before{content:"";position:absolute;top:-55%;right:-20%;width:75%;height:170%;pointer-events:none;
-    background:radial-gradient(closest-side,rgba(59,130,246,.32),transparent)}
-  .hero>*{position:relative}
-  /* stat card: superficie solida, borda definida, NENHUMA sombra (uma coisa por elemento) */
-  /* centrado na vertical: o stat card estica ate a altura do hero, e com o conteudo ancorado no
-     topo sobrava um vazio de ~90px embaixo do numero. */
-  .stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-    padding:18px 20px;display:flex;flex-direction:column;justify-content:center}
-  .lbl{font-size:11px;color:var(--txt3);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
-  /* tabular vem do body agora: sem ele o valor muda de largura a cada poll de 3s. */
-  .hero .val{font-size:38px;font-weight:700;line-height:1.05;margin-top:9px;letter-spacing:-1.2px}
-  .stat .val{font-size:26px;font-weight:700;line-height:1.1;margin-top:9px;letter-spacing:-.5px}
-  .delta{font-size:13.5px;font-weight:600;margin-top:7px}
-  /* sangra ate a borda do card: a curva encosta no vidro em vez de flutuar num padding */
-  .spark{margin:auto -20px 0;height:54px;pointer-events:none}
-  .spark svg{display:block;width:100%;height:54px}
-
-  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin-top:14px}
-  /* flex-wrap: no trilho de 372px o subtitulo espremia o titulo ate quebrar "AUTO-TRADE" no meio
-     da palavra. Agora o subtitulo desce pra propria linha e o titulo fica inteiro. */
-  .panel h2{font-size:12.5px;font-weight:600;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
-  /* no trilho de 372px uma tabela de 540px rolaria pra sempre; 300px cabe sem scroll */
-  .rail #dca>table,.rail #metricas table{min-width:300px}
+  /* Bloco de conteudo: SEM card em volta. A tabela e a protagonista e ocupa a largura; card
+     so existe para o que nao e tabela (.card, abaixo). */
+  .panel{margin-bottom:24px}
+  .panel:last-child{margin-bottom:0}
+  .panel h2{font-size:var(--fs-75);font-weight:700;color:var(--txt3);margin-bottom:12px;
+    display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
 
   .sig{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;margin-bottom:10px}
   .sig:last-child{margin-bottom:0}
@@ -266,11 +268,14 @@
   .btn-sug{background:var(--accent-bg);color:var(--accent-txt);border:1px solid var(--accent);padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;margin-left:7px}
   .aviso-liq{background:var(--neg-bg);color:var(--neg);font-size:11.5px;padding:8px 11px;border-radius:7px;margin:7px 0;line-height:1.45}
   .btn-panico{background:var(--neg-bg);color:var(--neg);padding:9px 12px;border:1px solid var(--neg-b);font-weight:700}
-  .rg-banner{padding:11px 14px;border-radius:var(--r-sm);font-weight:600;font-size:13px;margin-bottom:14px}
-  .rg-banner.trava{background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
-  .rg-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 14px}
-  .rg-bar{flex:1;min-width:80px;height:7px;background:var(--surface2);border-radius:4px;overflow:hidden}
-  .rg-bar i{display:block;height:100%;background:var(--neg);border-radius:4px}
+  /* guarda de risco: era banner de largura cheia empurrando o conteudo, agora e item da
+     status bar. Sem card, sem margem, altura de uma linha. O texto que estes seletores
+     recebem ainda e o do M5; o render curto e do P2-31. */
+  .rg-line{display:flex;align-items:center;gap:8px;font-size:var(--fs-75);white-space:nowrap}
+  .rg-bar{width:56px;flex:none;height:6px;background:var(--surface2);border-radius:var(--r-pill);overflow:hidden}
+  .rg-bar i{display:block;height:100%;background:var(--neg);border-radius:var(--r-pill)}
+  .rg-banner{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:var(--r-sm);
+    font-weight:600;font-size:var(--fs-75);background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
   .hidden{display:none}
   .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
   @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
@@ -303,36 +308,25 @@
   .btn-vender{background:var(--pos);color:#04130c;border:none;padding:4px 12px;border-radius:6px;font-weight:700;font-size:11px;float:right;cursor:pointer}
 
   /* ---------- responsivo ----------
-     1180px: o trilho desce e vira largura cheia. 900px: a sidebar vira barra de topo.
-     560px: os stat cards empilham. Em nenhuma largura a PAGINA rola na horizontal: tabela larga
-     rola dentro do proprio wrapper (#posicoes/#trades/#dca/#metricas ja tem overflow-x:auto). */
-  @media(max-width:1240px){.bento{grid-template-columns:minmax(0,1fr) 330px}}
-  @media(max-width:1180px){
-    .bento{grid-template-columns:minmax(0,1fr)}
-    .rail{margin-top:14px}
-    /* de volta a largura cheia, a tabela nao precisa mais do min-width apertado do trilho */
-    .rail #dca>table,.rail #metricas table{min-width:540px}
-  }
-  @media(max-width:1080px){.bento-top{grid-template-columns:1fr 1fr}.hero{grid-column:1/-1}}
+     A casca nova nao tem coluna lateral para recolher: o que muda com a largura e (1) a topbar
+     quebra de linha, (2) a tab bar rola na horizontal em vez de quebrar, (3) os tiles empilham
+     sozinhos pelo auto-fit. Em nenhuma largura a PAGINA rola na horizontal: tabela larga rola
+     dentro do proprio wrapper (#posicoes/#trades/#dca/#metricas tem overflow-x:auto). */
   @media(max-width:900px){
-    .shell{grid-template-columns:minmax(0,1fr)}
-    .nav{position:static;height:auto;overflow:visible;flex-direction:row;flex-wrap:wrap;
-      align-items:center;gap:10px;padding:12px 16px;border-right:none;border-bottom:1px solid var(--line)}
-    .nav-sec{flex-direction:row;flex-wrap:wrap;gap:6px}
-    .nav-lbl{display:none}
-    .nav-foot{margin-top:0;flex-direction:row;align-items:center;gap:8px;margin-left:auto}
-    .nav button,.tab{width:auto}
-    .brand{margin-right:6px}
-    .main{padding:18px 16px 34px}
-    #tvchart{height:calc(100vh - 270px)}
+    .main{padding:18px 16px 24px}
+    .topbar{padding:8px 16px}
+    .statusbar{padding:7px 16px}
+    #tvchart{height:calc(100vh - 240px)}
     .grafico-side{max-height:none}
   }
   @media(max-width:560px){
-    .bento-top{grid-template-columns:1fr}
-    .hero .val{font-size:32px}
-    .hero{min-height:0}
-    .nav-foot{margin-left:0;width:100%}
-    .main{padding:16px 12px 30px}
+    .main{padding:16px 12px 24px}
+    .topbar{padding:8px 12px;gap:8px 10px}
+    /* a nav principal e as acoes descem para a propria linha em vez de espremer a marca */
+    .topnav,.topacts{margin-left:0;width:100%}
+    .topacts{justify-content:flex-start}
+    .statusbar{padding:7px 12px;gap:4px 12px}
+    .sb-hora{margin-left:0}
   }
 
   /* modal */
@@ -360,7 +354,9 @@
   .btn-cancel{background:var(--surface2);color:var(--txt2);padding:13px 18px;border:1px solid var(--line)}
 
   /* so transform e opacity animam, e nomeados: `transition:.3s` fazia o browser vigiar tudo */
-  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);
+  /* --sb-h e medido em JS: a status bar quebra de linha e um valor fixo poria o toast por
+     cima dela ou solto no meio da tela. */
+  #toast{position:fixed;bottom:calc(var(--sb-h,24px) + 14px);left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);
     border:1px solid var(--line2);border-radius:var(--r-sm);padding:13px 20px;font-weight:600;opacity:0;
     box-shadow:var(--shadow-overlay);z-index:60;
     transition:transform var(--dur2) var(--ease),opacity var(--dur2) var(--ease)}
@@ -501,62 +497,93 @@
     <div class="gate-foot" id="gate-foot"></div>
   </form>
 </div>
-<div class="shell">
-  <!-- Sidebar. Os botoes de nav mantem class="tab" e data-v porque aba() mira
-       document.querySelectorAll('.tab') e liga/desliga o .on por dataset.v. -->
-  <aside class="nav">
-    <div class="brand"><div class="logo" aria-hidden="true">🤖</div>
-      <div><div class="bname">Cripto Bot</div><div class="sub">Terminal</div></div></div>
-
-    <div class="nav-sec">
-      <div class="nav-lbl">Vistas</div>
-      <button class="tab on" data-v="painel" aria-pressed="true" onclick="aba('painel')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7.5" height="9" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="3" y="15" width="7.5" height="6" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/></svg> Painel</button>
-      <button class="tab" data-v="grafico" aria-pressed="false" onclick="aba('grafico')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 2.5v3.2M7 18.3v3.2M17 4.5v2.2M17 17.3v3.2"/><rect x="4.2" y="5.7" width="5.6" height="12.6" rx="1.4"/><rect x="14.2" y="6.7" width="5.6" height="10.6" rx="1.4"/></svg> Gráfico</button>
-    </div>
-
-    <div class="nav-sec">
-      <div class="nav-lbl">Ações</div>
-      <button class="btn-sec" onclick="escanear()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="M20.5 20.5l-4.5-4.5"/></svg> Escanear</button>
-      <button class="btn-panico" onclick="panico()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 2.8h6.6L20.5 8v6.6l-5.2 5.2H8.7L3.5 14.6V8z"/><path d="M12 7.6v5.2"/><path d="M12 16.1h.01"/></svg> Pânico</button>
-      <button class="btn-danger" onclick="resetar()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 12a8.8 8.8 0 1 0 2.6-6.3"/><path d="M3.2 4.4V10h5.6"/></svg> Resetar</button>
-    </div>
-
-    <div class="nav-foot">
-      <div class="badge"><span class="dot"></span> AO VIVO</div>
-      <button class="btn-sec" onclick="sairLogin()" title="Encerrar a sessão neste navegador"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.6 3.5h3.9A1.6 1.6 0 0 1 20.1 5v14a1.6 1.6 0 0 1-1.6 1.5h-3.9"/><path d="M9.6 8.2L5.8 12l3.8 3.8"/><path d="M5.8 12h10"/></svg> Sair</button>
-    </div>
-  </aside>
-
-  <main class="main">
-  <div class="topbar">
-    <div><h1 id="view-titulo">Painel</h1>
-      <div class="sub" id="cfg">paper trading · preço real Binance</div></div>
+<!-- Casca do DESIGN.md > Layout grammar: topbar, tab bar e status bar fixa.
+     Sai a sidebar de 232px, sai o bento de duas colunas, saem os banners de risco. -->
+<header class="topbar">
+  <div class="brand"><span class="logo" aria-hidden="true">🤖</span>
+    <span><span class="bname">Cripto Bot</span> <span class="sub">Terminal</span></span></div>
+  <!-- Os dois botoes de vista mantem class="tab" e data-v: aba() mira
+       document.querySelectorAll('.tab') e liga o .on por dataset.v. -->
+  <nav class="topnav" aria-label="Vistas">
+    <button class="tab on" data-v="painel" aria-pressed="true" onclick="aba('painel')">Painel</button>
+    <button class="tab" data-v="grafico" aria-pressed="false" onclick="aba('grafico')">Gráfico</button>
+  </nav>
+  <div class="topacts">
+    <button class="btn-sec" onclick="escanear()">Escanear</button>
+    <button class="btn-panico" onclick="panico()">Pânico</button>
+    <button class="btn-danger" onclick="resetar()">Resetar</button>
+    <button class="btn-sec" onclick="sairLogin()" title="Encerrar a sessão neste navegador">Sair</button>
   </div>
+</header>
+<!-- #view-titulo continua existindo e continua sendo escrito pelo aba(); com a nav na topbar
+     ele deixou de precisar aparecer e virou o h1 da pagina, anunciado a quem usa leitor. -->
+<h1 class="sr-only" id="view-titulo">Painel</h1>
 
+<main class="main">
   <div id="view-painel">
-  <div id="risco-guard"></div>
-  <section class="bento-top">
-    <article class="hero"><div class="lbl">Equity total</div><div class="val mono" id="equity">R$ —</div>
-      <div class="delta mono" id="pnl">—</div>
-      <div class="spark" id="spark" aria-hidden="true"></div></article>
-    <article class="stat"><div class="lbl">Banca (caixa)</div><div class="val mono" id="banca">R$ —</div></article>
-    <article class="stat"><div class="lbl">Posições abertas</div><div class="val mono" id="npos">—</div></article>
-    <article class="stat"><div class="lbl">Sinais p/ confirmar</div><div class="val mono" id="npend">—</div></article>
-  </section>
+    <!-- Abas de CONTEUDO: .subtab/data-sub, classe diferente da .tab de proposito, senao
+         entrariam no querySelectorAll('.tab') do aba() e a troca Painel/Grafico morreria.
+         Trocar de aba aqui so mostra/esconde: nao dispara requisicao. -->
+    <nav class="tabbar" role="tablist" aria-label="Blocos do painel">
+      <button class="subtab on" role="tab" id="tab-sinais" data-sub="sinais" aria-selected="true" aria-controls="sub-sinais" onclick="subaba('sinais')">Sinais</button>
+      <button class="subtab" role="tab" id="tab-posicoes" data-sub="posicoes" aria-selected="false" aria-controls="sub-posicoes" tabindex="-1" onclick="subaba('posicoes')">Posições</button>
+      <button class="subtab" role="tab" id="tab-journal" data-sub="journal" aria-selected="false" aria-controls="sub-journal" tabindex="-1" onclick="subaba('journal')">Journal</button>
+      <button class="subtab" role="tab" id="tab-metricas" data-sub="metricas" aria-selected="false" aria-controls="sub-metricas" tabindex="-1" onclick="subaba('metricas')">Métricas</button>
+      <button class="subtab" role="tab" id="tab-dca" data-sub="dca" aria-selected="false" aria-controls="sub-dca" tabindex="-1" onclick="subaba('dca')">DCA</button>
+      <button class="subtab" role="tab" id="tab-mercado" data-sub="mercado" aria-selected="false" aria-controls="sub-mercado" tabindex="-1" onclick="subaba('mercado')">Mercado</button>
+      <button class="subtab" role="tab" id="tab-auto" data-sub="auto" aria-selected="false" aria-controls="sub-auto" tabindex="-1" onclick="subaba('auto')">Auto-trade</button>
+    </nav>
 
-  <div class="bento">
-  <div class="col">
+    <section class="tiles">
+      <article class="tile"><div class="lbl">Equity total</div><div class="val mono" id="equity">R$ —</div>
+        <div class="delta mono" id="pnl">—</div>
+        <div class="spark" id="spark" aria-hidden="true"></div></article>
+      <article class="tile"><div class="lbl">Banca (caixa)</div><div class="val mono" id="banca">R$ —</div></article>
+      <article class="tile"><div class="lbl">Posições abertas</div><div class="val mono" id="npos">—</div></article>
+      <article class="tile"><div class="lbl">Sinais p/ confirmar</div><div class="val mono" id="npend">—</div></article>
+    </section>
 
-  <div class="panel"><h2>📈 Curva de capital</h2><div style="height:230px"><canvas id="chart"></canvas></div></div>
+    <section class="subview" id="sub-sinais" data-sub="sinais" role="tabpanel" aria-labelledby="tab-sinais">
+      <div class="panel"><h2>🔔 Sinais — Confirmar trade</h2><div id="pendentes"><div class="skel-wrap"><div class="skel lg"></div><div class="skel" style="width:80%"></div><div class="skel lg"></div></div></div></div>
+    </section>
 
-  <div class="panel"><h2>🔔 Sinais — Confirmar trade</h2><div id="pendentes"><div class="skel-wrap"><div class="skel lg"></div><div class="skel" style="width:80%"></div><div class="skel lg"></div></div></div></div>
+    <section class="subview" id="sub-posicoes" data-sub="posicoes" role="tabpanel" aria-labelledby="tab-posicoes" hidden>
+      <div class="panel"><h2>🎯 Posições abertas</h2><div id="posicoes"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:75%"></div></div></div></div>
+    </section>
 
-  <div class="panel"><h2>🎯 Posições abertas</h2><div id="posicoes"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:75%"></div></div></div></div>
+    <section class="subview" id="sub-journal" data-sub="journal" role="tabpanel" aria-labelledby="tab-journal" hidden>
+      <div class="panel"><h2>📋 Journal (trades)</h2><div id="trades"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:65%"></div></div></div></div>
+    </section>
 
-  <div class="panel"><h2>📋 Journal (trades)</h2><div id="trades"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:65%"></div></div></div></div>
-  </div><!-- /col principal -->
+    <!-- A curva de capital mora aqui: e a versao detalhada do que o tile de equity resume, e
+         Metricas e o bloco que fala de desempenho. Fora de uma aba ela devolveria a pagina
+         de 8000px que a tab bar existe para acabar. subaba() chama chart.resize() ao entrar,
+         senao o Chart.js fica com a largura que mediu enquanto o container estava escondido. -->
+    <section class="subview" id="sub-metricas" data-sub="metricas" role="tabpanel" aria-labelledby="tab-metricas" hidden>
+      <div class="panel"><h2>📈 Curva de capital</h2><div class="card" style="height:230px"><canvas id="chart"></canvas></div></div>
+      <div class="panel"><h2>📊 Métricas &amp; Tunagem</h2><div id="metricas"><div class="skel-wrap"><div class="skel lg"></div><div class="skel"></div><div class="skel" style="width:80%"></div></div></div></div>
+    </section>
 
-  <div class="col rail">
+    <section class="subview" id="sub-dca" data-sub="dca" role="tabpanel" aria-labelledby="tab-dca" hidden>
+  <div class="panel"><h2>💰 DCA / Acumulação <span class="mut" style="font-size:11px;font-weight:400">— captura de beta sem timing (o único que, validado, bate o trade ativo do varejo)</span></h2>
+    <div id="dca"><div class="skel-wrap"><div class="skel"></div><div class="skel" style="width:70%"></div></div></div>
+    <div class="dca-form">
+      <select id="dca-ativo"></select>
+      <input id="dca-valor" type="number" value="50" min="1" title="R$ por aporte">
+      <span class="mut" style="font-size:12px">R$ a cada</span>
+      <input id="dca-freq" type="number" value="7" min="1" title="dias entre aportes">
+      <span class="mut" style="font-size:12px">dias</span>
+      <button class="btn-sec" onclick="criarDca()">+ Criar plano</button>
+    </div>
+  </div>
+    </section>
+
+    <section class="subview" id="sub-mercado" data-sub="mercado" role="tabpanel" aria-labelledby="tab-mercado" hidden>
+      <div class="panel"><h2>🌡️ Sentimento do mercado</h2><div id="sentimento" class="mut card">carregando...</div></div>
+      <div class="panel"><h2>🔥 Funding Monitor <span class="mut" style="font-weight:400">— radar do carry (long spot + short perp)</span></h2><div id="funding" class="mut">carregando...</div></div>
+    </section>
+
+    <section class="subview" id="sub-auto" data-sub="auto" role="tabpanel" aria-labelledby="tab-auto" hidden>
   <div class="panel" id="auto-panel"><h2>🤖 Auto-trade <span class="mut" style="font-size:11px;font-weight:400">— experimento: o bot abre/fecha sozinho (paper)</span></h2>
     <div class="auto-row">
       <button id="auto-toggle" class="btn-auto" onclick="toggleAuto()" aria-pressed="false">Ativar bot 🤖</button>
@@ -573,26 +600,7 @@
     <div id="auto-log" class="mut" style="font-size:12px"></div>
     <div class="auto-warn">⚠️ Paper trading (dinheiro fictício). Já provamos que essa estratégia <b>não tem edge</b> — o esperado é o bot derivar pra perda (taxa + alavancagem). Roda dentro da trava diária e do teto de exposição. É pra <b>observar</b>, não pra ganhar.</div>
   </div>
-
-  <div class="panel"><h2>🌡️ Sentimento do mercado</h2><div id="sentimento" class="mut" style="font-size:12px">carregando...</div></div>
-
-  <div class="panel"><h2>🔥 Funding Monitor <span class="mut" style="font-size:11px;font-weight:400">— radar do carry (long spot + short perp)</span></h2><div id="funding" class="mut" style="font-size:12px">carregando...</div></div>
-
-  <div class="panel"><h2>💰 DCA / Acumulação <span class="mut" style="font-size:11px;font-weight:400">— captura de beta sem timing (o único que, validado, bate o trade ativo do varejo)</span></h2>
-    <div id="dca"><div class="skel-wrap"><div class="skel"></div><div class="skel" style="width:70%"></div></div></div>
-    <div class="dca-form">
-      <select id="dca-ativo"></select>
-      <input id="dca-valor" type="number" value="50" min="1" title="R$ por aporte">
-      <span class="mut" style="font-size:12px">R$ a cada</span>
-      <input id="dca-freq" type="number" value="7" min="1" title="dias entre aportes">
-      <span class="mut" style="font-size:12px">dias</span>
-      <button class="btn-sec" onclick="criarDca()">+ Criar plano</button>
-    </div>
-  </div>
-
-  <div class="panel"><h2>📊 Métricas & Tunagem</h2><div id="metricas"><div class="skel-wrap"><div class="skel lg"></div><div class="skel"></div><div class="skel" style="width:80%"></div></div></div></div>
-  </div><!-- /rail -->
-  </div><!-- /bento -->
+    </section>
   </div><!-- /view-painel -->
 
   <div id="view-grafico" class="hidden">
@@ -614,6 +622,14 @@
     </div>
   </div>
   </main>
+
+<!-- Status bar fixa: AO VIVO, o que o #risco-guard escrever (banca, exposicao, risco do dia),
+     a config e a hora do ultimo poll. Substitui os banners que empurravam o conteudo. -->
+<div class="statusbar" role="status" aria-live="off">
+  <span class="sb-live"><span class="dot"></span> AO VIVO</span>
+  <div id="risco-guard"></div>
+  <span class="sb-cfg" id="cfg">paper trading · preço real Binance</span>
+  <span class="sb-hora mono" id="sb-hora">—</span>
 </div>
 
 <!-- MODAL CONFIRMAR -->
@@ -829,6 +845,8 @@ async function carregar(){
   document.getElementById('banca').textContent=brl(e.banca.atual);
   document.getElementById('npos').textContent=e.posicoes.length;
   document.getElementById('npend').textContent=e.pendentes.length;
+  const sbh=document.getElementById('sb-hora');
+  if(sbh)sbh.textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   if(e.config) document.getElementById('cfg').textContent=`${e.config.ativos.split(',').length} ativos · ${e.config.timeframe} · paper trading · preço real`;
 
   // chart
@@ -1000,6 +1018,18 @@ function toggleExpand(){
   const g=document.getElementById('view-grafico'); g.classList.toggle('expandido');
   const b=document.querySelector('.tv-expand'); if(b)b.textContent=g.classList.contains('expandido')?'⛶ Recolher':'⛶ Expandir';
   setTimeout(()=>{if(_tv)_tv.timeScale().fitContent();},80);
+}
+// Abas de conteudo. Guardadas fora do HTML (_sub) porque o carregar() reescreve o miolo
+// dos blocos a cada 3s; o estado de qual aba esta aberta nao pode morar no que e reescrito.
+let _sub='sinais';
+function subaba(v){
+  _sub=v;
+  document.querySelectorAll('.subview').forEach(sec=>{sec.hidden=sec.dataset.sub!==v;});
+  document.querySelectorAll('.subtab').forEach(b=>{const sel=b.dataset.sub===v;
+    b.classList.toggle('on',sel);b.setAttribute('aria-selected',sel);b.tabIndex=sel?0:-1;});
+  // o Chart.js mediu o container enquanto ele estava escondido (largura 0); ao aparecer
+  // precisa remedir, senao a curva de capital nasce com 0px de largura
+  if(v==='metricas'&&chart)chart.resize();
 }
 function aba(v){
   _aba=v;
@@ -1341,6 +1371,17 @@ $g('gate-eye').addEventListener('click',()=>{ const i=$g('gate-pass'), oculto=i.
 // Caps Lock explica metade dos "a senha está certa e não entra".
 ['keydown','keyup'].forEach(ev=>$g('gate-pass').addEventListener(ev,e=>{
   $g('gate-caps').classList.toggle('on', !!(e.getModifierState&&e.getModifierState('CapsLock'))); }));
+
+// A status bar e fixa: sem folga embaixo ela cobriria a ultima linha da tabela. A folga e
+// MEDIDA, nao chutada, porque a barra quebra de linha quando a tela aperta.
+function folgaStatusBar(){ const sb=document.querySelector('.statusbar'); if(!sb)return;
+  const h=sb.offsetHeight;
+  document.body.style.paddingBottom=(h+8)+'px';
+  document.documentElement.style.setProperty('--sb-h',h+'px'); }
+folgaStatusBar();
+if(window.ResizeObserver){ const sb=document.querySelector('.statusbar');
+  if(sb)new ResizeObserver(folgaStatusBar).observe(sb); }
+else window.addEventListener('resize',folgaStatusBar);
 
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
