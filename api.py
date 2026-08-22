@@ -483,7 +483,17 @@ def status():
     # cego nas POSIÇÕES: o ciclo tentou marcar e nenhuma foi marcada. É mais grave que o
     # scan cego — posição não marcada é posição sem stop, sem trailing e sem liquidação.
     cego_pos = mk["total"] > 0 and mk["ok"] == 0
+    # [P2-10] o funding que NÃO foi medido já para de virar zero no banco — mas medição
+    # ausente que ninguém vê é silêncio com outro nome. `funding_medicao` é cumulativo
+    # (não zera por ciclo, ao contrário de `scan`): é a contagem da vida do processo, e é
+    # por ela que se percebe um 451 que só afeta o endpoint de futuros. Publicado do mesmo
+    # jeito que `scan` e `marcacao` — o dicionário inteiro, sob a sua chave.
+    #
+    # `saudavel` NÃO mudou: continua `not (cego or cego_pos)`. Falha de funding não cega o
+    # bot (ele segue marcando e fechando posição), e transformá-la em critério de saúde
+    # seria mexer no detector de cegueira, que é decisão do dono (CLAUDE.md §2).
     return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
+            "funding": simulador.funding_medicao,
             "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
@@ -897,6 +907,21 @@ def _prova_api():
     check("/status continua expondo saudavel exatamente como hoje", st["saudavel"] is True)
     check("o contador do [P2-9] segue publicado (sem regressao)",
           "fluxo_indisponivel" in st["scan"])
+
+    # ---------- [P2-10] o contador de falhas de funding aparece no /status
+    simulador.funding_medicao.update(medidos=7, falhas=2,
+                                     ultimo_erro="BTC/USDT: ExchangeNotAvailable: 451",
+                                     ultimo_erro_ts="2026-08-22 09:30:00")
+    st = status()
+    check("/status publica o contador de funding",
+          st.get("funding", {}).get("falhas") == 2 and st["funding"]["medidos"] == 7,
+          str(st.get("funding")))
+    check("e publica o motivo da ultima falha, nao so a contagem",
+          "451" in (st["funding"]["ultimo_erro"] or ""), str(st["funding"]["ultimo_erro"]))
+    check("falha de funding NAO derruba saudavel (criterio inalterado)",
+          st["saudavel"] is True, str(st["saudavel"]))
+    check("scan e marcacao seguem publicados ao lado (sem regressao)",
+          "scan" in st and "marcacao" in st)
 
     # ---------- [P2-3] /health responde QUAL commit esta rodando
     print("  [P2-3] /health =", health())
