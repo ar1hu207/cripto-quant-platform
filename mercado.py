@@ -51,11 +51,13 @@ def breadth():
     for a in ativos:
         try:
             p = ex_spot.fetch_ticker(a)["percentage"]
-            tot += 1
-            soma += p
-            up += 1 if p > 0 else 0
         except Exception:
-            pass
+            continue                       # nao respondeu: nao e amostra, nao entra em tot
+        if p is None:                      # par sem estatistica de 24h: leitura AUSENTE, nao zero
+            continue
+        tot += 1                           # daqui pra baixo o ativo entra nos tres contadores ou em nenhum
+        soma += p
+        up += 1 if p > 0 else 0
     if not tot:
         return None
     return {"pct_subindo": round(up / tot * 100), "variacao_media": round(soma / tot, 2), "n": tot}
