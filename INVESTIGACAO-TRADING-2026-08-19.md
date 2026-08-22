@@ -7,7 +7,7 @@
 > `[P1-10..11]` e `[P2-19..24]` no Trello.
 >
 > **Nota de 2026-08-22:** os cards `[P2-19..24]` citados aqui foram renumerados para
-> **`[Q-1..34]`** no Trello — a série do redesign do front reusou a numeração. Este documento
+> **`[Q-1..6]`** no Trello — a série do redesign do front reusou a numeração. Este documento
 > é um registro datado de 2026-08-19 e fica como estava; quem procurar os cards, procure a série
 > nova, ou melhor, o shortLink.
 

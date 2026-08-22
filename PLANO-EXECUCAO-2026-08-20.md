@@ -5,7 +5,7 @@
 
 > ⚠️ **Renumeração de 2026-08-22.** Os cards de pesquisa quant deste plano eram `P2-19..24`.
 > A série do redesign do front (M5/M6) reusou esses mesmos números, e por seis dias dois cards
-> diferentes responderam por cada um. A série quant moveu-se para **`Q-1..34`** — está sem
+> diferentes responderam por cada um. A série quant moveu-se para **`Q-1..6`** — está sem
 > trabalho em curso, enquanto a do front já vive em mensagens de commit, que não se reescrevem.
 > A primeira tentativa moveu a série quant para `P2-29..34` e colidiu **de novo** no mesmo dia:
 > outra sessão criava os cards do M6 exatamente nessa faixa ao mesmo tempo. A lição é que `P2-` é
@@ -243,7 +243,7 @@ Leia primeiro, nesta ordem:
   3. O documento de investigação do seu card:
        STATUS-SISTEMA-2026-08-19.md        (P0-*, P1-1..5, P2-1..7)
        INVESTIGACAO-LOGICA-2026-08-19.md   (P1-6..9, P2-8..18)
-       INVESTIGACAO-TRADING-2026-08-19.md  (P1-10..11, Q-1..24)
+       INVESTIGACAO-TRADING-2026-08-19.md  (P1-10..11, Q-1..6)
 
 Seus arquivos: <lista>. NÃO edite nenhum arquivo fora dessa lista — outro agente
 é dono dele nesta mesma onda. Se precisar de um, pare e reporte.
