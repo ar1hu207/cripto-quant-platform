@@ -147,23 +147,73 @@ segue vigiada, o `/status` denuncia. E existe backup de ontem **fora** da VM.
 
 Todo número que o M4 vai usar nasce aqui.
 
-**Onda 1** — quatro agentes em paralelo, zero arquivo em comum:
+> **Redesenho das ondas em 2026-08-22 (sessão-matriz do M2).** A tabela original tinha quatro
+> agentes na onda 1 e violava duas regras desta mesma seção. O que mudou, e por quê, está na
+> §4b logo abaixo — leia antes de despachar. A tabela abaixo é a que vale.
+
+**Onda 1** — três agentes em paralelo, zero arquivo em comum (teto da §9.11):
 
 | Agente | Arquivos | Cards |
 |---|---|---|
-| **`T-SINAL`** | `signal_engine.py`, `autotrader.py`, `api.py:54` (só leitura do `ultimo_scan`) | `P2-9` portão de fluxo falha-aberto · `P1-9` dedupe sem janela seca a fila e sinal `novo` nunca expira · `P2-15` `ultimo_erro` nunca limpo e cadência deriva |
-| **`T-EXEC`** ‖ | `simulador.py`, `validacao.py` | **`P2-10`** ⭐ falha de rede zera o funding em silêncio (`except: return 0.0`) — corrompe o P&L que a pesquisa lê |
-| **`T-MERCADO`** ‖ | `mercado.py`, `dca.py` | `P1-5` `breadth()` conta o ativo antes de a soma poder falhar · `P2-13` `/estado` dispara rede por plano DCA a cada poll de 3s |
-| **`T-OPERACAO`** ‖ | `logbot.py`, `deploy/`, VM | `P2-1` rotação de log · `P2-3` a VM não é repo git, não se sabe qual commit roda · `P2-5` RAM (`B2als_v2` 4 GiB está liberado na mesma região, `az vm resize`) |
+| **`T-SINAL`** | `signal_engine.py`, `autotrader.py` | `P2-9` (`KEfRnQO7`) portão de fluxo falha-aberto · `P1-9` (`LQeuj96h`) dedupe sem janela seca a fila e sinal `novo` nunca expira |
+| **`T-EXEC`** ‖ | `simulador.py`, `validacao.py` | **`P2-10`** ⭐ (`EeldhcE8`) falha de rede zera o funding em silêncio (`except: return 0.0`) — corrompe o P&L que a pesquisa lê |
+| **`T-MERCADO`** ‖ | `mercado.py`, `dca.py`, `logbot.py` | `P1-5` (`oEN0olMs`) `breadth()` conta o ativo antes de a soma poder falhar · `P2-13` (`1hPdf23i`) `/estado` dispara rede por plano DCA a cada poll de 3s · `P2-1` (`et5Nuyar`) rotação de log |
 
-**Onda 2** ▸ — sozinho, porque `api.py` é território do `T-SINAL` na onda 1:
+**Faixa da matriz, em paralelo à onda 1** — não é worker, é a própria matriz: worker não acessa a
+VM (`CLAUDE.md` §6, `ORQUESTRACAO-ORCA.md` §1).
+
+| Quem | Arquivos | Cards |
+|---|---|---|
+| **matriz** | `deploy/`, VM, Azure | `P2-3` (`ky3fu2DX`) a VM não é repo git — clone, script de deploy, rollback testado · `P2-5` (`pssY5yi2`) medir RAM sob scan real; o `az vm resize` para `B2als_v2` sai do tier gratuito e **é decisão do dono**, não da matriz |
+
+**Onda 2** ▸ — sozinho, porque `api.py` é lido pela onda 1 inteira e escrito só aqui:
 
 | Agente | Arquivos | Cards |
 |---|---|---|
-| **`T-API-DADOS`** | `api.py`, `db.py` | `P2-11` equity sem limite, sem índice, gráfico de ~2h · `P1-4` `_amostrar()` não reduz nada entre 126 e 249 pontos |
+| **`T-API-DADOS`** | `api.py`, `db.py`, `signal_engine.py` | `P2-11` (`FUNR7eDR`) equity sem limite, sem índice, gráfico de ~2h · `P1-4` (`vUnnjyx6`) `_amostrar()` não reduz nada entre 126 e 249 pontos · `P2-15` (`3iUCAXf9`) `ultimo_erro` nunca limpo e cadência deriva · **duas linhas herdadas**: o `/health` com o commit em produção (fecha o `P2-3`) e a exposição do contador de falhas de funding no `/status` (fecha o `P2-10`) |
 
 **Portão do M2:** todo número no painel ou é medido, ou está declaradamente ausente — nenhum é um
 zero que na verdade é um erro engolido.
+
+#### 4b. Por que as ondas do M2 mudaram
+
+Quatro correções, todas por regra escrita neste documento — nenhuma por preferência:
+
+1. **`T-OPERACAO` foi dissolvido.** Ele era dono de "`logbot.py`, `deploy/`, VM", e o worker não
+   acessa a VM. Dois dos seus três cards (`P2-3`, `P2-5`) são operação de produção e Azure: são
+   da matriz por definição, não território despachável. O terceiro (`P2-1`) é uma troca de handler
+   em `logbot.py` — código puro, que cabe em qualquer worker.
+2. **`P2-1` foi para o `T-MERCADO`.** Território particiona **arquivo** (§3), e `logbot.py` não
+   colide com `mercado.py` nem com `dca.py`. Juntar é o que mantém a onda dentro do teto de
+   **três workers** da §9.11 — o teto existe porque o auditor é serial, não porque a máquina não
+   aguenta. Quatro agentes só enfileirariam diff envelhecendo contra uma base que anda.
+3. **`P2-15` desceu para a onda 2.** A correção 2 do card é *agendar o scan por tempo em vez de
+   `_health["ciclos"] % CICLOS_POR_SCAN`* — isso é **escrita** em `api.py:55`, e a §4 só dava
+   leitura ao `T-SINAL`. A §9.2 já listava o `P2-15` como card que cruza fronteira; aqui ele é
+   resolvido movendo o **card inteiro**, não partindo em dois commits em duas ondas. Consequência:
+   o `T-API-DADOS` herda `signal_engine.py` na onda 2 — sem conflito, porque o `T-SINAL` já
+   mergeou. Território disjunto é exigência **dentro** da onda.
+4. **Dois cards fecham em duas ondas, e isso está declarado.** O `P2-3` e o `P2-10` têm cada um
+   uma linha final que vive em `api.py`:
+   - `P2-3` — `/health` devolvendo o commit em produção (`api.py:390`);
+   - `P2-10` — o contador de falhas de funding aparecendo no `/status` (`api.py:405`).
+
+   Nos dois casos o mecanismo nasce na onda 1 / na faixa da matriz, e a linha de exposição em
+   `api.py` é do `T-API-DADOS` na onda 2. **O card não sai de 🔨 Fazendo até a segunda parte
+   entrar** — o auditor vai encontrar dois commits num card, e este parágrafo é a autorização.
+   A alternativa era o worker atravessar fronteira, que a §9.4/P2 reprova mesmo com o código certo.
+
+**Decisão registrada antes da implementação, exigida pelo próprio `P2-9`:** vale a opção **B**
+(passar anotado + medir) — o sinal passa, `motivos` ganha `"fluxo n/d"` e `ultimo_scan` ganha o
+contador `fluxo_indisponivel`. A sub-pergunta do card ("o auto-trader deve exigir fluxo checado?")
+resolve-se assim: **o auto-trader recusa sinal com `"fluxo n/d"` apenas quando `exigir_fluxo=1`**.
+Se o humano configurou "exigir fluxo", o bot não pode operar sobre fluxo não verificado; se não
+configurou, nada muda. É aperto de guarda, que a §2 do `CLAUDE.md` permite — afrouxamento seria do
+dono. E o contador em `/status` é o que impede a degradação de virar silêncio.
+
+**O que esta onda compartilha além de arquivo (§9.2b):** o esquema do banco. Nenhum card da onda 1
+mexe em `trading.db`; o `P2-11` (índices e poda da tabela `equity`) mexe, e está sozinho na onda 2,
+lendo o que o `Q-4` deixou no M1. Serializado por construção — não por sorte.
 
 ---
 
