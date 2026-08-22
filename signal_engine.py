@@ -376,9 +376,17 @@ def scan():
     ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0, fluxo_indisponivel=0,
                        ultimo_erro=None)                                   # zera a cada varredura
     try:
-        # [P1-9] limpeza ANTES da varredura: o que for gravado agora nasce dentro da janela, e
-        # o auto-trader (que roda logo depois, no mesmo ciclo do worker) já lê a fila limpa.
+        # [P1-9] limpeza ANTES da varredura: o que for gravado agora nasce dentro da janela.
         # Job local e barato, mas segue a regra do `marcar_desfechos`: nunca derruba o scan.
+        #
+        # O comentário original dizia "o auto-trader roda logo depois, no mesmo ciclo" — e o
+        # [P2-15] mudou isso na mesma onda: o scan passou a rodar DEPOIS do bloco do ciclo, e o
+        # auto-trader agora lê a fila limpa no ciclo SEGUINTE (15s). Não há lacuna de
+        # comportamento, e vale registrar por quê: o auto-trader já filtra por
+        # `auto_freshness_min` (12 min), e a janela de expiração é maior que isso em todo TF em
+        # uso (5m→20, 15m→60, 1h→240). Sinal expirável já era sinal não-fresco antes de chegar
+        # aqui. Só num TF de 1m (janela 4 min < 12 min) os dois discordariam — e aí a discordância
+        # já existiria de qualquer jeito, porque a expiração é periódica e não contínua.
         expirados = expirar_sinais(ts)
         if expirados:
             log(f"[P1-9] {expirados} sinal(is) 'novo' expirados (fora da janela)")
