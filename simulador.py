@@ -123,6 +123,8 @@ def abrir(sinal_id, valor_reais, alavancagem):
         sig = con.execute("SELECT * FROM sinais WHERE id=?", (sinal_id,)).fetchone()
     if not sig:
         raise ValueError("sinal não encontrado")
+    if sig["status"] != "novo":                           # pré-check barato: recusa antes de gastar rede.
+        raise ValueError(f"sinal já {sig['status']} — não pode virar posição de novo")
     preco = preco_ao_vivo(sig["ativo"])                   # rede FORA do lock
     d = 1 if sig["direcao"] == "LONG" else -1
     # stop recomposto a partir da ENTRADA ao vivo, mantendo a distância relativa do sinal —
@@ -149,12 +151,18 @@ def abrir(sinal_id, valor_reais, alavancagem):
                 if margem_ab + valor_reais > banca_atual * exp_max:
                     raise ValueError(f"teto de margem — exposição (R${margem_ab + valor_reais:.2f}) passaria "
                                      f"{exp_max * 100:.0f}% da banca (R${banca_atual * exp_max:.2f})")
+            # CLAIM ATÔMICO do sinal, na mesma transação da inserção e antes dela: quem
+            # ganhar o UPDATE (rowcount 1) abre a posição; o segundo pedido vê rowcount 0 e
+            # é recusado. O pré-check lá em cima é conveniência — a exclusão mútua é AQUI.
+            # Mesmo padrão de rowcount que fechar() usa para não fechar duas vezes.
+            if con.execute("UPDATE sinais SET status='confirmado' "
+                           "WHERE id=? AND status='novo'", (sinal_id,)).rowcount != 1:
+                raise ValueError("sinal já confirmado, pulado ou expirado")
             con.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,stop,"
                         "preco_atual,pnl,aberto_em,status,conviccao,sinal_id) "
                         "VALUES(?,?,?,?,?,?,?,0,?, 'aberta',?,?)",
                         (sig["ativo"], sig["direcao"], preco, valor_reais, alavancagem,
                          stop, preco, str(pd.Timestamp.now()), sig["conviccao"], sig["id"]))
-            con.execute("UPDATE sinais SET status='confirmado' WHERE id=?", (sinal_id,))
             pid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
     ativo, direcao = sig["ativo"], sig["direcao"]
     log(f"ABRIU #{pid} {direcao} {ativo} @ {preco} | R${valor_reais} {alavancagem}x")
