@@ -564,7 +564,18 @@ def confirmar(req: ConfirmarReq):
                 return {"ok": False, "erro": f"📊 Teto de exposição — risco aberto R${g['risco_aberto_rs']:.2f} "
                         f"+ R${r_novo:.2f} deste trade passa o limite R${g['risco_aberto_max_rs']:.2f}. "
                         f"Feche uma posição ou reduza o tamanho."}
-    pid = simulador.abrir(req.sinal_id, req.valor_reais, req.alavancagem)
+    try:
+        pid = simulador.abrir(req.sinal_id, req.valor_reais, req.alavancagem)
+    except ValueError as e:
+        # abrir() diz "nao, e por este motivo" levantando ValueError. Sem traduzir isso para o
+        # contrato {ok:false, erro} o FastAPI trata a RECUSA como falha do servidor: 500, e o
+        # painel mostra "erro" generico para uma decisao deliberada do sistema. Os pre-checks
+        # acima nunca vao cobrir tudo por construcao — o teto de MARGEM e o claim atomico do
+        # sinal so existem dentro do lock de abrir(), e trava/risco ainda podem tripar entre o
+        # check e a abertura. Quem sabe o motivo e abrir(); aqui so se traduz. Mesmo tratamento
+        # que o auto-trader ja da (autotrader.py:166). Excecao que NAO e ValueError (rede, banco)
+        # continua subindo como 500: aquilo e falha de verdade, e mentir sobre ela seria pior.
+        return {"ok": False, "erro": f"{'🛑' if 'trava' in str(e) else '📊'} {e}"}
     return {"ok": True, "posicao_id": pid}
 
 
@@ -610,8 +621,11 @@ def pular(req: IdReq):
 
 @app.post("/fechar")
 def fechar(req: IdReq):
-    pnl = simulador.fechar(req.id, "manual")
-    return {"ok": True, "pnl": pnl}
+    try:                                     # mesmo contrato do /confirmar: recusa do dominio nao e 500
+        pnl = simulador.fechar(req.id, "manual")
+    except ValueError as e:
+        return {"ok": False, "erro": f"📊 {e}"}
+    return {"ok": True, "pnl": pnl}          # pnl=None => ja estava fechada (nao e erro)
 
 
 @app.post("/scan")
@@ -657,7 +671,10 @@ def dca_criar(req: DcaReq):
 
 @app.post("/dca/aportar")
 def dca_aportar(req: IdReq):
-    preco = dca.aportar(req.id)
+    try:                                     # idem: ValueError do dominio vira recusa, nao 500
+        preco = dca.aportar(req.id)
+    except ValueError as e:
+        return {"ok": False, "erro": f"📊 {e}"}
     return {"ok": preco is not None, "preco": preco}
 
 
