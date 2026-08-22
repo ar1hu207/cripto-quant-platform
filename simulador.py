@@ -23,6 +23,28 @@ _abrir_lock = threading.Lock()   # serializa aberturas concorrentes (worker + AP
 ultima_marcacao = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
 
 
+_cfg_avisado = set()      # (chave, valor) já reclamados — evita um log por poll de 3s
+
+
+def _cfg_float(cfg, chave, padrao):
+    """Lê um float da config sem explodir. DEFESA EM PROFUNDIDADE do [P1-8]: a validação
+    de verdade é na entrada (POST /config), mas lixo já gravado no banco antes dela — ou
+    por um caminho que a contorne — não pode transformar guarda_risco() em ValueError e
+    derrubar /estado e o ciclo do worker. Default do consumidor + aviso é degradação;
+    exceção aqui é indisponibilidade total."""
+    v = cfg.get(chave, padrao)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        marca = (chave, str(v))
+        if marca not in _cfg_avisado:
+            if len(_cfg_avisado) > 200:
+                _cfg_avisado.clear()
+            _cfg_avisado.add(marca)
+            log(f"config inválida: {chave}={v!r} — usando o padrão {padrao}", "error")
+        return float(padrao)
+
+
 def _funding_custo(ativo, aberto_em, fechado_em, direcao, nocional):
     """Funding pago (LONG) / recebido (SHORT) entre abertura e fechamento. Negativo = custo.
     LONG paga funding>0; SHORT recebe. Conta só os settlements no intervalo (8h)."""
@@ -55,7 +77,7 @@ def _pnl(pos, preco_saida):
     d = 1 if pos["direcao"] == "LONG" else -1
     move = d * (preco_saida / pos["entrada"] - 1)               # retorno do ATIVO a favor
     bruto = pos["valor_reais"] * pos["alavancagem"] * move      # P&L em R$ (alavancado)
-    taxa = 2 * float(db.get_config().get("taxa_por_lado", 0.0005)) * pos["valor_reais"] * pos["alavancagem"]
+    taxa = 2 * _cfg_float(db.get_config(), "taxa_por_lado", 0.0005) * pos["valor_reais"] * pos["alavancagem"]
     pnl = bruto - taxa
     if pnl < -pos["valor_reais"]:                              # não perde mais que a margem
         pnl = -pos["valor_reais"]
@@ -78,8 +100,8 @@ def guarda_risco():
     a soma do risco-até-o-stop das posições abertas. É o 'único alfa garantido'."""
     cfg = db.get_config()
     banca = db.get_banca()
-    lim = float(cfg.get("limite_perda_dia", 0.05))
-    lim_ab = float(cfg.get("risco_aberto_max", 0.10))
+    lim = _cfg_float(cfg, "limite_perda_dia", 0.05)
+    lim_ab = _cfg_float(cfg, "risco_aberto_max", 0.10)
     hoje = str(pd.Timestamp.now().date())
     with db.conectar() as con:
         unreal = con.execute("SELECT COALESCE(SUM(pnl),0) FROM posicoes WHERE status='aberta'").fetchone()[0] or 0
@@ -133,7 +155,7 @@ def abrir(sinal_id, valor_reais, alavancagem):
                 if sig["preco"] and sig["stop_sugerido"] else 0.0)
     stop = round(preco * (1 - d * stop_rel), 6) if stop_rel else sig["stop_sugerido"]
     cfg = db.get_config()
-    exp_max = float(cfg.get("exposicao_max", 0.5))
+    exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
     with _abrir_lock:                                     # serializa aberturas (worker + API) — sem TOCTOU no teto
         with db.conectar() as con:
             abertas = [dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
@@ -213,7 +235,7 @@ def atualizar():
     deixa o lucro correr e trava o ganho. Inverte a assimetria: ganha grande, perde pequeno."""
     cfg = db.get_config()
     trail_on = str(cfg.get("trailing_ativo", "1")) in ("1", "true", "True")
-    trail_d = float(cfg.get("trailing_dist", 0.02))
+    trail_d = _cfg_float(cfg, "trailing_dist", 0.02)
     eventos = []
     with db.conectar() as con:
         abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
