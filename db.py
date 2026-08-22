@@ -14,7 +14,14 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sinais(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, ativo TEXT, tf TEXT, tipo TEXT, direcao TEXT,
   conviccao REAL, motivos TEXT, preco REAL, stop_sugerido REAL,
-  status TEXT DEFAULT 'novo');                       -- novo|proposto|confirmado|pulado
+  status TEXT DEFAULT 'novo',        -- novo|proposto|confirmado|pulado|rejeitado_fluxo
+  -- [Q-4] validacao prospectiva do portao de fluxo. 'rejeitado_fluxo' NAO e fila: nenhuma
+  -- consulta da fila/auto-trader o enxerga (todas filtram status='novo'). vela_ms e o instante
+  -- EXATO em que o preco do sinal foi impresso (fechamento do candle usado) - e a ancora do
+  -- contrafactual; sem ele o desfecho comecaria de um preco de ate 1 TF atras.
+  vela_ms INTEGER, fluxo_comprador REAL, rejeicao TEXT,
+  desfecho TEXT, desfecho_ts TEXT,   -- alvo|stop|aberto (24h sem tocar nenhum dos dois)
+  preco_1h REAL, preco_4h REAL, preco_24h REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -90,7 +97,10 @@ def conectar():
 
 def _migrar(c):
     """Adiciona colunas novas a tabelas que já existiam (dev)."""
-    faltantes = {"sinais": [("tf", "TEXT"), ("tipo", "TEXT")],
+    faltantes = {"sinais": [("tf", "TEXT"), ("tipo", "TEXT"),
+                            ("vela_ms", "INTEGER"), ("fluxo_comprador", "REAL"), ("rejeicao", "TEXT"),
+                            ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
+                            ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER")],
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
                             ("risco_inicial", "REAL"), ("funding", "REAL")]}
@@ -218,6 +228,93 @@ def metricas():
         "max_drawdown": round(maxdd, 2), "max_drawdown_pct": round(maxdd_pct, 1),
         "max_dd_mtm_pct": round(dd_mtm, 1), "calmar": calmar,
     }
+
+
+# ---------- [Q-4] validação prospectiva do portão de fluxo ----------
+# O portão `exigir_fluxo` só existe ao vivo: não há book/taker histórico, então ele é
+# ininvalidável olhando pra trás. A saída é medir pra frente — gravar a rejeição e marcar,
+# nos DOIS grupos, o mesmo desfecho hipotético (candle, não fill). Se o rejeitado performa
+# igual ou melhor, o portão é ruído; se performa pior, o portão tem valor.
+
+def _erfc_p(z):
+    """p-valor bicaudal da normal padrão, sem scipy (a plataforma não tem)."""
+    return round(math.erfc(abs(z) / math.sqrt(2)), 4)
+
+
+def _resumo_grupo(linhas):
+    """n, contagem por desfecho, win hipotético e retorno médio por horizonte."""
+    n = len(linhas)
+    r = {"n": n, "alvo": 0, "stop": 0, "aberto": 0, "win": None,
+         "n_resolvido": 0, "ret_1h": None, "ret_4h": None, "ret_24h": None, "fluxo_medio": None}
+    if not n:
+        return r
+    for l in linhas:
+        r[l["desfecho"]] = r.get(l["desfecho"], 0) + 1
+    r["n_resolvido"] = r["alvo"] + r["stop"]
+    if r["n_resolvido"]:
+        r["win"] = round(r["alvo"] / r["n_resolvido"] * 100, 1)
+    for h in ("1h", "4h", "24h"):
+        # retorno assinado pela DIREÇÃO do sinal: um SHORT que caiu é retorno positivo
+        rets = [(1 if l["direcao"] == "LONG" else -1) * (l["preco_" + h] / l["preco"] - 1) * 100
+                for l in linhas if l.get("preco_" + h) and l.get("preco")]
+        if rets:
+            r["ret_" + h] = round(sum(rets) / len(rets), 3)
+    fl = [l["fluxo_comprador"] for l in linhas if l.get("fluxo_comprador") is not None]
+    if fl:
+        r["fluxo_medio"] = round(sum(fl) / len(fl), 1)
+    return r
+
+
+def relatorio_fluxo(min_amostra=100):
+    """Compara o desfecho hipotético dos sinais de TENDÊNCIA que o portão de fluxo deixou
+    passar contra os que ele rejeitou.
+
+    Só entram sinais de `tipo='tendencia'` — a reversão nem chega ao portão (é contrarian,
+    `signal_engine.confirmado`), e misturá-la compararia populações diferentes.
+    Só entram sinais com desfecho marcado: sem desfecho não há o que comparar.
+
+    NÃO é P&L. É comparação de SINAL: o mesmo contrafactual (stop = a distância do
+    `stop_sugerido`, alvo = a mesma distância espelhada = 1R) medido em candle de 5m, sem
+    fill, sem taxa e sem funding — nos dois grupos, com a mesma régua.
+    """
+    with conectar() as c:
+        linhas = [dict(r) for r in c.execute(
+            "SELECT status,direcao,preco,preco_1h,preco_4h,preco_24h,desfecho,fluxo_comprador "
+            "FROM sinais WHERE desfecho IS NOT NULL AND tipo='tendencia'")]
+    passou = _resumo_grupo([l for l in linhas if l["status"] != "rejeitado_fluxo"])
+    rejeit = _resumo_grupo([l for l in linhas if l["status"] == "rejeitado_fluxo"])
+
+    delta = z = p = None
+    if passou["win"] is not None and rejeit["win"] is not None:
+        delta = round(passou["win"] - rejeit["win"], 1)
+        # teste z de duas proporções sobre os resolvidos (alvo/stop) — só pra dizer se o
+        # delta sobrevive ao ruído amostral. Não corrige dependência entre sinais da mesma
+        # moeda/hora: é um piso de exigência, não um selo de significância.
+        n1, n2 = passou["n_resolvido"], rejeit["n_resolvido"]
+        p1, p2 = passou["alvo"] / n1, rejeit["alvo"] / n2
+        pool = (passou["alvo"] + rejeit["alvo"]) / (n1 + n2)
+        ep = math.sqrt(pool * (1 - pool) * (1 / n1 + 1 / n2))     # erro padrao da diferenca
+        if ep > 0:
+            z = round((p1 - p2) / ep, 2)
+            p = _erfc_p(z)
+
+    if min(passou["n"], rejeit["n"]) < min_amostra:
+        veredito = (f"amostra insuficiente ({passou['n']} passaram / {rejeit['n']} rejeitados; "
+                    f"o card pede >={min_amostra} de cada) — nao concluir nada ainda")
+    elif delta is None:
+        veredito = "sem desfechos resolvidos (todos 'aberto') — contrafactual nao discrimina"
+    elif p is not None and p > 0.05:
+        veredito = (f"delta {delta:+.1f} p.p. nao se distingue de ruido (p={p}) — "
+                    "o portao ainda nao mostrou valor")
+    elif delta > 0:
+        veredito = f"o portao TEM valor: quem passou acerta {delta:+.1f} p.p. a mais (p={p})"
+    else:
+        veredito = f"o portao e RUIDO ou pior: quem passou acerta {delta:+.1f} p.p. (p={p})"
+
+    return {"passou": passou, "rejeitado": rejeit, "delta_win": delta, "z": z, "p": p,
+            "min_amostra": min_amostra, "veredito": veredito,
+            "nota": "comparacao de SINAL (candle, 1R espelhado), nao de P&L; empate na mesma vela conta stop"}
+
 
 
 if __name__ == "__main__":
