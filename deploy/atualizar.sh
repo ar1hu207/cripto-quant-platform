@@ -28,7 +28,10 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 echo "== 1. backup do banco ANTES de qualquer troca =="
-/usr/local/bin/cripto-backup.sh >/dev/null 2>&1 && echo "backup ok" || {
+# sudo: o script de backup le /etc/cripto-bot-backup.sas (600 root) e escreve em
+# /var/log/cripto-backup.log. Como ubuntu ele falha em "Permission denied" e o deploy
+# aborta aqui - foi o que aconteceu na primeira tentativa de deploy do M2.
+sudo /usr/local/bin/cripto-backup.sh >/dev/null 2>&1 && echo "backup ok" || {
   echo "ABORTADO: o backup falhou. Nao se troca codigo sem copia integra do banco."; exit 1; }
 
 echo "== 2. congela: auto_trade=0 e conta posicoes abertas =="
