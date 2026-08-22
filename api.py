@@ -29,12 +29,34 @@ import autotrader
 from logbot import log
 
 POLL_ATUALIZAR = 15   # marca posições a cada 15s
-CICLOS_POR_SCAN = 4   # roda scan de sinais a cada 4 ciclos (~60s)
+INTERVALO_SCAN = 60   # [P2-15] scan de sinais a cada 60s, por RELÓGIO (ver _scan_devido)
 _worker_on = {"v": True}
 _health = {"iniciado": None, "ultimo_ciclo": None, "ciclos": 0, "erros": 0}
 _saidas = {"v": []}   # recomendações de saída ativa, atualizadas pelo worker
 _auto = {"v": {"ativo": False}}   # último ciclo do auto-trader
 _poda = {"dia": None, "ultimo": None}   # [P2-11] retenção da curva de equity, 1x/dia
+_scan_sched = {"proximo": 0.0}          # [P2-15] instante (monotonic) do próximo scan; 0 = já vence
+
+
+def _scan_devido(agora=None):
+    """[P2-15] O scan vence AGORA? Ao dizer que sim, já reagenda o próximo.
+
+    Era `_health["ciclos"] % CICLOS_POR_SCAN == 0`, avaliado DENTRO do try do ciclo. Quando
+    uma exceção anterior abortava o try (o caso do [P1-1]), aquele slot era perdido e o scan
+    seguinte só vinha 4 ciclos depois: sob falha intermitente o intervalo real virava 2-3
+    minutos, sem ninguém ter decidido isso. Contar ciclos EXECUTADOS mede o que sobreviveu;
+    o que a cadência precisa medir é tempo, e quem mede tempo é relógio.
+
+    Reagenda ANTES de rodar, e é chamada de FORA do try do ciclo — as duas coisas juntas são
+    o card. Reagendamento depois de um `except` que pode ser pulado é o mesmo bug com outra
+    roupa. Está extraída do worker porque a regra não é testável dentro de um `while True`
+    com `sleep`: com o instante como parâmetro, `python api.py` prova a cadência sem esperar.
+    """
+    agora = time.monotonic() if agora is None else agora
+    if agora < _scan_sched["proximo"]:
+        return False
+    _scan_sched["proximo"] = agora + INTERVALO_SCAN
+    return True
 
 
 def equity_total():
@@ -53,8 +75,6 @@ def worker():
             abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
             _saidas["v"] = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
             dca.processar_devidos()                     # aportes DCA vencidos
-            if _health["ciclos"] % CICLOS_POR_SCAN == 0:
-                signal_engine.scan()                    # atualiza sinais
             try:
                 _auto["v"] = autotrader.auto_executar(_saidas["v"])   # bot abre/fecha sozinho (se ligado)
             except Exception as e:                      # falha do bot não derruba o snapshot de equity abaixo
@@ -67,6 +87,17 @@ def worker():
         except Exception as e:                          # nunca derruba o loop
             _health["erros"] += 1
             log(f"worker erro: {e}", "error")
+        # [P2-15] o scan sai de dentro do try acima: falha na marcação não consome mais o
+        # slot da varredura. Fica DEPOIS do ciclo, e não antes, porque marcar posição é o
+        # caminho do stop/liquidação — atrasá-lo pela duração do scan seria trocar um
+        # instrumento impreciso por um risco real. O auto-trader passa a consumir o sinal
+        # no ciclo seguinte (15s), folgado dentro dos `auto_freshness_min` (12 min).
+        if _scan_devido():
+            try:
+                signal_engine.scan()                    # atualiza sinais
+            except Exception as e:                      # já reagendado: erro não trava a cadência
+                _health["erros"] += 1
+                log(f"scan erro: {e}", "error")
         # [P2-11] retenção da curva de equity, 1x por dia. Bloco PRÓPRIO, fora do try
         # acima: faxina de banco não pode nem derrubar o ciclo nem ser derrubada por ele.
         # Marca o dia ANTES de podar — se a poda falhar, ela volta amanhã e não a cada 15s
@@ -775,6 +806,62 @@ def _prova_api():
     check("a forma da curva sobrevive (media %.2f, topo %.2f, fundo %.2f de erro)"
           % (dm, abs(max(am) - max(curva)), abs(min(am) - min(curva))),
           dm < 1 and abs(max(am) - max(curva)) < 1 and abs(min(am) - min(curva)) < 1)
+
+    # ---------- [P2-15] a cadencia do scan para de derivar quando o ciclo falha
+    print("  [P2-15] cadencia do scan (INTERVALO_SCAN=%ds, ciclo=%ds)"
+          % (INTERVALO_SCAN, POLL_ATUALIZAR))
+    ciclos = [i * POLL_ATUALIZAR for i in range(41)]        # 10 minutos de worker
+    aborta = lambda i: i % 3 != 0                          # 2 de cada 3 ciclos abortam o try
+
+    def intervalos(d):
+        return [b - a for a, b in zip(d, d[1:])]
+
+    # O MODELO DO BUG: `ciclos % 4 == 0` avaliado DENTRO do try. O contador sempre avanca,
+    # mas o scan so acontece se o ciclo chegou ate ele -- entao a falha come o slot.
+    antigo = [t for i, t in enumerate(ciclos) if i % 4 == 0 and not aborta(i)]
+    check("modelo do bug: sob falha intermitente a cadencia ANTIGA ia a %ds"
+          % max(intervalos(antigo)), max(intervalos(antigo)) > INTERVALO_SCAN, str(antigo))
+
+    # A CORRECAO: `_scan_devido` e chamada de FORA do try, entao `aborta` nao a alcanca --
+    # por isso a lista abaixo nao filtra por ela. Que esteja fora do try se ve no diff;
+    # que a cadencia nao derive por conta do relogio e o que se prova aqui.
+    _scan_sched["proximo"] = 0.0
+    novo_d = [t for t in ciclos if _scan_devido(float(t))]
+    check("agendado por relogio, o scan vem a cada %ds mesmo com os ciclos falhando"
+          % INTERVALO_SCAN, set(intervalos(novo_d)) == {INTERVALO_SCAN}, str(novo_d))
+
+    # reagendou ANTES de rodar: mesmo que o proprio scan levante, o proximo continua a 60s
+    _scan_sched["proximo"] = 0.0
+    _scan_devido(1000.0)                                   # "rodou" e explodiu logo depois
+    check("scan que levanta nao trava a cadencia (reagenda antes de rodar)",
+          _scan_devido(1000.0 + INTERVALO_SCAN - 1) is False
+          and _scan_devido(1000.0 + INTERVALO_SCAN) is True)
+
+    # ---------- [P2-15] scan verde apaga o erro do painel, sem apagar o forense
+    # /status le o banco; aponta para um TEMPORARIO -- o trading.db local esta vazio.
+    import tempfile
+    db.DB = os.path.join(tempfile.mkdtemp(), "prova_api.db")
+    db.init_db()
+    signal_engine.ultimo_scan.update(ts="2026-08-22 10:00:00", total=3, ok=0, falhas=3,
+                                     ultimo_erro="BTC/USDT 15m: ExchangeError: 451",
+                                     ultimo_erro_historico="2026-08-22 10:00:00 BTC/USDT 15m: "
+                                                           "ExchangeError: 451")
+    st = status()
+    check("scan cego: /status mostra o erro e saudavel=False",
+          st["scan"]["ultimo_erro"] and st["saudavel"] is False, str(st["scan"]))
+    # exatamente o que scan() faz ao comecar uma varredura, agora com ultimo_erro=None
+    signal_engine.ultimo_scan.update(ts="2026-08-22 11:00:00", total=0, ok=0, falhas=0,
+                                     fluxo_indisponivel=0, ultimo_erro=None)
+    signal_engine.ultimo_scan.update(total=3, ok=3, falhas=0)          # varredura 100% verde
+    st = status()
+    check("scan verde depois de scan com falha: /status sem ultimo_erro atual",
+          st["scan"]["ultimo_erro"] is None, str(st["scan"]))
+    check("o forense sobrevive em ultimo_erro_historico",
+          "451" in (st["scan"]["ultimo_erro_historico"] or ""),
+          str(st["scan"]["ultimo_erro_historico"]))
+    check("/status continua expondo saudavel exatamente como hoje", st["saudavel"] is True)
+    check("o contador do [P2-9] segue publicado (sem regressao)",
+          "fluxo_indisponivel" in st["scan"])
 
     print("\n  %d passaram, %d falharam" % (ok, fail))
     return 1 if fail else 0
