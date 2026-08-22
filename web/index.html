@@ -6,67 +6,81 @@
 <title>Cripto Bot — Terminal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- Space Grotesk = titulo/marca (display). Inter = dado (tabular-nums). JetBrains Mono = celula
-     numerica densa. Stylesheet de fonte e a unica excecao a regra "nada de terceiro": ela nao
-     executa JS, entao nao e vetor para roubar a credencial do localStorage, que e o motivo da
-     regra. Ver DESIGN.md > Typography. -->
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Inter, e so Inter: e o que o CMC usa em 647 de 647 elementos com texto (medido). Sem face de
+     display e sem mono -- a hierarquia sai de peso e tamanho. Stylesheet de fonte e a unica
+     excecao a regra "nada de terceiro": ela nao executa JS, entao nao e vetor para roubar a
+     credencial do localStorage, que e o motivo da regra. Ver DESIGN.md > Typography. -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- libs servidas por nós (chart.js 4.4.1, lightweight-charts 4.1.3): sem CDN de terceiro,
      que seria um vetor de XSS capaz de roubar a credencial guardada no localStorage. -->
 <script src="vendor/chart.umd.min.js"></script>
 <script src="vendor/lightweight-charts.standalone.production.js"></script>
 <script src="config.js"></script>
 <style>
-  /* Tokens do tema "mesa de trading a meia-noite". Fonte da verdade: DESIGN.md na raiz do
-     repositorio -- se este bloco e o DESIGN.md divergirem, o DESIGN.md vence. */
+  /* Tokens medidos do CoinMarketCap, tema escuro, com as quatro correcoes de contraste.
+     Fonte da verdade: DESIGN.md na raiz do repositorio -- se este bloco e o DESIGN.md
+     divergirem, o DESIGN.md vence.
+     Nao ha mais alias de transicao aqui: o nome que o CSS usa e o nome que o DESIGN.md
+     declara, e nao existe um segundo nome para a mesma cor. */
   :root{
-    /* canvas / atmosfera */
-    --bg:#0a1020;--bg-grad-top:#0e1730;--aura:rgba(59,130,246,.18);
-    /* superficies: vidro SO no resumo, solido sob qualquer numero que se le */
-    --glass:rgba(23,33,58,.55);--glass-border:rgba(255,255,255,.08);
-    --surface:#131c30;--surface2:#182337;
-    --border:#233150;--border2:#2e3d5e;
-    --txt:#e8ecf5;--muted:#94a1bd;--muted2:#aab4cc;
-    /* azul = marca, nav ativa, foco, acao primaria */
-    --accent:#3b82f6;--accent2:#60a5fa;--accent-bg:rgba(59,130,246,.14);
-    /* verde/vermelho = SO dinheiro e direcao. #f2555e e nao #ea3943 porque o original da 4.18:1
-       sobre --surface e reprova o gate de 4.5:1; este da 5.04:1. Ver DESIGN.md > Color. */
-    --green:#16c784;--green-bg:rgba(22,199,132,.12);--green-b:rgba(22,199,132,.30);
-    --red:#f2555e;--red-bg:rgba(242,85,94,.12);--red-b:rgba(242,85,94,.34);
-    /* --red-on e o vermelho para texto SOBRE tinta vermelha. O --red da 4.42:1 sobre a propria
-       tinta e reprova; este da 5.86:1. Regra irma da do azul: --accent so preenche, --accent2
-       escreve (o --accent da 3.87:1 sobre --accent-bg). */
-    --red-on:#ff8087;
-    --gold:#f0b90b;--gold-bg:rgba(240,185,11,.10);--gold-b:rgba(240,185,11,.26);
-    --accent-b:rgba(59,130,246,.28);
-    /* grade de grafico: mais escura que --border, senao vira gaiola por cima da vela */
-    --grid:#1b2540;
+    /* Superficie e linha. A borda de 1px em --line e o separador universal deste tema:
+       quem separa e a aresta, nao a sombra.
+       --bg-el e o --c-color-background-1 deles (#171924), o fundo RAISED do chrome --
+       topbar e status bar. O nome nao reaproveita o do alias morto do tema navy de
+       proposito: alias e token compartilhando nome foi o que confundiu o M5. */
+    --bg:#0D1421;--bg-el:#171924;--surface:#222531;--surface2:#2B2E3D;
+    --line:#323546;--line2:#53596A;
+    /* Texto. --txt3 e o caption CORRIGIDO: o #646B80 deles da 2.87:1 sobre --surface. */
+    --txt:#FFFFFF;--txt2:#A1A7BB;--txt3:#9197A9;
+    /* Azul tem dois papeis porque texto colorido sobre a propria tinta e onde tema escuro
+       reprova sem avisar: --accent PREENCHE (botao, barra, marca, borda de chip ativo),
+       --accent-txt ESCREVE (link, aba ativa, numero azul). O #6188FF deles da 4.15:1 no
+       elevado; o --accent como texto da 3.4:1 e reprovaria em qualquer superficie. */
+    --accent:#3861FB;--accent-hover:#2444D4;--accent-txt:#6B90FF;--accent-bg:#1E274F;
+    /* Semanticos: SO dinheiro e direcao. --neg e o #EA3943 deles CORRIGIDO (dava 3.75:1 no
+       card e 3.55:1 sobre a propria tinta); este da 4.86:1 sobre --neg-bg. */
+    --pos:#16C784;--pos-bg:#173C37;
+    --neg:#EF6C73;--neg-bg:#411F2A;
+    --warn:#F5B97F;--warn-bg:#433936;
+    /* Variacao de alpha DECLARADA (a unica excecao a "nenhuma cor fora de token"): borda de
+       chip/banner semantico, o proprio token a 34% -- o valor que o DESIGN.md fixa para o
+       botao destrutivo, estendido aos irmaos para nao inventar um segundo numero. */
+    --pos-b:rgba(22,199,132,.34);--neg-b:rgba(239,108,115,.34);--warn-b:rgba(245,185,127,.34);
+    /* Forma. Raio concentrado em 4 e 8, que e o uso real medido no CMC (211 e 143 elementos).
+       Sombra so na camada que flutua de verdade; o resto separa com aresta. */
+    --r-sm:4px;--r:8px;--r-pill:999px;
+    --shadow-overlay:0 8px 32px rgba(13,20,33,.5),0 1px 2px rgba(13,20,33,.4);
+    --overlay-bg:rgba(23,25,36,.6);
+    /* Tipografia: Inter e so Inter, escala medida no :root deles. */
+    --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    --fs-50:11px;--fs-75:12px;--fs-100:14px;--fs-200:16px;--fs-300:18px;
+    --fs-600:20px;--fs-800:25px;--fs-1000:32px;
+    --lh-head:1.3;--lh-body:1.5;
+    /* motion */
     --ease:cubic-bezier(.2,.8,.25,1);--dur:.15s;--dur2:.28s;
-    --r-card:16px;--r-inner:10px;
-    --shadow:0 10px 30px rgba(0,0,0,.35);
-    --blur:14px;
-    --font-display:'Space Grotesk',system-ui,sans-serif;
-    --font-ui:'Inter',system-ui,sans-serif;
-    --font-mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',monospace;
-    /* Aliases de transicao: os paineis ainda nao migrados (P2-22 a P2-24) miram estes nomes.
-       Somem quando o ultimo painel migrar. Nao usar em codigo novo. */
-    --bg2:var(--surface);--card:var(--surface);--card2:var(--surface2);--mono:var(--font-mono);
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:var(--font-ui);background:var(--bg);color:var(--txt);min-height:100vh;
-    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden;
-    background-image:radial-gradient(1100px 600px at 85% -10%,var(--aura),transparent),
-                     linear-gradient(180deg,var(--bg-grad-top),var(--bg) 640px);
-    background-attachment:fixed}
+  /* Peso 500 como base e marca do CMC (507 de 647 elementos deles), e e o que segura a
+     hierarquia sem uma segunda familia.
+     tabular-nums no body e DESVIO DECLARADO: o CMC usa `normal` (medido). Aqui todo numero
+     e repintado a cada 3s pelo poll e, sem tabular, a coluna muda de largura entre dois
+     polls. Legibilidade em movimento ganha de fidelidade. */
+  body{font-family:var(--font);background:var(--bg);color:var(--txt);min-height:100vh;
+    font-size:var(--fs-100);font-weight:500;line-height:var(--lh-body);
+    font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;overflow-x:hidden}
   /* minmax(0,1fr) e obrigatorio: sem ele a coluna de conteudo e dimensionada por max-content e
      qualquer tabela larga empurra a pagina para o scroll horizontal. */
   .shell{display:grid;grid-template-columns:232px minmax(0,1fr);align-items:start}
   .main{min-width:0;padding:22px 26px 40px}
-  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
-  .pos{color:var(--green)}.neg{color:var(--red)}.mut{color:var(--muted)}
+  /* .mono continua existindo porque o JS escreve class="mono" em dezenas de lugares e nao
+     pode ser tocado. O que mudou e o que a classe FAZ: nao ha mais familia monoespacada,
+     so a garantia de numero tabular sobre a Inter. */
+  .mono{font-variant-numeric:tabular-nums}
+  .pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--txt3)}
   /* transicao nomeada em vez de `transition:.15s`: `all` faz o browser observar toda
      propriedade, inclusive as que causam layout. Aqui so muda cor e brilho. */
-  button{font-family:inherit;cursor:pointer;border:none;border-radius:9px;font-weight:600;
+  button{font-family:inherit;cursor:pointer;border:none;border-radius:var(--r-sm);font-weight:600;
+    font-size:var(--fs-100);
     transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease),
                color var(--dur) var(--ease),filter var(--dur) var(--ease)}
   @media (hover:hover){button:hover{filter:brightness(1.12)}}
@@ -80,61 +94,64 @@
   /* auto-trader */
   /* borda so, sem o anel extra: uma coisa por elemento. Azul e nao verde porque "bot ligado" e
      estado de interface, e verde aqui e vocabulario de dinheiro. */
-  #auto-panel.on{border-color:var(--accent-b)}
-  /* Ativar e a acao primaria do painel: azul solido com texto escuro (5.15:1). Desativar e a
+  #auto-panel.on{border-color:var(--accent)}
+  /* Ativar e a acao primaria do painel: azul solido com texto branco (4.92:1). Desativar e a
      acao de parar, e ai o vermelho E o significado -- mesma logica do botao Panico. */
-  .btn-auto{background:var(--accent);color:var(--bg);border:1px solid transparent;font-weight:700;padding:9px 16px;font-size:14px}
-  .btn-auto.on{background:var(--red-bg);color:var(--red-on);border-color:var(--red-b)}
+  .btn-auto{background:var(--accent);color:var(--txt);border:1px solid transparent;font-weight:700;padding:9px 16px;font-size:var(--fs-100)}
+  .btn-auto.on{background:var(--neg-bg);color:var(--neg);border-color:var(--neg-b)}
   .auto-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
   .auto-cfg{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px}
-  .auto-cfg label{font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
-  .auto-cfg input{width:82px;background:var(--surface2);border:1px solid var(--border);color:var(--txt);border-radius:var(--r-inner);padding:7px 9px;font-size:13px}
-  .auto-warn{font-size:11.5px;color:var(--gold);background:var(--gold-bg);border:1px solid var(--gold-b);border-radius:var(--r-inner);padding:9px 11px;margin-top:10px;line-height:1.5}
-  .auto-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted2);vertical-align:middle}
-  .auto-badge.on{background:var(--green);animation:pulse 2s infinite}
+  .auto-cfg label{font-size:11px;color:var(--txt3);display:flex;flex-direction:column;gap:3px}
+  .auto-cfg input{width:82px;background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);padding:7px 9px;font-size:13px}
+  .auto-warn{font-size:11.5px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-b);border-radius:var(--r-sm);padding:9px 11px;margin-top:10px;line-height:1.5}
+  .auto-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
+  .auto-badge.on{background:var(--pos);animation:pulse 2s infinite}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
-  input{font-family:var(--mono);background:var(--bg);border:1px solid var(--border2);color:var(--txt);
-    border-radius:9px;padding:11px 13px;font-size:16px;width:100%}
-  input:focus{outline:none;border-color:var(--accent)}
+  /* input do DESIGN.md: fundo --surface2, borda --line2, raio 4. O foco troca a borda para
+     --accent e poe o anel de 3px do --input-shadow-color-focus deles. */
+  input{font-family:inherit;background:var(--surface2);border:1px solid var(--line2);color:var(--txt);
+    border-radius:var(--r-sm);padding:11px 13px;font-size:var(--fs-100);width:100%}
+  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,97,251,.3)}
 
   /* ---------- sidebar (substitui header + toolbar + abas) ----------
      Chrome, nao dado: por isso pode ser translucida. A regra "vidro so no resumo" existe para
      proteger a legibilidade de numero, e aqui nao assenta numero nenhum. */
   .nav{position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column;gap:22px;
-    padding:20px 14px;border-right:1px solid var(--border);background:rgba(13,20,40,.78);
-    backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur))}
+    padding:20px 14px;border-right:1px solid var(--line);background:var(--bg-el)}
   .brand{display:flex;align-items:center;gap:11px;padding:0 5px}
   .logo{width:38px;height:38px;flex:none;border-radius:11px;
-    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    background:linear-gradient(135deg,var(--accent),var(--accent-txt));
     display:grid;place-items:center;font-size:20px}
-  .bname{font-family:var(--font-display);font-size:16px;font-weight:700;letter-spacing:-.2px;line-height:1.2}
-  .brand .sub{font-size:10.5px;color:var(--muted);letter-spacing:.9px;text-transform:uppercase;margin-top:2px}
+  .bname{font-size:16px;font-weight:700;letter-spacing:-.2px;line-height:1.2}
+  .brand .sub{font-size:10.5px;color:var(--txt3);letter-spacing:.9px;text-transform:uppercase;margin-top:2px}
   .nav-sec{display:flex;flex-direction:column;gap:5px}
   .nav-lbl{font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
-    color:var(--muted);padding:0 11px;margin-bottom:3px}
+    color:var(--txt3);padding:0 11px;margin-bottom:3px}
   .nav-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px}
   /* item de nav: mantem a classe .tab porque aba() mira document.querySelectorAll('.tab') */
   .tab{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;
-    background:transparent;color:var(--muted2);padding:10px 11px;border:1px solid transparent;
-    font-size:13.5px;font-weight:600;border-radius:var(--r-inner)}
+    background:transparent;color:var(--txt2);padding:10px 11px;border:1px solid transparent;
+    font-size:13.5px;font-weight:600;border-radius:var(--r-sm)}
   .tab svg,.nav button svg{width:18px;height:18px;flex:none}
   @media(hover:hover){.tab:hover{background:var(--surface2);color:var(--txt);filter:none}}
-  .tab.on{background:var(--accent-bg);color:var(--accent2);border-color:rgba(59,130,246,.28)}
+  .tab.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
   .nav button{width:100%;display:flex;align-items:center;gap:10px;text-align:left;font-size:13px}
-  .badge{display:flex;align-items:center;gap:8px;background:var(--surface2);color:var(--muted2);
-    padding:8px 12px;border-radius:var(--r-inner);font-size:11.5px;font-weight:600;
-    border:1px solid var(--border);letter-spacing:.4px}
-  .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--green);animation:pulse 1.8s infinite}
+  .badge{display:flex;align-items:center;gap:8px;background:var(--surface2);color:var(--txt2);
+    padding:8px 12px;border-radius:var(--r-sm);font-size:11.5px;font-weight:600;
+    border:1px solid var(--line);letter-spacing:.4px}
+  /* o anel do pulso e variacao de alpha DECLARADA do --pos (#16C784 = 22,199,132): keyframes
+     nao aceita var() dentro de box-shadow em todo browser sem reflow, entao fica literal aqui. */
+  .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos);animation:pulse 1.8s infinite}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,199,132,.6)}70%{box-shadow:0 0 0 9px rgba(22,199,132,0)}100%{box-shadow:0 0 0 0 rgba(22,199,132,0)}}
-  .btn-sec{background:var(--surface2);color:var(--muted2);padding:9px 12px;border:1px solid var(--border)}
-  .btn-danger{background:transparent;color:var(--muted2);padding:9px 12px;border:1px solid var(--border)}
-  @media(hover:hover){.btn-danger:hover{color:var(--red);border-color:rgba(242,85,94,.38);filter:none}}
+  .btn-sec{background:var(--surface2);color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
+  .btn-danger{background:transparent;color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
+  @media(hover:hover){.btn-danger:hover{color:var(--neg);border-color:var(--neg-b);filter:none}}
 
   /* ---------- topbar ---------- */
   .topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:22px}
-  .topbar h1{font-family:var(--font-display);font-size:21px;font-weight:700;letter-spacing:-.3px}
-  .topbar .sub{font-size:11.5px;color:var(--muted);margin-top:4px}
+  .topbar h1{font-size:21px;font-weight:700;letter-spacing:-.3px}
+  .topbar .sub{font-size:11.5px;color:var(--txt3);margin-top:4px}
 
   /* ---------- bento ----------
      Linha de resumo (hero + 3 stats) e, abaixo, coluna principal + trilho. O que se le em
@@ -146,20 +163,18 @@
 
   /* hero: o unico elemento de vidro+aura da tela. Signature move do DESIGN.md. */
   .hero{position:relative;overflow:hidden;display:flex;flex-direction:column;min-height:178px;
-    background:var(--glass);border:1px solid var(--glass-border);border-radius:var(--r-card);
-    padding:18px 20px 0;box-shadow:var(--shadow);
-    backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur))}
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:18px 20px 0}
   .hero::before{content:"";position:absolute;top:-55%;right:-20%;width:75%;height:170%;pointer-events:none;
     background:radial-gradient(closest-side,rgba(59,130,246,.32),transparent)}
   .hero>*{position:relative}
   /* stat card: superficie solida, borda definida, NENHUMA sombra (uma coisa por elemento) */
   /* centrado na vertical: o stat card estica ate a altura do hero, e com o conteudo ancorado no
      topo sobrava um vazio de ~90px embaixo do numero. */
-  .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
     padding:18px 20px;display:flex;flex-direction:column;justify-content:center}
-  .lbl{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
-  /* sem font-family aqui de proposito: o .mono do HTML vence e da tabular-nums, senao o valor
-     muda de largura a cada poll de 3s. Space Grotesk fica nos titulos, nao nos numeros. */
+  .lbl{font-size:11px;color:var(--txt3);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  /* tabular vem do body agora: sem ele o valor muda de largura a cada poll de 3s. */
   .hero .val{font-size:38px;font-weight:700;line-height:1.05;margin-top:9px;letter-spacing:-1.2px}
   .stat .val{font-size:26px;font-weight:700;line-height:1.1;margin-top:9px;letter-spacing:-.5px}
   .delta{font-size:13.5px;font-weight:600;margin-top:7px}
@@ -167,123 +182,125 @@
   .spark{margin:auto -20px 0;height:54px;pointer-events:none}
   .spark svg{display:block;width:100%;height:54px}
 
-  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:18px 20px;margin-top:14px}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin-top:14px}
   /* flex-wrap: no trilho de 372px o subtitulo espremia o titulo ate quebrar "AUTO-TRADE" no meio
      da palavra. Agora o subtitulo desce pra propria linha e o titulo fica inteiro. */
-  .panel h2{font-family:var(--font-display);font-size:12.5px;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
+  .panel h2{font-size:12.5px;font-weight:600;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:14px;display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
   /* no trilho de 372px uma tabela de 540px rolaria pra sempre; 300px cabe sem scroll */
   .rail #dca>table,.rail #metricas table{min-width:300px}
 
-  .sig{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-inner);padding:14px;margin-bottom:10px}
+  .sig{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;margin-bottom:10px}
   .sig:last-child{margin-bottom:0}
   .sig .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
   .sig .ativo{font-weight:700;font-size:15px}
-  .sig .why{font-size:12px;color:var(--muted);margin:6px 0 11px}
+  .sig .why{font-size:12px;color:var(--txt3);margin:6px 0 11px}
   .conv{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
   /* placar de 0 a 100, nao P&L: por isso azul. O gradiente gold->verde de antes gastava o
      vocabulario de dinheiro num numero que nao e dinheiro, e competia com o P&L ao lado. */
   .convbar{width:54px;height:6px;border-radius:3px;background:var(--surface);overflow:hidden}
-  .convbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .convbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-txt))}
   .tag{display:inline-block;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700}
-  .tag.long{background:var(--green-bg);color:var(--green)}.tag.short{background:var(--red-bg);color:var(--red-on)}
+  .tag.long{background:var(--pos-bg);color:var(--pos)}.tag.short{background:var(--neg-bg);color:var(--neg)}
   .sig .acts{display:flex;gap:8px}
-  /* Operar e a acao primaria da tela inteira: azul solido, texto escuro (5.15:1). Era um
+  /* Operar e a acao primaria da tela inteira: azul solido, texto branco (4.92:1). Era um
      gradiente verde-teal, que sugeria "lucro" antes mesmo do trade existir. */
-  .btn-op{flex:1;background:var(--accent);color:var(--bg);padding:10px;font-weight:700}
-  .btn-skip{background:var(--surface);color:var(--muted2);padding:10px 14px;border:1px solid var(--border)}
+  .btn-op{flex:1;background:var(--accent);color:var(--txt);padding:10px;font-weight:700}
+  .btn-skip{background:var(--surface);color:var(--txt2);padding:10px 14px;border:1px solid var(--line)}
 
+  /* Tabela do DESIGN.md: th 12px/700 em --txt3, td 14px/500, e a separacao e sempre a
+     hairline --line embaixo -- sem zebra, que em tema escuro briga com as tintas de linha. */
   table{width:100%;border-collapse:collapse}
-  th{text-align:left;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:700;padding:0 0 10px}
-  /* separador leve no topo da celula, sem borda externa: a moldura ja e o card */
-  td{padding:10px 0;border-top:1px solid var(--border);font-size:13px;vertical-align:middle}
-  tr:first-child td{border-top:none}
-  .empty{color:var(--muted2);text-align:center;padding:22px 0;font-size:13px}
-  .empty.off{color:var(--red)}
+  th{text-align:left;font-size:var(--fs-75);color:var(--txt3);font-weight:700;
+    padding:10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:12px 10px;border-bottom:1px solid var(--line);font-size:var(--fs-100);
+    font-weight:500;vertical-align:middle}
+  .empty{color:var(--txt2);text-align:center;padding:22px 0;font-size:var(--fs-100)}
+  .empty.off{color:var(--neg)}
   /* skeleton de carregamento (some no 1o /estado) */
   .skel-wrap{padding:8px 2px}
-  .skel{position:relative;overflow:hidden;background:var(--card2);border-radius:7px;height:14px;margin:9px 0}
+  .skel{position:relative;overflow:hidden;background:var(--surface2);border-radius:var(--r-sm);height:14px;margin:9px 0}
   .skel.lg{height:40px;margin:12px 0}
   .skel.sm{height:11px}
   .skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
     background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent);animation:shimmer 1.4s infinite}
   @keyframes shimmer{100%{transform:translateX(100%)}}
   @media (prefers-reduced-motion:reduce){.skel::after{animation:none}}
-  .btn-close{background:var(--red-bg);color:var(--red-on);padding:5px 11px;font-size:12px;border:1px solid var(--red-b)}
+  .btn-close{background:var(--neg-bg);color:var(--neg);padding:5px 11px;font-size:12px;border:1px solid var(--neg-b)}
   .mstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:12px}
-  .mstat{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-inner);padding:12px 14px;display:flex;flex-direction:column;gap:5px}
+  .mstat{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;display:flex;flex-direction:column;gap:5px}
   .mstat span{font-size:11px}
   /* tabular-nums: sem isto a grade de tiles dança de largura a cada poll */
   .mstat b{font-size:20px;font-weight:700;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
-  #tv-ativo{background:var(--surface2);border:1px solid var(--border);color:var(--txt);border-radius:var(--r-inner);
+  #tv-ativo{background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);
     padding:6px 11px;font-family:inherit;font-weight:600;font-size:13px}
   #tvchart{width:100%;height:calc(100vh - 248px);min-height:420px}
   /* o full-bleed de 100vw morreu com o .wrap: dentro do shell com sidebar ele vazava por baixo
      da nav. A coluna de conteudo ja da a largura toda. */
   #view-grafico{width:100%;padding:0}
   .tv-tfs{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
-  .tv-tfs button{background:var(--surface2);color:var(--muted2);border:1px solid var(--border);font-size:11px;padding:5px 10px;border-radius:7px;font-weight:600;cursor:pointer}
+  .tv-tfs button{background:var(--surface2);color:var(--txt2);border:1px solid var(--line);font-size:11px;padding:5px 10px;border-radius:7px;font-weight:600;cursor:pointer}
   /* selecionado e estado de interface: azul, nao verde */
-  .tv-tfs button.on{background:var(--accent-bg);color:var(--accent2);border-color:var(--accent-b)}
-  .tv-expand{background:var(--surface2);color:var(--muted2);border:1px solid var(--border);font-size:11px;padding:5px 11px;border-radius:7px;font-weight:600;cursor:pointer;float:right}
+  .tv-tfs button.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
+  .tv-expand{background:var(--surface2);color:var(--txt2);border:1px solid var(--line);font-size:11px;padding:5px 11px;border-radius:7px;font-weight:600;cursor:pointer;float:right}
   .expandido .grafico-side{display:none}
   .expandido .grafico-layout{grid-template-columns:1fr}
-  .tv-ind{background:var(--surface2);color:var(--muted2);border:1px solid var(--border);font-size:11px;padding:5px 11px;border-radius:7px;font-weight:600;cursor:pointer;float:right;margin-right:8px}
-  .tv-ind.on{background:var(--accent-bg);color:var(--accent2);border-color:var(--accent-b)}
-  /* --accent2 e nao --accent: o --accent como TEXTO sobre superficie da 4.28:1 e reprova */
-  .btn-analise{background:var(--surface);color:var(--accent2);padding:8px 13px;border:1px solid var(--border)}
-  .analise-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-inner);padding:13px;margin-bottom:14px}
-  .grid-ind{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin-top:11px;font-size:12.5px;font-family:var(--mono)}
+  .tv-ind{background:var(--surface2);color:var(--txt2);border:1px solid var(--line);font-size:11px;padding:5px 11px;border-radius:7px;font-weight:600;cursor:pointer;float:right;margin-right:8px}
+  .tv-ind.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
+  /* --accent-txt e nao --accent: o --accent como TEXTO sobre superficie da 4.28:1 e reprova */
+  .btn-analise{background:var(--surface);color:var(--accent-txt);padding:8px 13px;border:1px solid var(--line)}
+  .analise-box{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;margin-bottom:14px}
+  .grid-ind{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin-top:11px;font-size:12.5px;}
   .grid-ind b{text-align:right}
-  .fund-alert{font-size:12.5px;padding:10px 13px;border-radius:var(--r-inner);background:var(--surface2);color:var(--muted2);margin-bottom:12px;border:1px solid var(--border)}
-  .fund-alert.on{background:var(--gold-bg);color:var(--gold);font-weight:600;border-color:var(--gold-b)}
+  .fund-alert{font-size:12.5px;padding:10px 13px;border-radius:var(--r-sm);background:var(--surface2);color:var(--txt2);margin-bottom:12px;border:1px solid var(--line)}
+  .fund-alert.on{background:var(--warn-bg);color:var(--warn);font-weight:600;border-color:var(--warn-b)}
   .fund-list{display:grid;gap:6px}
   .fund-row{display:grid;grid-template-columns:62px 1fr 92px 70px;gap:10px;align-items:center;font-size:12px}
   .fund-a{font-weight:600}
   .fund-bar{height:7px;background:var(--surface2);border-radius:4px;overflow:hidden}
   .fund-bar i{display:block;height:100%;border-radius:4px}
-  .fund-v{font-family:var(--mono);font-weight:600;text-align:right}
+  .fund-v{font-weight:600;text-align:right}
   .dca-form{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
-  .dca-form select{width:auto;background:var(--surface2);border:1px solid var(--border);color:var(--txt);border-radius:var(--r-inner);padding:8px 11px;font-family:inherit;font-weight:600;font-size:13px}
+  .dca-form select{width:auto;background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);padding:8px 11px;font-family:inherit;font-weight:600;font-size:13px}
   .dca-form input{width:80px;padding:8px 10px;font-size:13px}
   /* aportar e acao, nao dinheiro: azul. O verde aqui roubava a leitura do P&L ao lado. */
-  .btn-sug{background:var(--accent-bg);color:var(--accent2);border:1px solid var(--accent-b);padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;margin-left:7px}
-  .aviso-liq{background:var(--red-bg);color:var(--red-on);font-size:11.5px;padding:8px 11px;border-radius:7px;margin:7px 0;line-height:1.45}
-  .btn-panico{background:var(--red-bg);color:var(--red-on);padding:9px 12px;border:1px solid var(--red-b);font-weight:700}
-  .rg-banner{padding:11px 14px;border-radius:var(--r-inner);font-weight:600;font-size:13px;margin-bottom:14px}
-  .rg-banner.trava{background:var(--red-bg);color:var(--red-on);border:1px solid var(--red-b)}
-  .rg-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-inner);padding:9px 14px}
+  .btn-sug{background:var(--accent-bg);color:var(--accent-txt);border:1px solid var(--accent);padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;margin-left:7px}
+  .aviso-liq{background:var(--neg-bg);color:var(--neg);font-size:11.5px;padding:8px 11px;border-radius:7px;margin:7px 0;line-height:1.45}
+  .btn-panico{background:var(--neg-bg);color:var(--neg);padding:9px 12px;border:1px solid var(--neg-b);font-weight:700}
+  .rg-banner{padding:11px 14px;border-radius:var(--r-sm);font-weight:600;font-size:13px;margin-bottom:14px}
+  .rg-banner.trava{background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
+  .rg-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 14px}
   .rg-bar{flex:1;min-width:80px;height:7px;background:var(--surface2);border-radius:4px;overflow:hidden}
-  .rg-bar i{display:block;height:100%;background:var(--red);border-radius:4px}
+  .rg-bar i{display:block;height:100%;background:var(--neg);border-radius:4px}
   .hidden{display:none}
   .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
   @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
   .grafico-side{max-height:calc(100vh - 248px);overflow:auto}
-  .gs-titulo{font-family:var(--font-display);font-size:11px;color:var(--muted2);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px}
-  .why-lbl{font-size:10px;color:var(--muted2);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-right:4px}
-  .tf-badge{background:var(--surface);color:var(--muted);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600}
+  .gs-titulo{font-size:11px;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px}
+  .why-lbl{font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-right:4px}
+  .tf-badge{background:var(--surface);color:var(--txt3);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600}
   .tipo-badge{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:600}
   /* categoria do setup, nao resultado: sai do verde. Reversao fica em gold porque e o
      contra-tendencia, e gold aqui e o aviso. */
-  .tipo-tendencia{background:var(--accent-bg);color:var(--accent2)}
-  .tipo-reversao{background:var(--gold-bg);color:var(--gold)}
+  .tipo-tendencia{background:var(--accent-bg);color:var(--accent-txt)}
+  .tipo-reversao{background:var(--warn-bg);color:var(--warn)}
   .cmp{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px;margin-top:7px}
   .cmp b{color:var(--txt)}
   .entry-status{margin:9px 0 2px;font-size:12px;font-weight:600;padding:5px 9px;border-radius:6px}
   /* "ainda vale entrar?" fala de oportunidade de dinheiro: verde/vermelho ficam. */
-  .st-ok{background:var(--green-bg);color:var(--green)}
-  .st-tight{background:var(--gold-bg);color:var(--gold)}
-  .st-late{background:var(--surface);color:var(--muted2)}
-  .st-no{background:var(--red-bg);color:var(--red-on)}
-  .st-wait{background:var(--surface);color:var(--muted)}
+  .st-ok{background:var(--pos-bg);color:var(--pos)}
+  .st-tight{background:var(--warn-bg);color:var(--warn)}
+  .st-late{background:var(--surface);color:var(--txt2)}
+  .st-no{background:var(--neg-bg);color:var(--neg)}
+  .st-wait{background:var(--surface);color:var(--txt3)}
   .sig-dim{opacity:.55}
-  .why-chip{display:inline-block;background:var(--surface);color:var(--muted2);font-size:11px;padding:3px 9px;border-radius:6px;margin:2px 3px 2px 0;border:1px solid var(--border)}
+  .why-chip{display:inline-block;background:var(--surface);color:var(--txt2);font-size:11px;padding:3px 9px;border-radius:6px;margin:2px 3px 2px 0;border:1px solid var(--line)}
   .saida td{padding:7px 10px!important;font-size:12px}
-  .saida-forte td,.saida-forte.saida-side{background:rgba(22,199,132,.16);color:var(--green);font-weight:600}
-  .saida-lucro td,.saida-lucro.saida-side{background:rgba(240,185,11,.14);color:var(--gold)}
-  .saida-alvo td,.saida-alvo.saida-side{background:var(--gold-bg);color:var(--gold)}
-  .saida-risco td,.saida-risco.saida-side{background:rgba(242,85,94,.16);color:var(--red-on)}
+  .saida-forte td,.saida-forte.saida-side{background:var(--pos-bg);color:var(--pos);font-weight:600}
+  .saida-lucro td,.saida-lucro.saida-side{background:var(--warn-bg);color:var(--warn)}
+  .saida-alvo td,.saida-alvo.saida-side{background:var(--warn-bg);color:var(--warn)}
+  .saida-risco td,.saida-risco.saida-side{background:var(--neg-bg);color:var(--neg)}
   /* vender realiza dinheiro: verde e o significado. Texto escuro sobre o verde da 8.64:1. */
-  .btn-vender{background:var(--green);color:#04130c;border:none;padding:4px 12px;border-radius:6px;font-weight:700;font-size:11px;float:right;cursor:pointer}
+  .btn-vender{background:var(--pos);color:#04130c;border:none;padding:4px 12px;border-radius:6px;font-weight:700;font-size:11px;float:right;cursor:pointer}
 
   /* ---------- responsivo ----------
      1180px: o trilho desce e vira largura cheia. 900px: a sidebar vira barra de topo.
@@ -300,7 +317,7 @@
   @media(max-width:900px){
     .shell{grid-template-columns:minmax(0,1fr)}
     .nav{position:static;height:auto;overflow:visible;flex-direction:row;flex-wrap:wrap;
-      align-items:center;gap:10px;padding:12px 16px;border-right:none;border-bottom:1px solid var(--border)}
+      align-items:center;gap:10px;padding:12px 16px;border-right:none;border-bottom:1px solid var(--line)}
     .nav-sec{flex-direction:row;flex-wrap:wrap;gap:6px}
     .nav-lbl{display:none}
     .nav-foot{margin-top:0;flex-direction:row;align-items:center;gap:8px;margin-left:auto}
@@ -326,26 +343,26 @@
   .overlay.on{display:flex}
   /* sombra E hairline branca quase invisivel: a hairline aqui e reflexo de borda, nao aresta.
      Superficie de dado usa o contrario (aresta definida, zero sombra). */
-  .modal{background:var(--surface);border:1px solid var(--glass-border);border-radius:var(--r-card);
+  .modal{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
     padding:24px;width:420px;max-width:100%;box-shadow:0 30px 80px rgba(0,0,0,.55);
     animation:modalIn var(--dur2) var(--ease) both}
   /* transform-origin sai do botao que abriu (setado em abrirModal): o dialogo cresce de onde
      voce clicou, em vez de aparecer do nada no meio da tela. */
   @keyframes modalIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
-  .modal h3{font-family:var(--font-display);font-size:18px;font-weight:700;margin-bottom:4px}
-  .modal .msub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
-  .field{margin-bottom:14px}.field label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:6px}
-  .preview{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-inner);padding:13px;font-size:13px;margin:4px 0 18px;font-variant-numeric:tabular-nums}
+  .modal h3{font-size:18px;font-weight:700;margin-bottom:4px}
+  .modal .msub{font-size:12.5px;color:var(--txt3);margin-bottom:18px}
+  .field{margin-bottom:14px}.field label{display:block;font-size:12px;color:var(--txt3);font-weight:600;margin-bottom:6px}
+  .preview{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;font-size:13px;margin:4px 0 18px;font-variant-numeric:tabular-nums}
   .preview .row{display:flex;justify-content:space-between;padding:3px 0}
-  .warn{color:var(--gold)}.modal .mbtns{display:flex;gap:10px}
-  /* primario por ranking, nao por significado: azul solido, texto escuro (5.15:1) */
-  .btn-conf{flex:1;background:var(--accent);color:var(--bg);padding:13px;font-size:15px;font-weight:700}
-  .btn-cancel{background:var(--surface2);color:var(--muted2);padding:13px 18px;border:1px solid var(--border)}
+  .warn{color:var(--warn)}.modal .mbtns{display:flex;gap:10px}
+  /* primario por ranking, nao por significado: azul solido, texto branco (4.92:1) */
+  .btn-conf{flex:1;background:var(--accent);color:var(--txt);padding:13px;font-size:15px;font-weight:700}
+  .btn-cancel{background:var(--surface2);color:var(--txt2);padding:13px 18px;border:1px solid var(--line)}
 
   /* so transform e opacity animam, e nomeados: `transition:.3s` fazia o browser vigiar tudo */
   #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);
-    border:1px solid var(--border2);border-radius:var(--r-inner);padding:13px 20px;font-weight:600;opacity:0;
-    box-shadow:var(--shadow);z-index:60;
+    border:1px solid var(--line2);border-radius:var(--r-sm);padding:13px 20px;font-weight:600;opacity:0;
+    box-shadow:var(--shadow-overlay);z-index:60;
     transition:transform var(--dur2) var(--ease),opacity var(--dur2) var(--ease)}
   #toast.on{transform:translateX(-50%) translateY(0);opacity:1}
   /* ---------- gate de login ----------
@@ -378,7 +395,7 @@
 
   .gate-card{position:relative;width:404px;max-width:100%;padding:32px 30px 20px;
     background:var(--surface);
-    border:1px solid var(--glass-border);border-radius:18px;
+    border:1px solid var(--line);border-radius:18px;
     box-shadow:0 34px 90px -24px rgba(0,0,0,.85);
     animation:gateIn .5s cubic-bezier(.2,.8,.25,1) both}
   @keyframes gateIn{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
@@ -399,60 +416,60 @@
   @keyframes gateShake{10%,90%{transform:translateX(-2px)}30%,70%{transform:translateX(4px)}50%{transform:translateX(-5px)}}
 
   .gate-mark{width:56px;height:56px;margin:0 auto 15px;border-radius:16px;position:relative;
-    background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--accent),var(--accent-txt));display:grid;place-items:center;
     font-size:28px;box-shadow:0 12px 34px -8px rgba(59,130,246,.55)}
   .gate-mark::after{content:"";position:absolute;inset:-6px;border-radius:22px;
     border:1px solid rgba(59,130,246,.30);animation:gateRing 3s ease-out infinite}
   @keyframes gateRing{0%{transform:scale(.92);opacity:.9}70%{transform:scale(1.14);opacity:0}100%{opacity:0}}
 
   .gate-h{text-align:center;font-size:20px;font-weight:700;letter-spacing:-.4px}
-  .gate-h span{color:var(--muted);font-weight:500}
-  .gate-sub{text-align:center;font-family:var(--mono);font-size:10.5px;color:var(--muted2);
+  .gate-h span{color:var(--txt3);font-weight:500}
+  .gate-sub{text-align:center;font-size:10.5px;color:var(--txt2);
     text-transform:uppercase;letter-spacing:1.7px;margin-top:6px}
 
   /* Estado do backend ao vivo. /health e a unica rota sem autenticacao, entao da pra dizer
      "o backend esta de pe" ANTES de a pessoa digitar -- e nao confundir senha errada com
      servico fora do ar, que e o que os dois prompt() do navegador nunca souberam fazer. */
   .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:17px auto 20px;
-    width:fit-content;font-family:var(--mono);font-size:11px;font-weight:600;padding:7px 13px;
-    border-radius:20px;border:1px solid var(--border);background:var(--card2);color:var(--muted)}
-  .gate-status .dot{background:var(--muted2);animation:none}
-  .gate-status.up{color:var(--green);background:var(--green-bg);border-color:rgba(22,199,132,.28)}
-  .gate-status.up .dot{background:var(--green);animation:pulse 1.8s infinite}
-  .gate-status.down{color:var(--red-on);background:var(--red-bg);border-color:var(--red-b)}
-  .gate-status.down .dot{background:var(--red)}
+    width:fit-content;font-size:11px;font-weight:600;padding:7px 13px;
+    border-radius:20px;border:1px solid var(--line);background:var(--surface2);color:var(--txt3)}
+  .gate-status .dot{background:var(--txt2);animation:none}
+  .gate-status.up{color:var(--pos);background:var(--pos-bg);border-color:var(--pos-b)}
+  .gate-status.up .dot{background:var(--pos);animation:pulse 1.8s infinite}
+  .gate-status.down{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
+  .gate-status.down .dot{background:var(--neg)}
 
   .gate-f{position:relative;margin-bottom:13px}
-  .gate-f label{display:block;font-size:10.5px;font-weight:600;color:var(--muted);
+  .gate-f label{display:block;font-size:10.5px;font-weight:600;color:var(--txt3);
     text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
   .gate-f input{padding:12px 13px;font-size:15px}
-  .gate-f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.16)}
+  .gate-f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,97,251,.3)}
   .gate-f input:disabled{opacity:.55}
   .gate-eye{position:absolute;right:4px;top:26px;height:38px;width:40px;background:transparent;
-    color:var(--muted2);font-size:15px;display:grid;place-items:center;border-radius:8px;padding:0}
-  @media (hover:hover){.gate-eye:hover{color:var(--txt);background:var(--card2)}}
-  .gate-caps{font-family:var(--mono);font-size:10.5px;color:var(--gold);margin-top:7px;display:none}
+    color:var(--txt2);font-size:15px;display:grid;place-items:center;border-radius:8px;padding:0}
+  @media (hover:hover){.gate-eye:hover{color:var(--txt);background:var(--surface2)}}
+  .gate-caps{font-size:10.5px;color:var(--warn);margin-top:7px;display:none}
   .gate-caps.on{display:block}
 
-  /* azul solido com texto escuro: 5.15:1. Branco sobre #3b82f6 daria 3.68:1 e reprova o gate. */
-  .gate-btn{width:100%;padding:13px;font-size:15px;font-weight:700;color:var(--bg);margin-top:4px;
+  /* azul solido com texto branco: 4.92:1, que e o par que o DESIGN.md fixa para o primario. */
+  .gate-btn{width:100%;padding:13px;font-size:15px;font-weight:700;color:var(--txt);margin-top:4px;
     background:var(--accent);
     display:flex;align-items:center;justify-content:center;gap:9px}
-  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(10,16,32,.35);
-    border-top-color:var(--bg);animation:gateSpin .6s linear infinite;display:none}
+  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);
+    border-top-color:var(--txt);animation:gateSpin .6s linear infinite;display:none}
   .gate-btn.loading .gate-spin{display:block}
   @keyframes gateSpin{to{transform:rotate(360deg)}}
 
   .gate-msg{display:none;margin-top:14px;padding:11px 13px;border-radius:10px;font-size:12.5px;
     line-height:1.55;border:1px solid transparent}
   .gate-msg.on{display:block}
-  .gate-msg.err{color:var(--red-on);background:var(--red-bg);border-color:var(--red-b)}
-  .gate-msg.warn{color:var(--gold);background:var(--gold-bg);border-color:var(--gold-b)}
-  .gate-msg.info{color:var(--muted2);background:var(--card2);border-color:var(--border)}
-  .gate-msg b{font-family:var(--mono);font-weight:700}
+  .gate-msg.err{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
+  .gate-msg.warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-b)}
+  .gate-msg.info{color:var(--txt2);background:var(--surface2);border-color:var(--line)}
+  .gate-msg b{font-weight:700}
 
-  .gate-foot{margin-top:18px;padding-top:13px;border-top:1px solid var(--border);text-align:center;
-    font-family:var(--mono);font-size:10px;color:var(--muted2);line-height:1.7;word-break:break-all}
+  .gate-foot{margin-top:18px;padding-top:13px;border-top:1px solid var(--line);text-align:center;
+    font-size:10px;color:var(--txt2);line-height:1.7;word-break:break-all}
   @media(max-width:440px){.gate-card{padding:26px 20px 16px}.gate-mark{width:50px;height:50px;font-size:25px}}
 </style>
 </head>
@@ -773,10 +790,10 @@ function statusEntrada(s, pa){
 // Assim o DESIGN.md continua sendo a fonte unica e trocar um token troca a vela junto.
 const TEMA=(()=>{ const cs=getComputedStyle(document.documentElement);
   const t=n=>cs.getPropertyValue('--'+n).trim();
-  return {green:t('green'),red:t('red'),gold:t('gold'),accent:t('accent'),accent2:t('accent2'),
-          txt:t('txt'),muted:t('muted'),muted2:t('muted2'),border:t('border'),grid:t('grid')}; })();
+  return {pos:t('pos'),neg:t('neg'),warn:t('warn'),accent:t('accent'),accentTxt:t('accent-txt'),
+          txt:t('txt'),txt2:t('txt2'),txt3:t('txt3'),line:t('line')}; })();
 // mesma cor do --accent em rgba, para o gradiente de area da curva de capital
-const ACCENT_RGB='59,130,246';
+const ACCENT_RGB='56,97,251';
 
 function sparkline(h){
   const el=document.getElementById('spark'); if(!el) return;
@@ -794,7 +811,7 @@ function sparkline(h){
     `</linearGradient></defs>`+
     `<path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#spark-g)"/>`+
     // non-scaling-stroke: sem isso o preserveAspectRatio="none" estica a linha junto com o card
-    `<path d="${d}" fill="none" stroke="var(--accent2)" stroke-width="1.5"`+
+    `<path d="${d}" fill="none" stroke="var(--accent-txt)" stroke-width="1.5"`+
     ` vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
 
@@ -817,9 +834,9 @@ async function carregar(){
   // chart
   if(!chart){const ctx=document.getElementById('chart').getContext('2d');const g=ctx.createLinearGradient(0,0,0,230);
     g.addColorStop(0,`rgba(${ACCENT_RGB},.34)`);g.addColorStop(1,`rgba(${ACCENT_RGB},0)`);
-    chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{data:[],borderColor:TEMA.accent2,borderWidth:2,fill:true,backgroundColor:g,tension:.3,pointRadius:0}]},
+    chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{data:[],borderColor:TEMA.accentTxt,borderWidth:2,fill:true,backgroundColor:g,tension:.3,pointRadius:0}]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},
-        tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:TEMA.grid},ticks:{color:TEMA.muted,callback:v=>brl(v)}}}}});}
+        tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:TEMA.line},ticks:{color:TEMA.txt3,callback:v=>brl(v)}}}}});}
   const h=e.equity_hist||[]; chart.data.labels=h.map(x=>x.ts); chart.data.datasets[0].data=h.map(x=>x.equity_total); chart.update('none');
   sparkline(h);
 
@@ -835,7 +852,7 @@ async function carregar(){
     }
     if(rg.risco_aberto_max_rs){
       const usadoAb=Math.min(Math.max(rg.risco_aberto_rs/rg.risco_aberto_max_rs*100,0),100);
-      rgh+=`<div class="rg-line"><span class="mut">📊 Exposição aberta (teto ${rg.risco_aberto_pct}%)</span><span class="rg-bar"><i style="width:${usadoAb}%;background:${rg.teto_aberto?'var(--red)':'var(--gold)'}"></i></span><span class="mono ${rg.teto_aberto?'neg':''}">${brl(rg.risco_aberto_rs)} / ${brl(rg.risco_aberto_max_rs)}</span></div>`;
+      rgh+=`<div class="rg-line"><span class="mut">📊 Exposição aberta (teto ${rg.risco_aberto_pct}%)</span><span class="rg-bar"><i style="width:${usadoAb}%;background:${rg.teto_aberto?'var(--neg)':'var(--warn)'}"></i></span><span class="mono ${rg.teto_aberto?'neg':''}">${brl(rg.risco_aberto_rs)} / ${brl(rg.risco_aberto_max_rs)}</span></div>`;
       if(rg.teto_aberto) rgh+=`<div class="rg-banner trava">🛑 TETO DE EXPOSIÇÃO atingido — feche uma posição antes de abrir outra.</div>`;
     }
     rgEl.innerHTML=rgh;
@@ -936,17 +953,17 @@ async function carregarSentimento(){
     const s=await apiFetch('/sentimento').then(r=>r.json());
     const fg=s.fear_greed, br=s.breadth; let h='';
     if(fg){
-      const cor=fg.valor<25?'var(--red)':fg.valor<45?'var(--gold)':fg.valor<55?'var(--muted2)':'var(--green)';
+      const cor=fg.valor<25?'var(--neg)':fg.valor<45?'var(--warn)':fg.valor<55?'var(--txt2)':'var(--pos)';
       h+=`<div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
-        <div><div style="font-size:10.5px;letter-spacing:.5px;color:var(--muted)">FEAR &amp; GREED</div>
+        <div><div style="font-size:10.5px;letter-spacing:.5px;color:var(--txt3)">FEAR &amp; GREED</div>
         <div style="font-size:30px;font-weight:800;color:${cor};letter-spacing:-1px">${fg.valor}<span style="font-size:13px;font-weight:600;margin-left:6px">${fg.label}</span></div></div>
         <div style="flex:1;min-width:220px">
-          <div style="height:10px;border-radius:5px;background:linear-gradient(90deg,var(--red),var(--gold),var(--green));position:relative">
+          <div style="height:10px;border-radius:5px;background:linear-gradient(90deg,var(--neg),var(--warn),var(--pos));position:relative">
             <div style="position:absolute;left:calc(${fg.valor}% - 2px);top:-3px;width:4px;height:16px;background:var(--txt);border-radius:2px;box-shadow:0 0 0 1px rgba(10,16,32,.75)"></div></div>
-          <div style="font-size:10px;color:var(--muted2);display:flex;justify-content:space-between;margin-top:4px"><span>Medo extremo</span><span>Ganância extrema</span></div>
+          <div style="font-size:10px;color:var(--txt2);display:flex;justify-content:space-between;margin-top:4px"><span>Medo extremo</span><span>Ganância extrema</span></div>
         </div></div>`;
     }
-    if(br) h+=`<div style="font-size:12.5px;margin-top:13px;color:var(--muted)">📊 <b style="color:var(--txt)">${br.pct_subindo}%</b> das ${br.n} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
+    if(br) h+=`<div style="font-size:12.5px;margin-top:13px;color:var(--txt3)">📊 <b style="color:var(--txt)">${br.pct_subindo}%</b> das ${br.n} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
     document.getElementById('sentimento').innerHTML=h||'sentimento indisponível';
   }catch(e){}
 }
@@ -962,7 +979,7 @@ async function carregarFunding(){
       ? `<div class="fund-alert on">🔥 ${gordos.length} moeda(s) com funding GORDO — possível janela de CARRY! (${gordos.map(x=>x.ativo.replace('/USDT','')).join(', ')})</div>`
       : `<div class="fund-alert">😴 Mercado calmo — funding fraco, sem prêmio de carry agora. Gatilho: funding anualizado ≥ 15%/ano.</div>`;
     const max=Math.max(1,...arr.map(x=>Math.abs(x.anual)));
-    const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100), cor=x.anual>=0?'var(--green)':'var(--red)';
+    const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100), cor=x.anual>=0?'var(--pos)':'var(--neg)';
       return `<div class="fund-row"><span class="fund-a">${x.gordo?'🔥':''} ${x.ativo.replace('/USDT','')}</span>
         <span class="fund-bar"><i style="width:${w}%;background:${cor}"></i></span>
         <span class="fund-v ${x.anual>=0?'pos':'neg'}">${x.anual>=0?'+':''}${x.anual}%/ano</span>
@@ -1003,11 +1020,11 @@ function aba(v){
 function initTV(){
   const el=document.getElementById('tvchart');
   _tv=LightweightCharts.createChart(el,{width:el.clientWidth||700,height:el.clientHeight||600,
-    layout:{background:{color:'transparent'},textColor:TEMA.muted},
-    grid:{vertLines:{color:TEMA.grid},horzLines:{color:TEMA.grid}},
-    timeScale:{timeVisible:true,borderColor:TEMA.border},rightPriceScale:{borderColor:TEMA.border}});
+    layout:{background:{color:'transparent'},textColor:TEMA.txt3},
+    grid:{vertLines:{color:TEMA.line},horzLines:{color:TEMA.line}},
+    timeScale:{timeVisible:true,borderColor:TEMA.line},rightPriceScale:{borderColor:TEMA.line}});
   // vela continua verde/vermelha: e direcao de preco, o uso legitimo do par (decisao travada 4.4)
-  _candles=_tv.addCandlestickSeries({upColor:TEMA.green,downColor:TEMA.red,borderVisible:false,wickUpColor:TEMA.green,wickDownColor:TEMA.red});
+  _candles=_tv.addCandlestickSeries({upColor:TEMA.pos,downColor:TEMA.neg,borderVisible:false,wickUpColor:TEMA.pos,wickDownColor:TEMA.neg});
   // mantém o gráfico SEMPRE do tamanho do container (resize, troca de aba, expandir)
   const ajusta=()=>{if(_tv&&el.clientWidth)_tv.applyOptions({width:el.clientWidth,height:el.clientHeight});};
   if(window.ResizeObserver){new ResizeObserver(ajusta).observe(el);}
@@ -1059,8 +1076,8 @@ function garanteIndSeries(){
   // EMA20 azul (era teal, cor que saiu da paleta), EMA50 gold, Bollinger cinza-azulado.
   // O roxo rgba(150,140,225) das bandas saiu: e exatamente a faixa de matiz que o resto do
   // sistema evita, e ali nao dizia nada que um cinza nao diga.
-  _indSeries.ema20=_tv.addLineSeries({color:TEMA.accent2,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.ema50=_tv.addLineSeries({color:TEMA.gold,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
+  _indSeries.ema20=_tv.addLineSeries({color:TEMA.accentTxt,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
+  _indSeries.ema50=_tv.addLineSeries({color:TEMA.warn,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
   _indSeries.bbU=_tv.addLineSeries({color:'rgba(148,161,189,.55)',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
   _indSeries.bbL=_tv.addLineSeries({color:'rgba(148,161,189,.55)',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
   _indSeries.bbM=_tv.addLineSeries({color:'rgba(148,161,189,.25)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
@@ -1088,13 +1105,13 @@ function renderAnalise(s,a){
   el.innerHTML=`<div class="analise-box">
     <div class="gs-titulo" style="display:flex;justify-content:space-between;align-items:center">🔍 Análise do sinal <span style="cursor:pointer;font-size:13px" onclick="fecharAnalise()">✕</span></div>
     <div style="font-size:14px;font-weight:700;margin-bottom:7px">${s.ativo} <span class="tag ${s.direcao==='LONG'?'long':'short'}">${s.direcao}</span> <span class="tipo-badge tipo-${s.tipo}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span> <span class="tf-badge">${s.tf}</span></div>
-    <div style="font-size:12px;line-height:1.6;color:var(--muted)">${a.leitura}</div>
+    <div style="font-size:12px;line-height:1.6;color:var(--txt3)">${a.leitura}</div>
     <div class="grid-ind">
       <span class="mut">RSI</span><b>${snap.rsi}</b>
       <span class="mut">ADX</span><b>${snap.adx}</b>
-      <span class="mut">EMA20</span><b style="color:var(--accent2)">${num(snap.ema20)}</b>
-      <span class="mut">EMA50</span><b style="color:var(--gold)">${num(snap.ema50)}</b>
-      <span class="mut">Bollinger</span><b style="color:var(--muted2)">${num(snap.bb_lo)}–${num(snap.bb_up)}</b>
+      <span class="mut">EMA20</span><b style="color:var(--accent-txt)">${num(snap.ema20)}</b>
+      <span class="mut">EMA50</span><b style="color:var(--warn)">${num(snap.ema50)}</b>
+      <span class="mut">Bollinger</span><b style="color:var(--txt2)">${num(snap.bb_lo)}–${num(snap.bb_up)}</b>
     </div>
     <div style="margin-top:9px;font-size:12px">entrada <b>${num(s.preco)}</b> · stop <b class="neg">${num(s.stop_sugerido)}</b></div>
     <div class="entry-status ${st.cls}" style="margin-top:8px">${st.txt}</div>
@@ -1106,8 +1123,8 @@ async function carregarSmartMoney(ativo){
   try{
     const s=await apiFetch('/smartmoney?ativo='+encodeURIComponent(ativo)).then(r=>r.json());
     _zlines.forEach(l=>{try{_candles.removePriceLine(l)}catch(_){}});_zlines=[];
-    (s.liquidez_acima||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.gold,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↑'})));
-    (s.liquidez_abaixo||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.gold,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↓'})));
+    (s.liquidez_acima||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.warn,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↑'})));
+    (s.liquidez_abaixo||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.warn,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↓'})));
     const el=document.getElementById('g-smart');
     if(el)el.innerHTML=`<div style="font-size:13px">Funding: <b class="${(s.funding_pct||0)>=0?'pos':'neg'}">${s.funding_pct??'—'}%</b></div>
       <div class="mut" style="font-size:11px;margin:5px 0 9px">${s.leitura_funding||''}</div>
@@ -1121,9 +1138,9 @@ async function carregarBook(ativo){
     const el=document.getElementById('g-book'); if(!el||!b)return;
     const corLado=b.lado_grande==='COMPRA'?'pos':(b.lado_grande==='VENDA'?'neg':'mut');
     el.innerHTML=`
-      <div style="font-size:11px;color:var(--muted);margin-bottom:3px">Pressão no book (±1%)</div>
+      <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">Pressão no book (±1%)</div>
       <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:6px">
-        <div style="width:${b.pressao_compra}%;background:var(--green)"></div><div style="flex:1;background:var(--red)"></div></div>
+        <div style="width:${b.pressao_compra}%;background:var(--pos)"></div><div style="flex:1;background:var(--neg)"></div></div>
       <div style="font-size:11.5px;display:flex;justify-content:space-between"><span class="pos">${b.pressao_compra}% compra</span><span class="neg">${(100-b.pressao_compra).toFixed(1)}% venda</span></div>
       <div style="font-size:12.5px;margin-top:10px">Fluxo taker: <b class="${b.fluxo_comprador>=50?'pos':'neg'}">${b.fluxo_comprador}% comprando</b></div>
       <div style="font-size:12.5px;margin-top:6px">💰 Dinheiro grande: <b class="${corLado}">${b.lado_grande}</b> <span class="mut" style="font-size:10.5px">(C R$${(b.grande_compra/1000).toFixed(0)}k · V R$${(b.grande_venda/1000).toFixed(0)}k)</span></div>
@@ -1135,23 +1152,23 @@ function marcar(e,ativo,tf){
   if(!_candles)return;
   _plines.forEach(l=>{try{_candles.removePriceLine(l)}catch(_){}});_plines=[];
   (e.posicoes||[]).filter(p=>p.ativo===ativo).forEach(p=>{
-    const cor=p.direcao==='LONG'?TEMA.green:TEMA.red;
+    const cor=p.direcao==='LONG'?TEMA.pos:TEMA.neg;
     _plines.push(_candles.createPriceLine({price:p.entrada,color:cor,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:`${p.direcao} entrada`}));
-    if(p.stop)_plines.push(_candles.createPriceLine({price:p.stop,color:TEMA.red,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'stop'}));
+    if(p.stop)_plines.push(_candles.createPriceLine({price:p.stop,color:TEMA.neg,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'stop'}));
   });
   const seg=TF_SEG[tf]||900, mk=[];
   const snap=dt=>Math.floor(new Date(String(dt).replace(' ','T')).getTime()/1000/seg)*seg;
-  (e.trades||[]).filter(t=>t.ativo===ativo&&t.aberto_em).forEach(t=>mk.push({time:snap(t.aberto_em),position:t.direcao==='LONG'?'belowBar':'aboveBar',color:t.direcao==='LONG'?TEMA.green:TEMA.red,shape:t.direcao==='LONG'?'arrowUp':'arrowDown',text:t.direcao}));
-  (e.posicoes||[]).filter(p=>p.ativo===ativo&&p.aberto_em).forEach(p=>mk.push({time:snap(p.aberto_em),position:p.direcao==='LONG'?'belowBar':'aboveBar',color:TEMA.gold,shape:p.direcao==='LONG'?'arrowUp':'arrowDown',text:p.direcao+' aberta'}));
+  (e.trades||[]).filter(t=>t.ativo===ativo&&t.aberto_em).forEach(t=>mk.push({time:snap(t.aberto_em),position:t.direcao==='LONG'?'belowBar':'aboveBar',color:t.direcao==='LONG'?TEMA.pos:TEMA.neg,shape:t.direcao==='LONG'?'arrowUp':'arrowDown',text:t.direcao}));
+  (e.posicoes||[]).filter(p=>p.ativo===ativo&&p.aberto_em).forEach(p=>mk.push({time:snap(p.aberto_em),position:p.direcao==='LONG'?'belowBar':'aboveBar',color:TEMA.warn,shape:p.direcao==='LONG'?'arrowUp':'arrowDown',text:p.direcao+' aberta'}));
   mk.sort((a,b)=>a.time-b.time);
   try{_candles.setMarkers(mk)}catch(_){}
 }
 function sidebar(e){
   const gp=document.getElementById('g-posicoes');
   if(gp)gp.innerHTML=(e.posicoes&&e.posicoes.length)?e.posicoes.map(p=>{const roe=p.valor_reais?p.pnl/p.valor_reais*100:0, sd=_saidas[p.id];
-    return `<div style="font-size:13px;padding:7px 0;border-bottom:1px solid var(--border)">${p.ativo} <span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span><br><span class="mut" style="font-size:11px">R$${p.valor_reais}·${p.alavancagem}x</span> <span class="mono ${p.pnl>=0?'pos':'neg'}">${brl(p.pnl)} <b>${pct(roe)}</b></span>${(sd&&sd.acao)?`<div class="saida-side saida-${sd.nivel}" style="font-size:10.5px;margin-top:4px;padding:3px 6px;border-radius:5px">${sd.acao}</div>`:''}</div>`}).join(''):'<div class="mut" style="font-size:12px">nenhuma</div>';
+    return `<div style="font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)">${p.ativo} <span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span><br><span class="mut" style="font-size:11px">R$${p.valor_reais}·${p.alavancagem}x</span> <span class="mono ${p.pnl>=0?'pos':'neg'}">${brl(p.pnl)} <b>${pct(roe)}</b></span>${(sd&&sd.acao)?`<div class="saida-side saida-${sd.nivel}" style="font-size:10.5px;margin-top:4px;padding:3px 6px;border-radius:5px">${sd.acao}</div>`:''}</div>`}).join(''):'<div class="mut" style="font-size:12px">nenhuma</div>';
   const gt=document.getElementById('g-trades');
-  if(gt)gt.innerHTML=(e.trades&&e.trades.length)?e.trades.slice(0,15).map(t=>`<div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border)">${t.ativo} <span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span> <span class="mono ${t.pnl_reais>=0?'pos':'neg'}">${brl(t.pnl_reais)}</span></div>`).join(''):'<div class="mut" style="font-size:12px">nenhum</div>';
+  if(gt)gt.innerHTML=(e.trades&&e.trades.length)?e.trades.slice(0,15).map(t=>`<div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">${t.ativo} <span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span> <span class="mono ${t.pnl_reais>=0?'pos':'neg'}">${brl(t.pnl_reais)}</span></div>`).join(''):'<div class="mut" style="font-size:12px">nenhum</div>';
 }
 function atualizarGrafico(e){
   if(_aba!=='grafico'||!_tv)return;

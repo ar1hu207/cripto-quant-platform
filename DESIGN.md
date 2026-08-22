@@ -52,7 +52,7 @@ luminancia).
 | token | valor | origem CMC |
 |---|---|---|
 | `--bg` | `#0D1421` | `--c-color-background-2` |
-| `--bg2` | `#171924` | `--c-color-background-1` |
+| `--bg-el` | `#171924` | `--c-color-background-1`. Fundo *raised* do chrome (topbar, status bar). Nao se chama `--bg2`: esse nome era o alias morto do tema navy e reaproveita-lo apagaria a fronteira entre token e alias. |
 | `--surface` | `#222531` | `--c-color-surface-1` (= gray-100 dark) |
 | `--surface2` | `#2B2E3D` | `--c-color-surface-2` |
 | `--line` | `#323546` | gray-200 dark. **A borda de 1px e o separador universal deste tema.** |
@@ -86,6 +86,11 @@ Sao os tons `-800` da rampa do CMC, feitos exatamente para isto no tema escuro:
 | `--neg-bg` | `#411F2A` | `--neg` | 4.86:1 |
 | `--accent-bg` | `#1E274F` | `--accent-txt` | 4.84:1 |
 | `--warn-bg` | `#433936` | `--warn` | 6.46:1 |
+
+**Variacao de alpha declarada.** Chip e banner semantico precisam de uma borda que diga a mesma
+coisa que a tinta sem gritar. Em vez de inventar um terceiro hex por familia, a borda e o proprio
+token a **34%** - o valor que a secao Components ja fixa para o botao destrutivo, estendido aos
+irmaos: `--pos-b`, `--neg-b`, `--warn-b`. E a unica excecao a regra "nenhuma cor fora de token".
 
 ### Regra de par (vale em todo lugar)
 
@@ -201,7 +206,7 @@ gigante de equity.
   **grudado no topo ao rolar** (`position: sticky`). `td` 14px/500, altura de linha ~48px,
   padding 12px 10px, borda embaixo `--line`. Texto a esquerda, numero a direita, tabular.
   Hover de linha: fundo `--surface`.
-- **Status bar** fixa no rodape: 12px, `--txt2`, borda em cima, fundo `--bg2`. Carrega o que
+- **Status bar** fixa no rodape: 12px, `--txt2`, borda em cima, fundo `--bg-el`. Carrega o que
   precisa estar sempre visivel (banca, exposicao, risco do dia, AO VIVO, hora do ultimo poll).
   **Substitui os banners de risco** que hoje empurram o conteudo para baixo.
 
@@ -271,7 +276,7 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 ```css
 :root{
   /* superficie e linha */
-  --bg:#0D1421; --bg2:#171924; --surface:#222531; --surface2:#2B2E3D;
+  --bg:#0D1421; --bg-el:#171924; --surface:#222531; --surface2:#2B2E3D;
   --line:#323546; --line2:#53596A;
   /* texto */
   --txt:#FFFFFF; --txt2:#A1A7BB; --txt3:#9197A9;
@@ -281,12 +286,16 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
   --pos:#16C784; --pos-bg:#173C37;
   --neg:#EF6C73; --neg-bg:#411F2A;
   --warn:#F5B97F; --warn-bg:#433936;
+  /* borda de chip/banner: o proprio token a 34% (variacao de alpha declarada) */
+  --pos-b:rgba(22,199,132,.34); --neg-b:rgba(239,108,115,.34); --warn-b:rgba(245,185,127,.34);
   /* forma */
   --r-sm:4px; --r:8px; --r-pill:999px;
   --shadow-overlay:0 8px 32px rgba(13,20,33,.5),0 1px 2px rgba(13,20,33,.4);
   --overlay-bg:rgba(23,25,36,.6);
   /* tipografia */
   --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  --fs-50:11px; --fs-75:12px; --fs-100:14px; --fs-200:16px; --fs-300:18px;
+  --fs-600:20px; --fs-800:25px; --fs-1000:32px;
   --lh-head:1.3; --lh-body:1.5;
   /* motion */
   --ease:cubic-bezier(.2,.8,.25,1); --dur:.15s; --dur2:.28s;
@@ -310,6 +319,16 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-27): tokens, tipografia e base implantados em `web/index.html`. O `:root` do tema
+  navy saiu inteiro, junto com os aliases de transicao (`--card`, `--card2`, `--bg2`, `--mono`) e
+  com Space Grotesk e JetBrains Mono. `.mono` sobrevive como classe - o JS escreve `class="mono"`
+  em dezenas de lugares - mas deixou de ser familia e passou a significar so `tabular-nums`.
+  Dois ajustes que a medicao obrigou: (1) o botao primario trocou texto escuro por **branco**,
+  porque escuro sobre o `#3861FB` do CMC da 3.75:1 e reprovava (sobre o `#3b82f6` do tema navy
+  dava 5.15:1); (2) as tintas de `.saida-*` eram rgba do verde/gold/vermelho mortos, e o vermelho
+  velho a 16% dava 4.23:1 sob o `--neg` novo - viraram `--pos-bg`/`--warn-bg`/`--neg-bg`.
+  Nomes de token do `TEMA` dos graficos renomeados junto, senao o objeto passaria a ler
+  `undefined` e a vela ficaria sem cor entre este commit e o P2-33.
 - 2026-08-22: **reescrito**. Direcao trocada de navy/glassmorphism para transposicao do
   CoinMarketCap tema escuro, por decisao do dono. Valores medidos do site deles, com quatro
   correcoes de contraste dentro da rampa. Sai sidebar/bento/hero-vidro, entra topbar + tab bar +
