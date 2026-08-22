@@ -77,9 +77,17 @@ e isso aparece em `parentWorktreeId` / `childWorktreeIds` no `worktree ps`. É o
 workers à matriz. Use `--parent-worktree active` para explicitar, ou `--no-parent` quando a tarefa
 for realmente independente.
 
-⚠️ **NÃO VERIFICADO:** eu não lancei agente de verdade (`--agent`), só criei e removi uma worktree
-vazia para validar o comando. Faça o primeiro despacho com **um** worker e confirme o handle antes
-de abrir a frota.
+⚠️ **VERIFICADO EM 2026-08-22, e a resposta é não: `--agent claude` NÃO funciona nesta máquina.**
+A worktree nasce certa (base e SHA corretos), mas sem conta gerenciada (§6) o agente não sobe — o
+Orca abre um PowerShell cru e **digita o briefing inteiro dentro dele**. O terminal fica preso em
+continuação de linha (`>>` repetido) e nada executa. Não é perigoso, é só inerte, e passa
+despercebido se você olhar só o JSON de criação, que volta `ok: true` e até um handle.
+
+**Como saber em 10 segundos:** `orca terminal list --json`, ache o terminal cujo `worktreePath`
+seja o da worktree nova, e olhe o `preview`. Se for `>>` repetido, o agente não subiu.
+
+O caminho que funcionou está no §6(b). E a lição vale além do Orca: **confirme o primeiro worker
+antes de abrir a frota** — o custo de descobrir isso com um é um minuto, com quatro é a onda toda.
 
 ---
 
@@ -137,8 +145,27 @@ orca terminal create --worktree branch:t-x \
 Fixar `--session-id` é o que permite ao usuário entrar depois com `claude --resume <uuid>` de
 dentro da worktree. Sem isso, não há como conversar com o worker.
 
-⚠️ **NÃO VERIFICADO:** se o `--agent claude` do Orca funciona sem conta gerenciada. Teste com um
-worker antes de confiar.
+⚠️ **VERIFICADO EM 2026-08-22: não funciona sem conta gerenciada** — ver o §4. Enquanto
+`orca account list` estiver vazio, **use (b)**.
+
+**Refinamento de (b), usado para despachar as duas ondas do M2.** O `orca terminal create` também
+serve, mas o `--command` passa por um shell do Windows, e um briefing de 12 KB com markdown,
+crases e aspas não sobrevive à citação. O que funcionou foi mais simples: criar a worktree pelo
+Orca (**sem** `--agent`) e lançar o CLI local a partir da própria sessão-matriz, com o briefing
+vindo de arquivo:
+
+```bash
+orca worktree create --repo id:<repoId> --name t-<territorio> --base-branch main --json
+cd C:/Users/aboni/orca/workspaces/1/t-<territorio>
+claude -p "$(cat /caminho/brief-<territorio>.md)" --permission-mode bypassPermissions        --session-id <uuid-fixo>
+```
+
+Rodando isso **em segundo plano pela ferramenta de shell da própria matriz**, o harness avisa
+quando cada worker termina — o que substitui o `orca terminal wait` do §5 e não depende de handle
+nenhum. A worktree continua sendo do Orca e aparece no app; só quem lança o agente é outro.
+
+Guarde o `--session-id`: é por ele que o dono entra depois com `claude --resume <uuid>` de dentro
+da worktree.
 
 ---
 
@@ -148,7 +175,12 @@ worker antes de confiar.
 investigação: `api.py` é tocado por 10 cards e `simulador.py` por 6. Um agente por card poria sete
 agentes editando `api.py` ao mesmo tempo.
 
-A §4 do `PLANO-EXECUCAO-2026-08-20.md` já traz as ondas do M2 prontas:
+⚠️ **A tabela abaixo é histórica.** As ondas do M2 foram redesenhadas em 2026-08-22 (commit
+`f3d2ce9`): quatro agentes viravam cinco violações das regras do próprio plano — `T-OPERACAO` era
+território de VM, que worker não acessa; quatro agentes estouram o teto de três da §9.11; e o
+`P2-15` exigia escrita em `api.py`, que o `T-SINAL` só podia ler. **A fonte é a §4 + §4b do
+`PLANO-EXECUCAO-2026-08-20.md`, não esta tabela.** Ela fica aqui porque o raciocínio de "por que
+não um agente por card" continua valendo:
 
 | Onda | Agente | Arquivos | Cards |
 |---|---|---|---|
@@ -179,6 +211,20 @@ ver a memória `deploy-vm-cripto-bot`.
    obrigando, só porque o briefing pediu.
 5. **O comando do critério de aceite, com a saída colada no relatório.** "Validado" sem comando
    rodado não conta.
+6. **Exija que a prova fique NO REPOSITÓRIO, reexecutável.** Aprendido na onda 1 do M2, e custou
+   caro: dois dos três workers escreveram provas excelentes em arquivo temporário e as perderam
+   ao terminar. O relatório listava `10 passaram, 0 falharam` e **não havia o que reexecutar** —
+   a matriz teve de escrever a auditoria do zero, duas vezes. O terceiro pôs a prova dentro do
+   próprio módulo do território (`python simulador.py` roda 11 asserções) e foi reexecutado em
+   segundos.
+
+   Repare na armadilha: um arquivo `prova_<x>.py` novo **reprova no portão de fronteira** se não
+   estiver na lista do território. Então ou o território declara o arquivo de prova, ou a prova
+   mora dentro de um módulo que já é do território, sob `if __name__ == "__main__"`. Diga qual
+   no briefing — senão o worker escolhe o temporário, que é o que não sobrevive.
+7. **Peça o número do card no assunto do commit** (`[P2-9] ...`). Um território da onda 1 entregou
+   quatro commits sem prefixo: o trabalho estava certo, mas ligar commit a card virou leitura de
+   mensagem em vez de `git log --oneline | grep`. Convenção barata, auditoria muito mais rápida.
 
 ---
 
@@ -202,6 +248,33 @@ antes de aceitar e ir para a alternativa.
 - A série `P2-` é sequência compartilhada — **fluxo novo nasce com prefixo próprio** (a pesquisa
   quant virou `Q-1..6` depois de colidir duas vezes num dia).
 - **Chave canônica de um card é o shortLink do Trello**, nunca o `[P2-n]` do título.
+
+## 13. O que a onda 1 do M2 ensinou sobre COLHER (2026-08-22)
+
+O §5 diz como ler o terminal. O que faltava era o que fazer com o que se lê.
+
+- **A colheita é git, e a auditoria é comando seu, não do worker.** Os três territórios da onda 1
+  passaram no portão de fronteira de primeira — nenhum arquivo fora da lista, árvore limpa. O que
+  não passou de graça foi o P1: sem a prova versionada (§8.6), a matriz escreveu duas auditorias
+  independentes, de 22 e 18 asserções. **Deu mais trabalho e valeu mais**: auditoria independente
+  pega o que o teste do autor não pega por construção, porque nasce da mesma leitura errada.
+- **Rode a auditoria de novo DEPOIS do merge, não só na branch.** É o único momento em que dois
+  territórios existem juntos. As duas auditorias da onda 1 foram reexecutadas sobre a `main` já
+  mesclada; se algum território tivesse mexido no mesmo dicionário do outro, é ali que aparece.
+- **Confira o raio de alcance do que o worker mudou no BANCO, não só no código.** O `P2-10` passou
+  a gravar `NULL` onde antes ia `0.0`. Isso só é seguro se ninguém somar a coluna — e a única
+  forma de saber é varrer o repositório atrás de consumidor (`trades.funding`: zero). O portão de
+  fronteira não pega isso: o arquivo era do território, o efeito não.
+- **Um card pode fechar em duas ondas, desde que o PLANO diga antes.** Dois cards do M2 tinham a
+  linha final em `api.py`, território de outra onda. Declarar isso na §4b antes do despacho é o
+  que separa "dois commits num card, autorizado" de "worker atravessou a fronteira".
+- **Nem todo card do plano é despachável.** O `T-OPERACAO` do M2 era dono de "logbot.py, deploy/,
+  VM" — e worker não acessa a VM. Dois dos três cards dele eram da matriz por definição. Ao ler o
+  marco, separe antes de despachar: o que é arquivo vai para worker, o que é produção fica com
+  quem tem `az`.
+- **Card pode estar errado sobre um fato, e o fato manda.** O `P2-3` afirmava que o repositório é
+  público; ele é privado. Isso mudou a execução inteira (o clone precisou de deploy key) e é
+  decisão do dono, não da matriz. Verifique os fatos do card antes de executá-lo, não durante.
 
 ---
 
