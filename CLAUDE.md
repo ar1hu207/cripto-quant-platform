@@ -70,14 +70,26 @@ Apertar guarda pode. Afrouxar, só o dono.
 
 ## 5. Produção: deploy, acesso e backup
 
-- **A VM não é repositório git** (`P2-3` aberto). Deploy é cópia manual; **commit na `main`
-  não significa código rodando**. Rollback só existe se você criar antes (`cp *.py` para
-  `/home/ubuntu/rollback-<stamp>/`).
+- **A VM É repositório git desde 2026-08-22** (`P2-3` fechado). Deploy é `cripto-deploy`, um
+  comando; `/health` devolve o commit que está rodando; rollback é
+  `bash deploy/atualizar.sh <sha>`, testado. **Commit na `main` ainda não significa código
+  rodando** — o deploy continua sendo um ato deliberado, só que barato e reversível.
+- **A VM autentica no GitHub por deploy key SSH somente-leitura** (`/home/ubuntu/.ssh/deploy_cripto`,
+  600, gerada na própria VM; a pública é deploy key do repo, read-only). O repositório é
+  **privado** — o `P2-3` afirmava que era público, e não é.
+- **Nunca deploye copiando arquivo de uma árvore Windows.** Foi assim no M1 e os quatro `.py`
+  enviados chegaram em CRLF: rodam igual, mas o md5 deixa de bater com o repositório
+  justamente nos arquivos que o deploy toca. O `.gitattributes` normaliza em clone/checkout,
+  não em `tar`. Com a VM sendo repo, o caminho certo é sempre `git checkout`.
 - **SSH quase sempre falha**: o NSG libera 1 IP e o do dono é dinâmico. Não conserte a regra
   (bloqueado, ver §8). O caminho é `az vm run-command invoke ... --scripts @arquivo.sh`.
   Três armadilhas: script inline com aspas aninhadas quebra no meio (**sempre `@arquivo`**);
   a saída trunca em 4.095 chars; uma execução por vez (`Conflict` se sobrepor).
-- **Procedimento de deploy que funcionou (22/08):** backup → snapshot p/ rollback → md5 antes →
+- **Procedimento de deploy (o `deploy/atualizar.sh` faz tudo isto sozinho):** aborta com árvore
+  suja, aborta se o backup falhar, aborta voltando ao commit anterior se o `py_compile` falhar
+  no venv de produção, e **não religa o `auto_trade`** — imprime o comando, porque religar
+  automático seria o script decidindo por você que está tudo bem. O passo a passo manual, que
+  continua valendo como referência: backup → snapshot p/ rollback → md5 antes →
   `auto_trade=0` + zero posições abertas → staging em `/tmp` com sha256 + `py_compile` no venv
   de produção → troca + restart → verificar (serviço, integrity, contagens, journal, equity
   nova) → só então `auto_trade=1`.

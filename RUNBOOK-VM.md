@@ -67,10 +67,45 @@ O caminho antigo (fatiar `base64 | cut -c<ini>-<fim>` em janelas de 4.000 chars 
 run-command) funciona mas custa caro: 215 KB = 54 chamadas = ~40 minutos. Só use se o blob
 estiver indisponível.
 
-## 5. Deploy passo a passo (o procedimento que funcionou no M1)
+## 5. Deploy
 
-A VM **não é repositório git** (`P2-3` aberto): não existe `git checkout` para desfazer, e
-**commit na `main` não significa código rodando**. Ordem obrigatória:
+### 5.0 O caminho normal, desde 2026-08-22 (`P2-3` fechado)
+
+A VM **é** repositório git. `/home/ubuntu/cripto-bot` está na branch `main`, com árvore limpa, e
+autentica no GitHub por **deploy key SSH somente-leitura** (`/home/ubuntu/.ssh/deploy_cripto`,
+600; a pública é deploy key read-only do repo — que é **privado**). Deploy é um comando:
+
+```bash
+az vm run-command invoke -g rg-cripto-bot -n vm-cripto-bot --command-id RunShellScript   --scripts @deploy.sh --query "value[0].message" -o tsv
+# onde deploy.sh contém:
+#   cd /home/ubuntu/cripto-bot
+#   sudo -u ubuntu git fetch -q origin
+#   sudo -u ubuntu bash -c 'git show origin/main:deploy/atualizar.sh > ~/.deploy-tmp/atualizar.sh'
+#   sudo -u ubuntu bash ~/.deploy-tmp/atualizar.sh          # ou:  cripto-deploy
+```
+
+O `deploy/atualizar.sh` versionado faz a §5.1 inteira sozinho e **para** em cada portão: aborta
+com árvore suja, aborta se o backup falhar, aborta voltando ao commit anterior se o `py_compile`
+falhar no venv de produção. **Não religa o `auto_trade`** — imprime o comando. Ao final imprime
+também o rollback pronto: `bash deploy/atualizar.sh <sha-anterior>`.
+
+Qual commit está rodando: `curl -s http://127.0.0.1:8000/health` (único endpoint sem auth).
+
+Três armadilhas descobertas no primeiro uso real:
+
+1. **Rode como `ubuntu`, não como root.** O repositório é do `ubuntu`; git como root deixa objetos
+   root-owned e o próximo `git status` reclama de *dubious ownership*. O script usa `sudo` só nos
+   dois passos que precisam (backup e `systemctl`).
+2. **O backup precisa de `sudo`** — lê `/etc/cripto-bot-backup.sas` (600 root) e escreve em
+   `/var/log/cripto-backup.log`. Sem isso o deploy aborta no passo 1, corretamente.
+3. **Não escreva o script em `/tmp` como root se já existir um lá de outro dono**:
+   `fs.protected_regular` bloqueia, o redirect falha em silêncio e a **versão velha** roda. Use
+   `~ubuntu/.deploy-tmp/`.
+
+### 5.1 Passo a passo manual (o que o script automatiza)
+
+Vale como referência, e é o caminho a seguir se o script estiver indisponível. **Commit na `main`
+não significa código rodando** — o deploy continua sendo um ato deliberado. Ordem obrigatória:
 
 1. **Backup imediato**: `/usr/local/bin/cripto-backup.sh` (roda o fluxo completo e sobe ao blob)
 2. **Snapshot para rollback**: `cp *.py /home/ubuntu/rollback-$(date +%Y%m%d-%H%M%S)/`
