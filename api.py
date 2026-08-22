@@ -9,6 +9,7 @@ import base64
 import os
 import re
 import secrets
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -433,9 +434,43 @@ def config_js():
     return FileResponse(os.path.join(WEB, "config.js"), media_type="application/javascript")
 
 
+def _commit_em_producao(raiz=None):
+    """[P2-3] Hash do commit que ESTE processo está rodando.
+
+    A VM não é repositório git e o deploy é cópia manual, então "commit na main" nunca
+    significou "código rodando" — não havia como responder *qual* código está na VM sem
+    comparar md5 de arquivo a arquivo. Publicar o hash no /health é o que transforma isso
+    numa pergunta com resposta.
+
+    Ordem: `COMMIT_SHA` do ambiente (o deploy pode injetá-lo onde não há git) → `git
+    rev-parse` → **None**. None DECLARADO, nunca `"desconhecido"` ou `"dev"`: string
+    inventada responde à pergunta com algo que parece resposta, e a checagem de deploy
+    passaria a comparar com um valor que nunca foi um commit. É o portão do M2, o mesmo
+    princípio que o [P2-10] acabou de aplicar ao funding não medido.
+
+    `raiz` existe para a prova conseguir apontar para um diretório sem git."""
+    sha = (os.environ.get("COMMIT_SHA") or "").strip()
+    if sha:
+        return sha
+    try:
+        r = subprocess.run(["git", "-C", raiz or os.path.dirname(os.path.abspath(__file__)),
+                            "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:               # sem git instalado, sem repositório, timeout: tudo é None
+        pass
+    return None
+
+
+# Lido UMA vez, no import. Nunca por requisição: /health é o endpoint de saúde e o único
+# que responde sem autenticação — pôr um subprocesso no caminho dele seria dar a quem bate
+# na porta um `fork` de graça. E o commit de um processo não muda enquanto ele vive.
+COMMIT = _commit_em_producao()
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "versao": "0.3"}
+    return {"status": "ok", "versao": "0.3", "commit": COMMIT}
 
 
 @app.get("/status")
@@ -759,6 +794,7 @@ def dca_remover(req: IdReq):
 
 
 def _prova_api():
+    import tempfile
     ok = fail = 0
 
     def check(nome, cond, detalhe=""):
@@ -839,7 +875,6 @@ def _prova_api():
 
     # ---------- [P2-15] scan verde apaga o erro do painel, sem apagar o forense
     # /status le o banco; aponta para um TEMPORARIO -- o trading.db local esta vazio.
-    import tempfile
     db.DB = os.path.join(tempfile.mkdtemp(), "prova_api.db")
     db.init_db()
     signal_engine.ultimo_scan.update(ts="2026-08-22 10:00:00", total=3, ok=0, falhas=3,
@@ -862,6 +897,27 @@ def _prova_api():
     check("/status continua expondo saudavel exatamente como hoje", st["saudavel"] is True)
     check("o contador do [P2-9] segue publicado (sem regressao)",
           "fluxo_indisponivel" in st["scan"])
+
+    # ---------- [P2-3] /health responde QUAL commit esta rodando
+    print("  [P2-3] /health =", health())
+    h = health()
+    check("/health continua com status e versao (sem regressao)",
+          h["status"] == "ok" and h["versao"] == "0.3", str(h))
+    check("/health devolve o commit", "commit" in h)
+    check("o commit vem do valor lido no import, nao de um subprocesso por requisicao",
+          h["commit"] is COMMIT)
+    check("neste repositorio o commit e o HEAD de verdade",
+          h["commit"] == subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                                        text=True).stdout.strip(), str(h["commit"]))
+    sem_git = _commit_em_producao(raiz=tempfile.mkdtemp())
+    check("sem git, devolve None DECLARADO -- nunca 'desconhecido' nem 'dev'",
+          sem_git is None, repr(sem_git))
+    os.environ["COMMIT_SHA"] = "deadbeefcafe"
+    try:
+        check("COMMIT_SHA do ambiente tem precedencia (deploy sem git)",
+              _commit_em_producao() == "deadbeefcafe")
+    finally:
+        os.environ.pop("COMMIT_SHA", None)
 
     print("\n  %d passaram, %d falharam" % (ok, fail))
     return 1 if fail else 0
