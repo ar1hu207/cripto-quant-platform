@@ -76,7 +76,15 @@ Os 35 cards não se distribuem uniformemente pelo código. Contagem real, extra�
 | `signal_engine.py` | 3 — P1-9, P2-9, P2-15 |
 | `trading.db` | 3 — P0-1, P2-2, Q-1 |
 | `autotrader.py`, `tune.py`, `validar_oos.py`, `web/index.html` | 2 cada |
-| `mercado.py`, `dca.py`, `db.py`, `logbot.py`, `scoring.py`, `config.py`, `live_engine.py`, `test_sim.py` | 1 cada |
+| `db.py` | 2 — P2-11, **Q-4** |
+| `mercado.py`, `dca.py`, `logbot.py`, `scoring.py`, `config.py`, `live_engine.py`, `test_sim.py` | 1 cada |
+
+> **Q-4 não tem citação `arquivo:linha` nos documentos de investigação** — é instrumentação a
+> escrever, não bug a consertar, então esta tabela (extraída das citações) não o via. Território
+> declarado abaixo, na §4. Um card sem território na §4 **não é despachável**: o portão de
+> fronteira é `git diff --name-only <base>...<branch>` cruzado com a lista desta seção, e sem
+> lista não há contra o que conferir. O briefing do agente não serve como fonte — ele não é lido
+> por quem audita.
 
 **Consequência direta: não despache um agente por card.** Sete agentes paralelos no M1 seriam
 sete edições concorrentes em `api.py` — conflito garantido, e cada um revisando um arquivo que os
@@ -116,9 +124,19 @@ O sistema está no ar **agora**, com posições abertas, sem ninguém olhando. M
 |---|---|
 | `P2-2` | Backup do `trading.db` — cron diário com `sqlite3 .backup` + cópia pra fora da VM |
 
-**Ligar aqui, colher no M4:** a instrumentação do `[Q-4]` (log do portão de fluxo por decisão +
-desfecho hipotético) precisa de tempo de mercado acumulando. É o único card que não dá pra
-comprimir depois — se ficar pro M4, você espera semanas paradas. **Sai junto com o `T-API-GUARDA`.**
+**`T-FLUXO-LOG`** ‖ · dono de `signal_engine.py` + `db.py` · 1 card:
+
+| Card | O quê |
+|---|---|
+| `Q-4` | Instrumentar o portão de fluxo: log de cada decisão + desfecho hipotético, para a validação prospectiva do M4 |
+
+**Por que este card sai no M1 e não no M4:** a validação prospectiva precisa de tempo de mercado
+acumulando e não dá pra comprimir depois — se ficar pro M4, você espera semanas paradas. O que
+sai agora é só a instrumentação; a conclusão é do M4.
+
+⚠️ **Cruzamento M1↔M2:** `db.py` é do `T-API-DADOS` na onda 2 do M2 (`P2-11`, índices e poda da
+tabela `equity`). Enquanto os marcos correrem em série não há conflito — mas os dois cards mexem
+no esquema do banco, e quem chegar depois lê o que o primeiro deixou. Não despache os dois juntos.
 
 **Portão do M1:** derrubar a rede da VM por 5 min com posição aberta → o ciclo continua, a posição
 segue vigiada, o `/status` denuncia. E existe backup de ontem **fora** da VM.
