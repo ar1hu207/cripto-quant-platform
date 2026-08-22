@@ -210,6 +210,12 @@ gigante de equity.
   **grudado no topo ao rolar** (`position: sticky`). `td` 14px/500, altura de linha ~48px,
   padding 12px 10px, borda embaixo `--line`. Texto a esquerda, numero a direita, tabular.
   Hover de linha: fundo `--surface`.
+  **Desvio declarado: prioridade de coluna no lugar de rolagem horizontal.** Rolar a tabela
+  dentro de um wrapper e incompativel com cabecalho grudado - o wrapper com `overflow` vira o
+  contexto de rolagem e o `sticky` deixa de mirar a viewport. Em vez disso as colunas somem por
+  prioridade (`.col-2` em 1100px, `.col-3` em 820px, `.col-4` em 620px) e o que sumiu continua
+  legivel na sub-linha expansivel. A pagina nunca rola na horizontal, e o cabecalho gruda em
+  qualquer largura.
 - **Status bar** fixa no rodape: 12px, `--txt2`, borda em cima, fundo `--bg-el`. Carrega o que
   precisa estar sempre visivel (banca, exposicao, risco do dia, AO VIVO, hora do ultimo poll).
   **Substitui os banners de risco** que hoje empurram o conteudo para baixo.
@@ -269,7 +275,7 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 | elemento | cor |
 |---|---|
 | vela | `--pos` / `--neg` |
-| curva de capital e sparkline dos tiles | `--accent-txt`, area em `rgba(56,97,251,.28)` |
+| curva de capital, sparkline dos tiles e sparkline de linha | `--accent-txt`, area em `rgba(56,97,251,.28)` |
 | EMA20 / EMA50 | `--accent-txt` / `--warn` |
 | Bollinger | `rgba(161,167,187,.5)` (`--txt2` translucido) |
 | entrada / stop | `--pos` / `--neg` |
@@ -333,6 +339,12 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-30): a fila de sinais deixou de ser lista de cards e virou tabela com linha
+  expansivel. Nota de cor: o sparkline da coluna Tendencia fica **azul**, como todo sparkline
+  deste sistema, e nao verde/vermelho como o 7d do CMC. Com LONG e SHORT na mesma tabela, curva
+  subindo em verde ao lado de um SHORT diria "bom" quando e "contra"; a leitura de dinheiro fica
+  na coluna Delta, que tem o simbolo alem da cor. Novo desvio de tabela registrado acima
+  (prioridade de coluna em vez de rolagem horizontal).
 - 2026-08-22 (P2-29): cinco tiles planos no lugar do hero de vidro e dos tres stat cards. Risco do
   dia e Exposicao aberta sairam dos banners e viraram tile, com barra E o numero escrito ao lado -
   cor nunca e o unico sinal. `sparkline()` virou generico (serie + alvo) porque agora dois tiles a

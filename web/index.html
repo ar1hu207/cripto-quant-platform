@@ -212,31 +212,78 @@
     display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
 
-  .sig{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:14px;margin-bottom:10px}
-  .sig:last-child{margin-bottom:0}
-  .sig .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-  .sig .ativo{font-weight:700;font-size:15px}
-  .sig .why{font-size:12px;color:var(--txt3);margin:6px 0 11px}
-  .conv{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
-  /* placar de 0 a 100, nao P&L: por isso azul. O gradiente gold->verde de antes gastava o
-     vocabulario de dinheiro num numero que nao e dinheiro, e competia com o P&L ao lado. */
-  .convbar{width:54px;height:6px;border-radius:3px;background:var(--surface);overflow:hidden}
-  .convbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-txt))}
-  .tag{display:inline-block;padding:3px 9px;border-radius:6px;font-size:11px;font-weight:700}
+  /* ---------- fila de sinais: TABELA, nao lista de cards ----------
+     A linha mostra o essencial e fecha com sparkline; o que nao cabe (motivos, stop,
+     comparativo, Analisar) abre numa sub-linha, que e o padrao que o CMC usa para detalhe. */
+  /* Toda coluna encolhe ate o conteudo; a folga vai para Status, que e a unica de texto
+     variavel. Sem isso o `width:100%` da tabela espalha a folga por igual e abre buracos de
+     150px entre colunas de numero. O nth-child conta as escondidas tambem, entao o indice nao
+     dança quando .col-2/.col-3 somem. */
+  .tbl-sinais thead th,.tbl-sinais .sig-row>td{width:1px;white-space:nowrap}
+  /* a folga sobra na ULTIMA coluna, que e a de acao: ali ela vira alinhamento a direita dos
+     botoes em vez de um buraco no meio da grade */
+  .tbl-sinais thead th:nth-child(10),.tbl-sinais .sig-row>td:nth-child(10){width:auto}
+  .sig-row{cursor:pointer}
+  .sig-row>td{padding:10px;border-bottom:1px solid var(--line)}
+  .sig-row.on>td{border-bottom-color:transparent}
+  @media(hover:hover){.sig-row:hover>td{background:var(--surface)}}
+  .sig-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .sig-ativo{font-weight:600;white-space:nowrap}
+  .sig-exp{display:inline-block;width:12px;color:var(--txt3);font-size:10px;
+    transition:transform var(--dur) var(--ease)}
+  .sig-row.on .sig-exp{transform:rotate(90deg)}
+  .sig-det>td{background:var(--surface);padding:12px 10px 16px;border-bottom:1px solid var(--line)}
+  .det-why{margin-bottom:8px}
+  .det-acts{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+  /* placar de 0 a 100, nao P&L: por isso azul, e barra fina. O gradiente gold->verde de antes
+     gastava o vocabulario de dinheiro num numero que nao e dinheiro. */
+  .conv{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-75);font-weight:600;white-space:nowrap}
+  .convbar{width:44px;height:4px;border-radius:var(--r-pill);background:var(--surface2);overflow:hidden}
+  .convbar i{display:block;height:100%;background:var(--accent)}
+  /* direcao continua verde/vermelha: e o uso legitimo do par */
+  .tag{display:inline-block;padding:2px 8px;border-radius:var(--r-sm);font-size:var(--fs-75);font-weight:600}
   .tag.long{background:var(--pos-bg);color:var(--pos)}.tag.short{background:var(--neg-bg);color:var(--neg)}
-  .sig .acts{display:flex;gap:8px}
+  .row-spark{display:block;width:76px;height:22px;pointer-events:none}
+  .row-spark svg{display:block;width:76px;height:22px}
+  .row-spark.vazio{color:var(--txt3);font-size:var(--fs-75)}
+  .acts-cell{white-space:nowrap;text-align:right}
+  .acts-cell button{margin-left:6px}
   /* Operar e a acao primaria da tela inteira: azul solido, texto branco (4.92:1). Era um
      gradiente verde-teal, que sugeria "lucro" antes mesmo do trade existir. */
-  .btn-op{flex:1;background:var(--accent);color:var(--txt);padding:10px;font-weight:700}
-  .btn-skip{background:var(--surface);color:var(--txt2);padding:10px 14px;border:1px solid var(--line)}
+  .btn-op{background:var(--accent);color:var(--txt);padding:6px 12px;font-weight:600}
+  @media(hover:hover){.btn-op:hover{background:var(--accent-hover);filter:none}}
+  .btn-skip{background:transparent;color:var(--txt2);padding:6px 11px;border:1px solid var(--line2)}
+  @media(hover:hover){.btn-skip:hover{background:var(--surface2);filter:none}}
 
   /* Tabela do DESIGN.md: th 12px/700 em --txt3, td 14px/500, e a separacao e sempre a
      hairline --line embaixo -- sem zebra, que em tema escuro briga com as tintas de linha. */
   table{width:100%;border-collapse:collapse}
+  /* cabecalho grudado no topo da PAGINA: por isso a tabela nao pode morar dentro de um
+     container com overflow, que viraria o contexto de rolagem e mataria o sticky. O fundo
+     e obrigatorio, senao a linha que passa por baixo aparece atraves dele. */
   th{text-align:left;font-size:var(--fs-75);color:var(--txt3);font-weight:700;
-    padding:10px;border-bottom:1px solid var(--line);white-space:nowrap}
+    padding:10px;border-bottom:1px solid var(--line);white-space:nowrap;
+    position:sticky;top:0;z-index:5;background:var(--bg)}
   td{padding:12px 10px;border-bottom:1px solid var(--line);font-size:var(--fs-100);
     font-weight:500;vertical-align:middle}
+  /* texto a esquerda, numero a direita e tabular (o tabular vem do body) */
+  .num,th.num{text-align:right}
+  /* Prioridade de coluna no lugar de rolagem horizontal. Rolar a tabela na horizontal e
+     incompativel com cabecalho grudado: o wrapper com overflow vira o contexto de rolagem.
+     O que some em tela estreita continua legivel na sub-linha expansivel. */
+  @media(max-width:1100px){.col-2{display:none}}
+  @media(max-width:820px){.col-3{display:none}}
+  /* Em 390 nem o conjunto reduzido cabe em uma linha de nowrap. Aqui a linha para de ser
+     nowrap: o status quebra, os dois botoes empilham, e a tabela volta a caber sem a pagina
+     rolar na horizontal. O que sumiu continua na sub-linha. */
+  @media(max-width:620px){
+    .col-4{display:none}
+    .tbl-sinais thead th,.tbl-sinais .sig-row>td{white-space:normal}
+    .tbl-sinais .sig-row>td{padding:8px 6px}
+    .tbl-sinais .st{white-space:normal;display:block;max-width:130px}
+    .acts-cell button{display:block;width:100%;margin:0 0 5px}
+    .acts-cell button:last-child{margin-bottom:0}
+  }
   .empty{color:var(--txt2);text-align:center;padding:22px 0;font-size:var(--fs-100)}
   .empty.off{color:var(--neg)}
   /* skeleton de carregamento (some no 1o /estado) */
@@ -311,7 +358,11 @@
   .tipo-reversao{background:var(--warn-bg);color:var(--warn)}
   .cmp{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px;margin-top:7px}
   .cmp b{color:var(--txt)}
-  .entry-status{margin:9px 0 2px;font-size:12px;font-weight:600;padding:5px 9px;border-radius:6px}
+  .entry-status{margin:9px 0 2px;font-size:var(--fs-75);font-weight:600;padding:5px 9px;border-radius:var(--r-sm);display:inline-block}
+  /* mesma tinta da .entry-status, em formato de pilula de celula. O texto e o recorte antes do
+     travessao; o inteiro fica no title e na sub-linha. */
+  .st{display:inline-block;padding:2px 8px;border-radius:var(--r-sm);font-size:var(--fs-75);
+    font-weight:600;white-space:nowrap}
   /* "ainda vale entrar?" fala de oportunidade de dinheiro: verde/vermelho ficam. */
   .st-ok{background:var(--pos-bg);color:var(--pos)}
   .st-tight{background:var(--warn-bg);color:var(--warn)}
@@ -849,24 +900,108 @@ const ACCENT_RGB='56,97,251';
 // Azul, nao verde/vermelho: e a MESMA serie da Curva de capital, e pintar a mesma serie de duas
 // cores em dois lugares da tela seria defeito. A direcao ja esta dita, em verde/vermelho, na
 // linha de P&L logo acima.
-function sparkline(valores, alvo, opts){
-  const el=typeof alvo==='string'?document.getElementById(alvo):alvo; if(!el) return;
+// Devolve o SVG como STRING: a linha da tabela e montada por template, e um sparkline que so
+// sabe escrever em innerHTML nao serve de fechamento de linha. O sparkline() abaixo passou a ser
+// so o escritor.
+function sparkSVG(valores, opts){
   const o=opts||{};
   const v=(valores||[]).filter(n=>typeof n==='number'&&isFinite(n));
-  if(v.length<2){ el.innerHTML=''; return; }
+  if(v.length<2) return '';
   const W=100,H=32,min=Math.min(...v),max=Math.max(...v),amp=(max-min)||1;
   const d=v.map((n,i)=>`${i?'L':'M'}${(i/(v.length-1)*W).toFixed(2)} ${(H-(n-min)/amp*H).toFixed(2)}`).join('');
-  const gid='spark-g-'+(el.id||'x');            // id unico: dois <defs> com o mesmo id colidem
-  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" focusable="false">`+
+  const gid='spark-g-'+(o.id||'x');             // id unico: dois <defs> com o mesmo id colidem
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" focusable="false" aria-hidden="true">`+
     (o.area===false?'':
       `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">`+
       `<stop offset="0" stop-color="rgba(${ACCENT_RGB},.28)"/>`+
       `<stop offset="1" stop-color="rgba(${ACCENT_RGB},0)"/>`+
       `</linearGradient></defs>`+
       `<path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#${gid})"/>`)+
-    // non-scaling-stroke: sem isso o preserveAspectRatio="none" estica a linha junto com o tile
+    // non-scaling-stroke: sem isso o preserveAspectRatio="none" estica a linha junto com a caixa
     `<path d="${d}" fill="none" stroke="var(--accent-txt)" stroke-width="1.5"`+
     ` vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+// Azul, nao verde/vermelho: e a MESMA serie da Curva de capital, e pintar a mesma serie de duas
+// cores em dois lugares da tela seria defeito. A direcao ja esta dita, em verde/vermelho, na
+// coluna de delta ao lado.
+function sparkline(valores, alvo, opts){
+  const el=typeof alvo==='string'?document.getElementById(alvo):alvo; if(!el) return;
+  el.innerHTML=sparkSVG(valores,{...(opts||{}),id:el.id||'x'});
+}
+
+// ---- fila de sinais: tabela com linha expansivel ----
+// Quais linhas estao abertas mora AQUI, num Set, e nao no HTML: o carregar() reescreve
+// #pendentes inteiro a cada 3s, entao qualquer estado guardado na marcacao fecharia sozinho
+// no proximo poll. O render le o Set, e por isso a linha continua aberta atravessando polls.
+const _sigAbertos=new Set();
+// Serie observada de preco por ativo, alimentada pelo /precos (poll de 8s). O /estado nao traz
+// historico de preco do sinal, entao o sparkline da linha desenha o que o painel VIU desde que
+// abriu -- dado honesto, sem requisicao nova. Fica vazio ate ter dois pontos.
+const _serie={}, SERIE_MAX=60;
+function anotaSerie(precos){
+  Object.entries(precos||{}).forEach(([a,p])=>{
+    if(typeof p!=='number'||!isFinite(p))return;
+    const v=_serie[a]||(_serie[a]=[]);
+    if(v[v.length-1]!==p)v.push(p);
+    if(v.length>SERIE_MAX)v.splice(0,v.length-SERIE_MAX);
+  });
+}
+function toggleSinal(ev,id){
+  // clique num botao da linha e acao, nao expansao
+  if(ev&&ev.target&&ev.target.closest&&ev.target.closest('button'))return;
+  if(_sigAbertos.has(id))_sigAbertos.delete(id); else _sigAbertos.add(id);
+  if(_est)carregarPendentes(_est);
+}
+function carregarPendentes(e){
+  const pe2=document.getElementById('pendentes'); if(!pe2)return;
+  if(!e.pendentes||!e.pendentes.length){
+    pe2.innerHTML='<div class="empty">Nenhum sinal no momento — engine observando 👀</div>'; return;
+  }
+  pe2.innerHTML='<table class="tbl-sinais"><thead><tr>'+
+    '<th class="col-2">#</th><th>Ativo</th><th>Lado</th><th class="col-2">Conv.</th>'+
+    '<th class="num col-2">Entrada</th><th class="num col-3">Agora</th><th class="num col-4">Δ</th>'+
+    '<th>Status</th><th class="col-3">Tendência</th><th></th></tr></thead><tbody>'+
+    e.pendentes.map((s,i)=>linhaSinal(s,i)).join('')+'</tbody></table>';
+}
+function linhaSinal(s,i){
+  const cls=s.direcao==='LONG'?'long':'short', pa=_precos[s.ativo];
+  const dlt=pa?(pa-s.preco)/s.preco*100:null;
+  const fav=dlt!=null&&((s.direcao==='LONG'&&dlt>0)||(s.direcao==='SHORT'&&dlt<0));
+  const st=statusEntrada(s,pa), aberto=_sigAbertos.has(s.id);
+  // statusEntrada() e logica e nao se toca: o texto curto e so recorte para caber na celula,
+  // e o inteiro fica no title e na sub-linha.
+  const stCurto=st.txt.split(' — ')[0];
+  const json=JSON.stringify(s);
+  // a serie da linha comeca no preco do PROPRIO sinal e segue pelo que o painel observou:
+  // e a leitura util aqui ("de onde saiu, pra onde foi"), e ja tem dois pontos no primeiro
+  // /precos em vez de esperar dois polls para aparecer
+  const spark=sparkSVG([s.preco].concat(_serie[s.ativo]||[]),{area:false,id:'sig'+s.id});
+  const linha=`<tr class="sig-row${aberto?' on':''}${st.cls==='st-no'?' sig-dim':''}" data-sid="${s.id}"
+      tabindex="0" aria-expanded="${aberto}" onclick="toggleSinal(event,${s.id})">
+    <td class="mono mut col-2">${i+1}</td>
+    <td class="sig-ativo"><span class="sig-exp" aria-hidden="true">▶</span> ${s.ativo.replace('/USDT','')} <span class="tf-badge">${s.tf||''}</span></td>
+    <td><span class="tag ${cls}">${s.direcao}</span></td>
+    <td class="col-2"><span class="conv">${s.conviccao}<span class="convbar"><i style="width:${s.conviccao}%"></i></span></span></td>
+    <td class="mono num col-2">${num(s.preco)}</td>
+    <td class="mono num col-3">${pa?num(pa):'—'}</td>
+    <td class="mono num col-4 ${dlt==null?'mut':(fav?'pos':'neg')}" title="${dlt==null?'sem preço ao vivo':(fav?'a favor do sinal':'contra o sinal')}">${dlt==null?'—':(dlt>=0?'+':'')+dlt.toFixed(2)+'% '+(fav?'✓':'✗')}</td>
+    <td><span class="st ${st.cls}" title="${st.txt}">${stCurto}</span></td>
+    <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
+    <td class="acts-cell"><button class="btn-op" data-foco="op-${s.id}" onclick='abrirModal(${json})'>⚡ Operar</button><button class="btn-skip" onclick="pular(${s.id})">Pular</button></td>
+  </tr>`;
+  if(!aberto)return linha;
+  const chips=(s.motivos||'').split(', ').filter(Boolean).map(m=>`<span class="why-chip">${m}</span>`).join('')
+    ||'<span class="why-chip">sinal fraco</span>';
+  return linha+`<tr class="sig-det" data-sid="${s.id}"><td colspan="10">
+    <div class="det-why"><span class="why-lbl">Por quê</span>${chips}</div>
+    <div class="cmp"><span class="tipo-badge tipo-${s.tipo||'tendencia'}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span>
+      <span class="mut">🕐 ${(s.ts||'').slice(11,16)}</span>
+      <span class="mut">sinal <b>${num(s.preco)}</b></span>
+      ${pa?`<span class="mut">→ agora <b>${num(pa)}</b></span><span class="${fav?'pos':'neg'}" style="font-weight:600">${dlt>=0?'+':''}${dlt.toFixed(2)}% ${fav?'✓ a favor':'✗ contra'}</span>`:'<span class="mut">→ agora …</span>'}
+      <span class="mut">· stop sugerido <b class="neg">${num(s.stop_sugerido)}</b></span></div>
+    <div class="entry-status ${st.cls}">${st.txt}</div>
+    <div class="det-acts"><button class="btn-analise" onclick='analisarSinal(${json})'>🔍 Analisar no gráfico</button></div>
+  </td></tr>`;
 }
 
 // Tiles de Posicoes, Risco do dia e Exposicao. Os tres fecham com barra em vez de sparkline
@@ -959,17 +1094,8 @@ async function carregar(){
     rgEl.innerHTML=rgh;
   }
 
-  // pendentes
-  const pe2=document.getElementById('pendentes');
-  if(e.pendentes.length){
-    pe2.innerHTML=e.pendentes.map(s=>{const cls=s.direcao==='LONG'?'long':'short', pa=_precos[s.ativo], dlt=pa?(pa-s.preco)/s.preco*100:null, fav=dlt!=null&&((s.direcao==='LONG'&&dlt>0)||(s.direcao==='SHORT'&&dlt<0)), st=statusEntrada(s,pa);
-      return `<div class="sig${st.cls==='st-no'?' sig-dim':''}"><div class="top"><span class="ativo">${s.ativo} <span class="tag ${cls}">${s.direcao}</span> <span class="tf-badge">${s.tf||''}</span> <span class="tipo-badge tipo-${s.tipo||'tendencia'}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span></span>
-        <span class="conv">${s.conviccao}<span class="convbar"><i style="width:${s.conviccao}%"></i></span></span></div>
-        <div class="why"><span class="why-lbl">Por quê</span>${(s.motivos||'').split(', ').filter(Boolean).map(m=>`<span class="why-chip">${m}</span>`).join('')||'<span class="why-chip">sinal fraco</span>'}<div class="cmp"><span class="mut">🕐 ${(s.ts||'').slice(11,16)}</span><span class="mut">sinal <b>${num(s.preco)}</b></span>${pa?`<span class="mut">→ agora <b>${num(pa)}</b></span><span class="${fav?'pos':'neg'}" style="font-weight:700">${dlt>=0?'+':''}${dlt.toFixed(2)}% ${fav?'✓ a favor':'✗ contra'}</span>`:'<span class="mut">→ agora …</span>'}<span class="mut">· stop ${s.stop_sugerido}</span></div></div>
-        <div class="entry-status ${st.cls}">${st.txt}</div>
-        <div class="acts"><button class="btn-analise" onclick='analisarSinal(${JSON.stringify(s)})'>🔍 Analisar</button><button class="btn-op" onclick='abrirModal(${JSON.stringify(s)})'>⚡ Operar</button>
-        <button class="btn-skip" onclick="pular(${s.id})">Pular</button></div></div>`}).join('');
-  } else pe2.innerHTML='<div class="empty">Nenhum sinal no momento — engine observando 👀</div>';
+  // pendentes: uma linha por sinal, sub-linha sob demanda
+  carregarPendentes(e);
 
   // posicoes
   const po=document.getElementById('posicoes');
@@ -1307,7 +1433,14 @@ function abrirModal(s){_sig=s; _modalTrigger=document.activeElement;
   usarSugestao(); document.getElementById('overlay').classList.add('on');
   setTimeout(()=>{const v=document.getElementById('m-valor'); if(v){v.focus();v.select();}},50);}   // foco no 1o campo
 function fecharModal(){document.getElementById('overlay').classList.remove('on');_sig=null;
-  if(_modalTrigger&&_modalTrigger.focus){_modalTrigger.focus();_modalTrigger=null;}}              // restaura foco
+  // O poll reescreve #pendentes a cada 3s: enquanto o modal esta aberto, o botao guardado em
+  // _modalTrigger vira no DETACHED, e focar um no fora do documento joga o foco no body. Por
+  // isso o gatilho carrega data-foco, uma identidade que sobrevive ao rerender.
+  let alvo=_modalTrigger;
+  if(alvo&&!document.body.contains(alvo)&&alvo.dataset&&alvo.dataset.foco)
+    alvo=document.querySelector('[data-foco="'+alvo.dataset.foco+'"]');
+  if(alvo&&alvo.focus)alvo.focus();
+  _modalTrigger=null;}
 function calcSugestao(){
   const l=+document.getElementById('m-lev').value||1, risco=(+document.getElementById('m-risco').value||3)/100;
   const banca=_est&&_est.banca?_est.banca.atual:1000;
@@ -1379,9 +1512,17 @@ async function carregarPrecos(){
     const ativos=[...new Set((_est?.pendentes||[]).map(s=>s.ativo))];
     if(!ativos.length){_precos={};return;}
     _precos=await apiFetch('/precos?ativos='+encodeURIComponent(ativos.join(','))).then(r=>r.json());
+    anotaSerie(_precos);
+    if(_est)carregarPendentes(_est);          // redesenha com o preco novo sem esperar o /estado
   }catch(e){}
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.getElementById('overlay').classList.contains('on'))fecharModal();});
+// Expandir pelo teclado. Delegado no document porque a lista e reescrita a cada 3s e um
+// listener preso na linha morreria junto com ela.
+document.addEventListener('keydown',e=>{
+  const tr=e.target&&e.target.classList&&e.target.classList.contains('sig-row')?e.target:null;
+  if(tr&&(e.key==='Enter'||e.key===' ')){ e.preventDefault(); toggleSinal(e,+tr.dataset.sid); }
+});
 // ---- auto-trader (experimento) ----
 function renderAuto(e){
   const cfg=e.config||{}, a=e.auto||{};
@@ -1441,7 +1582,10 @@ function iniciarPolling(){ if(_timers.length)return;
   _timers.push(setInterval(carregar,3000), setInterval(carregarSentimento,60000),
     setInterval(carregarFunding,60000), setInterval(carregarSaidas,8000), setInterval(carregarPrecos,8000)); }
 function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
-function cargaInicial(){ carregar(); carregarSentimento(); carregarFunding(); carregarSaidas(); carregarPrecos(); }
+// carregarPrecos() precisa de _est.pendentes para saber que ativos pedir. Disparado em
+// paralelo com o carregar(), o primeiro pedido saia vazio e as colunas Agora/Delta/Tendencia
+// ficavam em "—" ate o poll de 8s. Encadear custa nada e enche a tabela de primeira.
+function cargaInicial(){ carregar().then(carregarPrecos); carregarSentimento(); carregarFunding(); carregarSaidas(); }
 // Sem gate preventivo: se o backend exigir senha, o tratamento de 401 no apiFetch abre a
 // tela de login e para o polling. Com o backend aberto, ela nunca aparece. A credencial do
 // localStorage é reaproveitada: descartá-la aqui obrigava a redigitar login a cada F5, e
