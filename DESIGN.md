@@ -333,6 +333,11 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-29): cinco tiles planos no lugar do hero de vidro e dos tres stat cards. Risco do
+  dia e Exposicao aberta sairam dos banners e viraram tile, com barra E o numero escrito ao lado -
+  cor nunca e o unico sinal. `sparkline()` virou generico (serie + alvo) porque agora dois tiles a
+  usam. `#npend` continua existindo e sendo escrito, mas mora no rotulo da aba Sinais: o quinto
+  tile foi para risco/exposicao, e um contador de fila pertence a aba onde se age sobre ela.
 - 2026-08-22 (P2-28): casca nova. Sai a sidebar de 232px, sai o bento de duas colunas, saem os
   banners de risco de largura cheia; entram topbar, tab bar de sete blocos e status bar fixa.
   Os dois botoes de vista continuam `class="tab"` + `data-v` porque `aba()` mira aquele seletor;
