@@ -402,8 +402,20 @@ def confirmar(req: ConfirmarReq):
 
 
 @app.post("/panico")
-def panico():
-    """Kill-switch: fecha TODAS as posições abertas no preço ao vivo."""
+def panico(pular_pendentes: bool = False):
+    """Kill-switch: DESLIGA o auto-trader e fecha TODAS as posições abertas no preço ao vivo.
+
+    Desligar vem PRIMEIRO de propósito: se fechar alguma posição falhar no meio, o bot já
+    está morto e não reabre. Quem aperta o botão quer parar o sistema, não redistribuir a
+    carteira — e religar passa a exigir ação explícita no painel.
+
+    `pular_pendentes=1` marca também os sinais 'novo' como pulados. Fica DESLIGADO por
+    padrão: é decisão de produto (a fila pendente é combustível para religar por engano,
+    mas o auto-trader já só opera sinal com até `auto_freshness_min` minutos, então ela
+    envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
+    db.set_config("auto_trade", "0")            # mata o bot ANTES de fechar
+    _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
+    log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
     n, total = 0, 0.0
     for p in abertas:
@@ -414,7 +426,12 @@ def panico():
                 n += 1
         except Exception as e:
             log(f"panico erro pos {p['id']}: {e}", "error")
-    return {"ok": True, "fechadas": n, "pnl": round(total, 2)}
+    pulados = 0
+    if pular_pendentes:
+        with db.conectar() as c:
+            pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
+    return {"ok": True, "fechadas": n, "pnl": round(total, 2),
+            "auto_desligado": True, "pendentes_pulados": pulados}
 
 
 @app.post("/pular")
