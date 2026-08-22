@@ -52,6 +52,13 @@ def analisa(ativo, tf):
     return out
 
 
+# [P2-9] Marca do sinal que passou SEM a checagem de fluxo. O portao so roda se `book()`
+# devolveu dados; quando nao devolve, a garantia deixa de existir e isso precisa ficar
+# ESCRITO no sinal — e a unica coisa que o auto-trader consegue ler depois (ele nao ve o
+# ciclo do scan). Constante em vez de literal solto porque `autotrader.py` a le.
+MOTIVO_FLUXO_ND = "fluxo n/d"
+
+
 def confirmado(s, ativo, cfg):
     """Portões de confirmação — DIFERENTES por estratégia.
     TENDÊNCIA: exige ADX alto + confluência + fluxo a favor.
@@ -89,6 +96,15 @@ def confirmado(s, ativo, cfg):
                 s["rejeitado_por"] = "fluxo"
                 return False, f"fluxo contra o SHORT ({fc:.0f}% comprador)"
             s["motivos"] += f", fluxo {fc:.0f}% taker"
+        else:
+            # [P2-9] book indisponivel (rede, exchange fora, book vazio) = portao PULADO.
+            # Decisao registrada na §4b do plano: opcao B — passa ANOTADO e medido, em vez de
+            # rejeitar (fail-closed secaria a fila inteira numa instabilidade prolongada).
+            # A degradacao vira dado em dois lugares: no sinal (motivos, que o auto-trader le)
+            # e no contador do ciclo (ultimo_scan, que o /status publica).
+            s["fluxo_indisponivel"] = True
+            s["motivos"] += f", {MOTIVO_FLUXO_ND}"
+            ultimo_scan["fluxo_indisponivel"] += 1
     return True, "confirmado"
 
 
@@ -186,7 +202,12 @@ def analise(ativo, tf="15m", limite=200):
 # do worker completa "com sucesso" (o except de cada moeda engolia tudo num print) e o
 # /status reporta 0 erros enquanto o bot está cego. Foi exatamente o que aconteceu quando
 # a Binance devolveu 451 para o IP da VM.
-ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
+ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None,
+               # [P2-9] quantos sinais do ciclo passaram sem a checagem de fluxo
+               # (book indisponivel). Zero e a operacao normal; qualquer numero aqui
+               # e portao anunciado que nao rodou. Aparece sozinho no /status: o
+               # endpoint devolve este dicionario inteiro sob a chave "scan".
+               "fluxo_indisponivel": 0}
 
 
 REJEITADO_FLUXO = "rejeitado_fluxo"      # [Q-4] status fora da fila: nenhuma consulta de
@@ -300,7 +321,7 @@ def scan():
     ativos = [a.strip() for a in cfg["ativos"].split(",") if a.strip()]
     tfs = [t.strip() for t in cfg.get("timeframes", cfg.get("timeframe", "15m")).split(",") if t.strip()]
     ts = str(pd.Timestamp.now())
-    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0)    # zera a cada varredura
+    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0, fluxo_indisponivel=0)   # zera a cada varredura
     resultados, novos = [], 0
     for a in ativos:
         for tf in tfs:                                   # alargamento: varre cada timeframe
