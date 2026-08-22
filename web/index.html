@@ -228,14 +228,13 @@
   /* ---------- fila de sinais: TABELA, nao lista de cards ----------
      A linha mostra o essencial e fecha com sparkline; o que nao cabe (motivos, stop,
      comparativo, Analisar) abre numa sub-linha, que e o padrao que o CMC usa para detalhe. */
-  /* Toda coluna encolhe ate o conteudo; a folga vai para Status, que e a unica de texto
-     variavel. Sem isso o `width:100%` da tabela espalha a folga por igual e abre buracos de
-     150px entre colunas de numero. O nth-child conta as escondidas tambem, entao o indice nao
-     dança quando .col-2/.col-3 somem. */
+  /* Toda coluna encolhe ate o conteudo e UMA recebe a folga, marcada por classe (.flex).
+     Sem isso o `width:100%` da tabela espalha a folga por igual e abre buracos de 150px entre
+     colunas de numero. Marcar por classe e nao por indice: o indice quebraria se uma coluna
+     mudasse de lugar, e a classe diz por que aquela coluna e a elastica. */
   .tbl-sinais thead th,.tbl-sinais .sig-row>td{width:1px;white-space:nowrap}
-  /* a folga sobra na ULTIMA coluna, que e a de acao: ali ela vira alinhamento a direita dos
-     botoes em vez de um buraco no meio da grade */
-  .tbl-sinais thead th:nth-child(10),.tbl-sinais .sig-row>td:nth-child(10){width:auto}
+  th.flex,td.flex{width:auto}
+  td.flex.wrap,th.flex.wrap{white-space:normal}
   .sig-row{cursor:pointer}
   .sig-row>td{padding:10px;border-bottom:1px solid var(--line)}
   .sig-row.on>td{border-bottom-color:transparent}
@@ -324,10 +323,8 @@
      Journal vai para Motivo, que e a unica de texto livre. */
   #posicoes thead th,#posicoes tbody tr:not(.saida)>td,
   #trades thead th,#trades tbody td,
-  #dca thead th,#dca tbody td{width:1px;white-space:nowrap}
-  #posicoes thead th:nth-child(9),#posicoes tbody tr:not(.saida)>td:nth-child(9){width:auto}
-  #trades thead th:nth-child(6),#trades tbody td:nth-child(6){width:auto;white-space:normal}
-  #dca thead th:nth-child(7),#dca tbody td:nth-child(7){width:auto}
+  #dca thead th,#dca tbody td,
+  #funding thead th,#funding tbody td{width:1px;white-space:nowrap}
   .saida td{white-space:normal}
   /* evolucao do P&L da posicao: mesma mini-curva que fecha a linha de sinal */
   .row-spark{display:block;width:76px;height:22px;pointer-events:none}
@@ -383,8 +380,7 @@
   .fund-bar i{display:block;height:100%;border-radius:var(--r-pill)}
   .fund-bar i.b-pos{background:var(--pos)}
   .fund-bar i.b-neg{background:var(--neg)}
-  #funding thead th,#funding tbody td{width:1px;white-space:nowrap}
-  #funding thead th:nth-child(2),#funding tbody td:nth-child(2){width:auto}
+
   .dca-form{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
   .dca-form select{width:auto;background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);padding:8px 11px;font-family:inherit;font-weight:600;font-size:13px}
   .dca-form input{width:80px;padding:8px 10px;font-size:13px}
@@ -493,73 +489,43 @@
     transition:transform var(--dur2) var(--ease),opacity var(--dur2) var(--ease)}
   #toast.on{transform:translateX(-50%) translateY(0);opacity:1}
   /* ---------- gate de login ----------
-     Tela cheia, nao modal: sem credencial nao existe painel atras para espiar, entao nao
-     faz sentido desenhar um card flutuando sobre dados. Tudo aqui sai dos tokens do :root
-     -- quando o redesign de PLANO-FRONTEND-REDESIGN.md trocar a paleta, esta tela troca
-     junto, sem tocar numa linha. Nenhuma cor solta. */
-  #gate{position:fixed;inset:0;z-index:100;display:none;place-items:center;padding:20px;overflow-y:auto;
-    /* minmax(0,1fr): sem isso a coluna implicita e dimensionada por max-content (os 404px do
+     Tela cheia, nao modal: sem credencial nao existe painel atras para espiar, entao nao faz
+     sentido desenhar um card flutuando sobre dados.
+     Plano e parado, como o resto do sistema: sem malha, sem varredura descendo a tela, sem
+     cascata de entrada, sem anel pulsante na marca, sem gradiente de fundo. A primeira tela do
+     produto nao pode contradizer todas as outras.
+     Sobraram DUAS animacoes, e as duas sao informacao, nao atmosfera: o ponto do indicador de
+     saude (significa "o backend esta vivo") e o giro do botao enquanto verifica. O shake de
+     senha errada e transitorio e e feedback de erro, nao movimento continuo. */
+  #gate{position:fixed;inset:0;z-index:100;display:none;padding:20px;overflow-y:auto;
+    /* minmax(0,1fr): sem isso a coluna implicita e dimensionada por max-content (a largura do
        card), fica MAIOR que a tela, e ai o max-width:100% do card resolve contra a coluna
-       inflada em vez da viewport -- no celular o card vazava 34px pra fora. */
+       inflada em vez da viewport -- no celular o card vazava 34px pra fora. Foi bug real. */
     grid-template-columns:minmax(0,1fr);
     place-items:safe center;
-    background:var(--bg);
-    background-image:radial-gradient(900px 500px at 50% -10%,rgba(59,130,246,.14),transparent),
-                     radial-gradient(760px 420px at 50% 110%,rgba(59,130,246,.07),transparent);}
+    background:var(--bg)}
   #gate.on{display:grid}
-  /* malha tecnica quase invisivel: textura de instrumento sem competir com o card */
-  #gate::before{content:"";position:absolute;inset:0;pointer-events:none;
-    background-image:linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),
-                     linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);
-    background-size:34px 34px;
-    -webkit-mask-image:radial-gradient(620px 460px at 50% 45%,#000,transparent 78%);
-            mask-image:radial-gradient(620px 460px at 50% 45%,#000,transparent 78%);}
-  /* varredura lenta descendo a tela: o terminal procurando a sessao */
-  #gate::after{content:"";position:absolute;top:0;left:0;right:0;height:1px;pointer-events:none;
-    background:linear-gradient(90deg,transparent,rgba(59,130,246,.45),transparent);
-    animation:gateScan 7s linear infinite}
-  @keyframes gateScan{0%{top:-2%;opacity:0}8%{opacity:1}92%{opacity:1}100%{top:102%;opacity:0}}
 
-  .gate-card{position:relative;width:404px;max-width:100%;padding:32px 30px 20px;
-    background:var(--surface);
-    border:1px solid var(--line);border-radius:18px;
-    box-shadow:0 34px 90px -24px rgba(0,0,0,.85);
-    animation:gateIn .5s cubic-bezier(.2,.8,.25,1) both}
-  @keyframes gateIn{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
-  /* fio de luz no topo: o equipamento energizado */
-  .gate-card::before{content:"";position:absolute;top:-1px;left:26px;right:26px;height:1px;
-    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.75}
-  /* entrada em cascata: o card monta de cima pra baixo, como um boot */
-  .gate-card>*{animation:gateUp .45s cubic-bezier(.2,.8,.25,1) both}
-  @keyframes gateUp{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
-  .gate-card>*:nth-child(1){animation-delay:.05s}
-  .gate-card>*:nth-child(2){animation-delay:.10s}
-  .gate-card>*:nth-child(3){animation-delay:.15s}
-  .gate-card>*:nth-child(4){animation-delay:.20s}
-  .gate-card>*:nth-child(5){animation-delay:.25s}
-  .gate-card>*:nth-child(6){animation-delay:.30s}
-  .gate-card>*:nth-child(7){animation-delay:.35s}
+  .gate-card{width:404px;max-width:100%;padding:28px 26px 20px;
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
   .gate-card.shake{animation:gateShake .4s}
   @keyframes gateShake{10%,90%{transform:translateX(-2px)}30%,70%{transform:translateX(4px)}50%{transform:translateX(-5px)}}
 
-  .gate-mark{width:56px;height:56px;margin:0 auto 15px;border-radius:16px;position:relative;
-    background:linear-gradient(135deg,var(--accent),var(--accent-txt));display:grid;place-items:center;
-    font-size:28px;box-shadow:0 12px 34px -8px rgba(59,130,246,.55)}
-  .gate-mark::after{content:"";position:absolute;inset:-6px;border-radius:22px;
-    border:1px solid rgba(59,130,246,.30);animation:gateRing 3s ease-out infinite}
-  @keyframes gateRing{0%{transform:scale(.92);opacity:.9}70%{transform:scale(1.14);opacity:0}100%{opacity:0}}
+  /* marca: quadrado --accent de raio 4, o mesmo da topbar. Era um gradiente com sombra colorida
+     e anel pulsante -- tres efeitos para dizer uma coisa. */
+  .gate-mark{width:40px;height:40px;margin:0 auto 16px;border-radius:var(--r-sm);
+    background:var(--accent);display:grid;place-items:center;font-size:22px}
 
-  .gate-h{text-align:center;font-size:20px;font-weight:700;letter-spacing:-.4px}
+  .gate-h{text-align:center;font-size:var(--fs-300);font-weight:700;line-height:var(--lh-head)}
   .gate-h span{color:var(--txt3);font-weight:500}
-  .gate-sub{text-align:center;font-size:10.5px;color:var(--txt2);
-    text-transform:uppercase;letter-spacing:1.7px;margin-top:6px}
+  .gate-sub{text-align:center;font-size:var(--fs-75);color:var(--txt3);margin-top:5px}
 
   /* Estado do backend ao vivo. /health e a unica rota sem autenticacao, entao da pra dizer
      "o backend esta de pe" ANTES de a pessoa digitar -- e nao confundir senha errada com
      servico fora do ar, que e o que os dois prompt() do navegador nunca souberam fazer. */
-  .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:17px auto 20px;
-    width:fit-content;font-size:11px;font-weight:600;padding:7px 13px;
-    border-radius:20px;border:1px solid var(--line);background:var(--surface2);color:var(--txt3)}
+  .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:18px auto 20px;
+    width:fit-content;font-size:var(--fs-75);font-weight:600;padding:6px 12px;
+    border-radius:var(--r-pill);border:1px solid var(--line);background:var(--surface2);color:var(--txt2)}
   .gate-status .dot{background:var(--txt2);animation:none}
   .gate-status.up{color:var(--pos);background:var(--pos-bg);border-color:var(--pos-b)}
   .gate-status.up .dot{background:var(--pos);animation:pulse 1.8s infinite}
@@ -567,28 +533,28 @@
   .gate-status.down .dot{background:var(--neg)}
 
   .gate-f{position:relative;margin-bottom:13px}
-  .gate-f label{display:block;font-size:10.5px;font-weight:600;color:var(--txt3);
-    text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
-  .gate-f input{padding:12px 13px;font-size:15px}
-  .gate-f input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,97,251,.3)}
+  .gate-f label{display:block;font-size:var(--fs-75);font-weight:600;color:var(--txt3);margin-bottom:6px}
+  .gate-f input{padding:11px 13px;font-size:var(--fs-200)}
   .gate-f input:disabled{opacity:.55}
-  .gate-eye{position:absolute;right:4px;top:26px;height:38px;width:40px;background:transparent;
-    color:var(--txt2);font-size:15px;display:grid;place-items:center;border-radius:8px;padding:0}
+  .gate-eye{position:absolute;right:4px;top:28px;height:38px;width:40px;background:transparent;
+    color:var(--txt2);font-size:15px;display:grid;place-items:center;border-radius:var(--r-sm);padding:0}
   @media (hover:hover){.gate-eye:hover{color:var(--txt);background:var(--surface2)}}
-  .gate-caps{font-size:10.5px;color:var(--warn);margin-top:7px;display:none}
+  .gate-caps{font-size:var(--fs-75);color:var(--warn);margin-top:7px;display:none}
   .gate-caps.on{display:block}
 
   /* azul solido com texto branco: 4.92:1, que e o par que o DESIGN.md fixa para o primario. */
-  .gate-btn{width:100%;padding:13px;font-size:15px;font-weight:700;color:var(--txt);margin-top:4px;
-    background:var(--accent);
+  .gate-btn{width:100%;padding:12px;font-size:var(--fs-200);font-weight:600;color:var(--txt);margin-top:6px;
+    background:var(--accent);border-radius:var(--r-sm);
     display:flex;align-items:center;justify-content:center;gap:9px}
+  @media(hover:hover){.gate-btn:hover{background:var(--accent-hover);filter:none}}
   .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);
     border-top-color:var(--txt);animation:gateSpin .6s linear infinite;display:none}
   .gate-btn.loading .gate-spin{display:block}
   @keyframes gateSpin{to{transform:rotate(360deg)}}
 
-  .gate-msg{display:none;margin-top:14px;padding:11px 13px;border-radius:10px;font-size:12.5px;
-    line-height:1.55;border:1px solid transparent}
+  /* as quatro mensagens distintas (401, 429, sem rede, sem DASH_PASS) moram nestas tres tintas */
+  .gate-msg{display:none;margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);
+    font-size:var(--fs-75);line-height:1.55;border:1px solid transparent}
   .gate-msg.on{display:block}
   .gate-msg.err{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
   .gate-msg.warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-b)}
@@ -596,8 +562,8 @@
   .gate-msg b{font-weight:700}
 
   .gate-foot{margin-top:18px;padding-top:13px;border-top:1px solid var(--line);text-align:center;
-    font-size:10px;color:var(--txt2);line-height:1.7;word-break:break-all}
-  @media(max-width:440px){.gate-card{padding:26px 20px 16px}.gate-mark{width:50px;height:50px;font-size:25px}}
+    font-size:var(--fs-50);color:var(--txt3);line-height:1.7;word-break:break-all}
+  @media(max-width:440px){.gate-card{padding:24px 18px 16px}}
 </style>
 </head>
 <body>
@@ -1042,7 +1008,7 @@ function carregarPendentes(e){
   pe2.innerHTML='<table class="tbl-sinais"><thead><tr>'+
     '<th class="col-2">#</th><th>Ativo</th><th>Lado</th><th class="col-2">Conv.</th>'+
     '<th class="num col-2">Entrada</th><th class="num col-3">Agora</th><th class="num col-4">Δ</th>'+
-    '<th>Status</th><th class="col-3">Tendência</th><th></th></tr></thead><tbody>'+
+    '<th>Status</th><th class="col-3">Tendência</th><th class="flex"></th></tr></thead><tbody>'+
     e.pendentes.map((s,i)=>linhaSinal(s,i)).join('')+'</tbody></table>';
 }
 function linhaSinal(s,i){
@@ -1069,7 +1035,7 @@ function linhaSinal(s,i){
     <td class="mono num col-4 ${dlt==null?'mut':(fav?'pos':'neg')}" title="${dlt==null?'sem preço ao vivo':(fav?'a favor do sinal':'contra o sinal')}">${dlt==null?'—':(dlt>=0?'+':'')+dlt.toFixed(2)+'% '+(fav?'✓':'✗')}</td>
     <td><span class="st ${st.cls}" title="${st.txt}">${stCurto}</span></td>
     <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
-    <td class="acts-cell"><button class="btn-op" data-foco="op-${s.id}" onclick='abrirModal(${json})'>⚡ Operar</button><button class="btn-skip" onclick="pular(${s.id})">Pular</button></td>
+    <td class="acts-cell flex"><button class="btn-op" data-foco="op-${s.id}" onclick='abrirModal(${json})'>⚡ Operar</button><button class="btn-skip" onclick="pular(${s.id})">Pular</button></td>
   </tr>`;
   if(!aberto)return linha;
   const chips=(s.motivos||'').split(', ').filter(Boolean).map(m=>`<span class="why-chip">${m}</span>`).join('')
@@ -1184,7 +1150,7 @@ async function carregar(){
   if(e.posicoes.length){
     po.innerHTML='<table><thead><tr><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada</th>'+
     '<th class="num">Atual</th><th class="col-2">Tam.</th><th class="num">P&L (ROE)</th>'+
-    '<th class="num col-3">Liq.</th><th class="col-3">Evolução</th><th></th></tr></thead><tbody>'+
+    '<th class="num col-3">Liq.</th><th class="col-3">Evolução</th><th class="flex"></th></tr></thead><tbody>'+
     e.posicoes.map(p=>{const pl=p.pnl||0, roe=p.valor_reais?pl/p.valor_reais*100:0, d=p.direcao==='LONG'?1:-1, liq=p.entrada*(1-d*0.9/p.alavancagem), sd=_saidas[p.id];
       const spark=sparkSVG(_pnlHist[p.id],{area:false,id:'pos'+p.id});
       return `<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
@@ -1195,18 +1161,18 @@ async function carregar(){
       <td class="mono num ${pl>=0?'pos':'neg'}" style="font-weight:600">${brl(pl)} <span class="met-nota ${pl>=0?'pos':'neg'}">${pct(roe)}</span></td>
       <td class="mono neg num col-3">${num(liq)}</td>
       <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
-      <td class="acts-cell"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${sd.nivel}"><td colspan="9">${sd.acao}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</tbody></table>';
+      <td class="acts-cell flex"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${sd.nivel}"><td colspan="9">${sd.acao}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</tbody></table>';
   } else po.innerHTML='<div class="empty">Nenhuma posição aberta</div>';
 
   // trades
   const tr=document.getElementById('trades'), ts=e.trades||[];
   if(ts.length){
     tr.innerHTML='<table><thead><tr><th>Hora</th><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada→Saída</th>'+
-    '<th class="col-2">Tam.</th><th class="col-3">Motivo</th><th class="num">Resultado (ROE)</th></tr></thead><tbody>'+
+    '<th class="col-2">Tam.</th><th class="col-3 flex wrap">Motivo</th><th class="num">Resultado (ROE)</th></tr></thead><tbody>'+
     ts.map(t=>`<tr><td class="mono mut">${(t.fechado_em||'').slice(11,16)}</td><td style="font-weight:600">${t.ativo.replace('/USDT','')}</td>
       <td><span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span></td>
       <td class="mono mut num col-2">${num(t.entrada)}→${num(t.saida)}</td>
-      <td class="mono mut col-2">R$${t.valor_reais}·${t.alavancagem}x</td><td class="mut col-3">${t.motivo_saida}</td>
+      <td class="mono mut col-2">R$${t.valor_reais}·${t.alavancagem}x</td><td class="mut col-3 flex wrap">${t.motivo_saida}</td>
       <td class="mono num ${t.pnl_reais>=0?'pos':'neg'}" style="font-weight:600">${brl(t.pnl_reais)} <span class="met-nota ${t.pnl_reais>=0?'pos':'neg'}">${pct(t.valor_reais?t.pnl_reais/t.valor_reais*100:0)}</span></td></tr>`).join('')+'</tbody></table>';
   } else tr.innerHTML='<div class="empty">Nenhum trade ainda</div>';
 
@@ -1248,14 +1214,14 @@ async function carregar(){
     if(planos.length){
       dcaEl.innerHTML='<table><thead><tr><th>Ativo</th><th class="num col-2">Investido</th>'+
         '<th class="num col-2">Preço médio</th><th class="num">Valor atual</th><th class="num">P&L</th>'+
-        '<th class="col-3">Aportes</th><th></th></tr></thead><tbody>'+
+        '<th class="col-3">Aportes</th><th class="flex"></th></tr></thead><tbody>'+
         planos.map(p=>`<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
           <td class="mono mut num col-2">${brl(p.total_investido)}</td>
           <td class="mono mut num col-2">${num(p.preco_medio)}</td>
           <td class="mono num">${brl(p.valor_atual)}</td>
           <td class="mono num ${p.pnl>=0?'pos':'neg'}" style="font-weight:600">${brl(p.pnl)} <span class="met-nota ${p.pnl>=0?'pos':'neg'}">${pct(p.pnl_pct)}</span></td>
           <td class="mono mut col-3">${p.n_aportes}× · R$${p.valor_aporte}/${p.freq_dias}d</td>
-          <td class="acts-cell"><button class="btn-sug" onclick="aportarDca(${p.id})">aportar</button> <button class="btn-skip" onclick="removerDca(${p.id})" aria-label="remover plano DCA" title="remover">×</button></td></tr>`).join('')+'</tbody></table>';
+          <td class="acts-cell flex"><button class="btn-sug" onclick="aportarDca(${p.id})">aportar</button> <button class="btn-skip" onclick="removerDca(${p.id})" aria-label="remover plano DCA" title="remover">×</button></td></tr>`).join('')+'</tbody></table>';
     } else dcaEl.innerHTML='<div class="empty">Nenhum plano. Crie um abaixo pra acumular cripto de forma disciplinada (sem adivinhar timing).</div>';
     const dsel=document.getElementById('dca-ativo');
     if(dsel&&!dsel.options.length&&e.config){e.config.ativos.split(',').forEach(a=>{const o=document.createElement('option');o.value=a.trim();o.textContent=a.trim().replace('/USDT','');dsel.appendChild(o);});}
@@ -1302,13 +1268,13 @@ async function carregarFunding(){
     const max=Math.max(1,...arr.map(x=>Math.abs(x.anual)));
     const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100);
       return `<tr><td class="fund-a">${x.gordo?'🔥 ':''}${x.ativo.replace('/USDT','')}</td>
-        <td><span class="fund-bar"><i class="${x.anual>=0?'b-pos':'b-neg'}" style="width:${w}%"></i></span></td>
+        <td class="flex"><span class="fund-bar"><i class="${x.anual>=0?'b-pos':'b-neg'}" style="width:${w}%"></i></span></td>
         <td class="mono num ${x.anual>=0?'pos':'neg'}" style="font-weight:600">${x.anual>=0?'+':''}${x.anual}%</td>
         <td class="mono num mut">${x.funding_pct}%</td></tr>`;
     }).join('');
     // Sem sparkline aqui, e de proposito: o /funding devolve so o instante, nao serie. Inventar
     // uma curva a partir de um ponto seria desenho, nao dado.
-    el.innerHTML=banner+'<table><thead><tr><th>Ativo</th><th>Carry (relativo)</th>'+
+    el.innerHTML=banner+'<table><thead><tr><th>Ativo</th><th class="flex">Carry (relativo)</th>'+
       '<th class="num">%/ano</th><th class="num">%/8h</th></tr></thead><tbody>'+linhas+'</tbody></table>';
   }catch(e){}
 }

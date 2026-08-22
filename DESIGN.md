@@ -343,6 +343,15 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-34): gate de login plano. Sairam 52 regras de atmosfera do tema navy: malha
+  tecnica mascarada em radial, varredura animada descendo a tela, entrada em cascata item por
+  item, anel pulsante na marca, dois gradientes radiais de fundo, fio de luz no topo do card e a
+  sombra de 90px. Ficaram **duas** animacoes, e as duas sao informacao: o ponto do indicador de
+  saude ("o backend esta vivo") e o giro do botao enquanto verifica. O shake de senha errada
+  tambem fica - e feedback transitorio de erro, nao movimento continuo.
+  Nada do que custou uma madrugada saiu: as quatro mensagens distintas (401, 429, sem rede, sem
+  `DASH_PASS`), o `/health` ao vivo antes de digitar, o Caps Lock, o olho de mostrar senha e o
+  `minmax(0,1fr)` que impedia o card de vazar 34px em 390px.
 - 2026-08-22 (P2-33): mapa de cor dos graficos aplicado. As bandas de Bollinger eram
   `rgba(148,161,189,...)`, um cinza que nao correspondia a token nenhum; viraram `--txt2`
   (#A1A7BB) a 50%, variacao de alpha declarada. Area da curva de capital ajustada de `.34` para
