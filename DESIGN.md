@@ -82,14 +82,29 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
   - accent2: oklch(0.714 0.143 254.6) | #60a5fa
   - success/alta: oklch(0.734 0.163 159.8) | #16c784
   - error/baixa: oklch(0.663 0.192 20.8) | #f2555e
+  - error sobre tinta (`--red-on`): oklch(0.746 0.155 18.1) | #ff8087
   - warning: oklch(0.813 0.165 86.7) | #f0b90b
+  - grade de grafico (`--grid`): #1b2540
 - Regra semantica dura: verde e vermelho **so** para dinheiro e direcao (P&L, LONG/SHORT, vela,
   alerta de risco). Nunca para nav ativa, foco, botao primario ou estado de UI. Azul faz esse
   trabalho. Gold faz aviso.
 - Nota sobre o error: o plano propunha #ea3943, que reprova o gate de contraste (4.18:1 sobre
   surface, 4.30:1 sobre o vidro). Substituido por #f2555e (5.04:1 e 5.19:1), o vermelho mais
-  proximo do original que passa. O #ea3943 sobrevive apenas como preenchimento translucido
-  (`--red-bg`) e nas velas do grafico, onde e forma e nao texto.
+  proximo do original que passa.
+
+### Duas regras de par que valem em todo lugar
+
+Texto colorido sobre a **propria tinta** e o ponto onde um tema escuro reprova sem avisar: a
+tinta levanta a luminancia do fundo e come o contraste. Por isso cada acento tem dois papeis:
+
+| token | papel | nunca |
+|---|---|---|
+| `--accent` #3b82f6 | **preenche**: botao primario, barra, marca | escrever sobre `--accent-bg` (3.87:1) |
+| `--accent2` #60a5fa | **escreve**: link, nav ativa, chip azul | - |
+| `--red` #f2555e | dinheiro em superficie **solida** (P&L, celula) | escrever sobre `--red-bg` (4.42:1) |
+| `--red-on` #ff8087 | escreve sobre **tinta vermelha**: banner, chip, pill | - |
+
+Verde e gold nao precisam do par: passam sobre a propria tinta (6.24:1 e 7.81:1).
 
 ## Spacing, radius, shadow
 
@@ -103,7 +118,7 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
 ## Layout and composition
 
 - Grid: sidebar fixa 232px + conteudo. Dentro do conteudo, bento: linha de resumo (hero 1.6fr +
-  3 stat cards) e depois duas colunas, principal (fluida) e trilho direito (340px).
+  3 stat cards) e depois duas colunas, principal (fluida) e trilho direito (372px).
 - Coluna principal: Curva de capital, Sinais, Posicoes, Journal. Trilho direito: Auto-trade,
   Sentimento, Funding, DCA, Metricas. Criterio: o que se le em sequencia fica na coluna larga; o
   que se consulta de relance fica no trilho.
@@ -133,8 +148,13 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
 
 ## Motion
 
-- Duration: 150ms (estado de controle), 300ms (entrada de camada), 450-500ms (entrada do gate).
-- Easing: `cubic-bezier(.2,.8,.25,1)` para entrada. Sem bounce, sem elastic.
+- Duration: `--dur` 150ms (estado de controle), `--dur2` 280ms (entrada de camada),
+  450-500ms (entrada do gate).
+- Easing: `--ease` = `cubic-bezier(.2,.8,.25,1)` para entrada. Sem bounce, sem elastic.
+- Transicao **nomeada**, nunca `transition:.15s` solto: a forma curta vira `all` e poe o browser
+  para vigiar toda propriedade, inclusive as que causam layout.
+- O modal cresce do **gatilho**: `abrirModal` le o `getBoundingClientRect()` do botao que abriu e
+  escreve o `transform-origin`. Sem gatilho conhecido (teclado), cai no centro.
 - O que anima: apenas `transform` e `opacity`. Excecao herdada e aceita: `filter: brightness` nos
   botoes, que nao causa layout e e mais barato que trocar background.
 - reduced-motion: `prefers-reduced-motion: reduce` zera animacao e transicao globalmente e desliga
@@ -142,13 +162,33 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
 - Signature motion: a aura do hero nao pulsa. O unico movimento continuo da tela e o `.dot` do
   badge AO VIVO, porque ele significa "o poll esta vivo".
 
+## Graficos
+
+Chart.js e Lightweight-Charts recebem **string de cor**: nao entendem `var()`. Em vez de repetir
+hex e deixar o grafico dessincronizar do tema, existe um objeto `TEMA` que **le os tokens do
+`:root`** em tempo de carga. Trocar um token aqui troca a vela junto, e este arquivo continua
+sendo fonte unica.
+
+| elemento | cor | por que |
+|---|---|---|
+| vela | `--green` / `--red` | direcao de preco: uso legitimo do par |
+| curva de capital e sparkline do hero | `--accent2` com area em `rgba(accent,.34)` | e a **mesma serie**; pintar de duas cores em dois lugares da tela seria defeito. A direcao ja esta dita, em verde/vermelho, na linha de P&L logo acima |
+| EMA20 | `--accent2` | era teal, cor que saiu da paleta |
+| EMA50 | `--gold` | - |
+| Bollinger | `rgba(148,161,189,...)` | era roxo `rgba(150,140,225)`, exatamente a faixa de matiz que o resto do sistema evita, e ali nao dizia nada que um cinza nao diga |
+| linha de entrada / stop | `--green`/`--red` | dinheiro |
+| linha de liquidez, seta de posicao aberta | `--gold` | aviso |
+| grade | `--grid` | mais escura que `--border`, senao vira gaiola por cima da vela |
+
 ## Iconography
 
 - Sidebar: SVG inline, grid 24, stroke 1.75, linecap e linejoin round, `currentColor`. Um so
   sistema para os seis itens (Painel, Grafico, Escanear, Panico, Resetar, Sair).
 - Todo botao so-icone tem nome acessivel (`aria-label` ou texto em `.sr-only`).
-- Divida conhecida: os titulos de painel ainda usam emoji como icone, o que o sistema acima nao
-  cobre. Fica para o P2-25 (acabamento), junto da auditoria anti-slop.
+- Divida conhecida e **aceita**: os titulos de painel e alguns botoes (Confirmar, Operar, Vender)
+  ainda usam emoji como rotulo. Trocar os ~40 emoji por SVG mexeria em quase toda string de render
+  do JS, o que e risco desproporcional a um ganho estetico, e o plano nao pede. Fica registrado
+  como divida consciente, nao como descuido.
 
 ## Imagery and illustration
 
@@ -185,9 +225,13 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
   --border:#233150; --border2:#2e3d5e;
   --txt:#e8ecf5; --muted:#94a1bd; --muted2:#aab4cc;
   --accent:#3b82f6; --accent2:#60a5fa; --accent-bg:rgba(59,130,246,.14);
-  --green:#16c784; --green-bg:rgba(22,199,132,.12);
-  --red:#f2555e;   --red-bg:rgba(234,57,67,.12);
-  --gold:#f0b90b;
+  --green:#16c784;--green-bg:rgba(22,199,132,.12);--green-b:rgba(22,199,132,.30);
+  --red:#f2555e;  --red-bg:rgba(242,85,94,.12); --red-b:rgba(242,85,94,.34);
+  --red-on:#ff8087;                       /* texto SOBRE tinta vermelha */
+  --gold:#f0b90b; --gold-bg:rgba(240,185,11,.10);--gold-b:rgba(240,185,11,.26);
+  --accent-b:rgba(59,130,246,.28);
+  --grid:#1b2540;                          /* grade de grafico */
+  --ease:cubic-bezier(.2,.8,.25,1); --dur:.15s; --dur2:.28s;
   --r-card:16px; --r-inner:10px;
   --shadow:0 10px 30px rgba(0,0,0,.35);
   --blur:14px;
@@ -208,12 +252,51 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
   padding 18px 20px, **sem sombra**.
 - Card de resumo: `background: var(--glass)`, `backdrop-filter: blur(14px)`,
   `border: 1px solid var(--glass-border)`, radius 16px, `box-shadow: var(--shadow)`.
-- Nunca card dentro de card dentro de card. Bloco interno usa `surface2` sem borda propria quando
-  ja esta dentro de um card com borda.
+- Bloco interno (`.sig`, `.mstat`, `.analise-box`, `.preview`) usa `surface2`. Borda propria e
+  permitida quando os blocos sao **irmaos que precisam se separar** (a fila de sinais, a grade de
+  tiles de metrica); sem ela viram uma mancha unica. Nunca card dentro de card dentro de card.
+- Camada flutuante (hero, modal, gate) inverte a regra: **sombra** mais uma hairline branca de
+  `--glass-border`, que ali le como reflexo de borda e nao como aresta.
+- O blur do modal mora no **overlay**, nao no modal: e no overlay que existe camada para resolver.
+  O modal em si e solido porque tem numero dentro.
 
 ## Slop audit
 
-- Date: 2026-08-21 | Result: corrigidos 4 tells, 2 desvios declarados, 1 divida registrada.
+### Rodada 2 (P2-22 a P2-25) - 2026-08-21
+
+Varredura automatizada de contraste em **todo no de texto visivel** da pagina renderizada, com
+dados reais, na vista Painel, com o modal aberto e na vista Grafico: **zero reprovacoes**.
+
+Tells corrigidos nesta rodada:
+
+1. **Texto sobre a propria tinta reprovando.** `--red` sobre `--red-bg` dava 4.42:1. Nasceu o
+   `--red-on` (#ff8087, 5.86:1) e a regra de par documentada acima. O mesmo problema existia em
+   azul: `--accent` sobre `--accent-bg` da 3.87:1, e passou a valer `--accent2`.
+2. **Cor semantica gasta em coisa que nao e dinheiro.** Saiu o verde de: barra de conviccao
+   (e placar de 0 a 100), badge "tendencia" (e categoria de setup), timeframe selecionado,
+   botao Indicadores, botao "aportar" e botao "Ativar bot". Tudo azul agora. Verde e vermelho
+   ficaram so em P&L, LONG/SHORT, vela, linha de entrada/stop e status de entrada.
+3. **Gradiente decorativo em botao.** `.btn-op` e `.btn-conf` eram `linear-gradient(135deg,
+   #16c784,#2dd4bf)` - sugeriam "lucro" antes do trade existir. Viraram azul solido.
+4. **Roxo das Bollinger.** `rgba(150,140,225)` e a faixa de matiz que a checklist marca como
+   oceano vermelho de UI gerada por IA. Virou cinza-azulado.
+5. **`transition:.15s` e `transition:.3s` soltos**, que sao `all` disfarcado. Trocados por
+   transicoes nomeadas em `transform`, `opacity` e cor.
+6. **Hairline + sombra difusa no mesmo elemento** no modal e no card do gate. Resolvido pela
+   regra de superficie acima: aresta OU sombra, e a hairline branca so como reflexo.
+
+Verificado tambem: modal abre com foco no primeiro campo, Esc fecha, foco volta ao gatilho;
+`prefers-reduced-motion` zera animacao e shimmer; nenhum erro de JS; sem scroll horizontal em
+1440, 1000 e 390.
+
+Sobrou cor cravada em 29 pontos, todos **variacao de alpha de um token existente**
+(`rgba(59,130,246,...)`, `rgba(22,199,132,...)`, `rgba(242,85,94,...)`, `rgba(148,161,189,...)`).
+Nenhum matiz orfao: teal `#2dd4bf`, `#ea3943` e o roxo `#9c8ce1` sairam do arquivo. Reduzir isso
+a zero pediria `color-mix()`, que nao vale o risco agora.
+
+### Rodada 1 (P2-20 e P2-21) - 2026-08-21
+
+- Result: corrigidos 4 tells, 2 desvios declarados, 1 divida registrada.
 - Corrigidos:
   1. **Gradiente em metrica**: `.card.hero .val` pintava o valor de equity com
      `linear-gradient(90deg,#fff,#9fe9d4)` em background-clip:text. Removido. O numero e o produto;
@@ -238,6 +321,11 @@ nao reabre aquelas decisoes; ele as traduz em tokens, regras e criterios verific
 
 ## Changelog
 
+- 2026-08-21 (2): P2-22 a P2-25. Paineis, tabelas, graficos e acabamento migrados. Nasceram
+  `--red-on`, `--accent-b`, `--green-b`, `--red-b`, `--gold-bg`, `--gold-b`, `--grid` e os tokens
+  de motion `--ease`/`--dur`/`--dur2`, mais a regra de par (preenche vs escreve). O tema dos
+  graficos passou a **ler** o `:root` em vez de repetir hex. O sparkline do hero virou azul para
+  nao pintar a mesma serie de duas cores. Auditoria de contraste passou a varrer todo no de texto
+  da pagina, nao uma amostra.
 - 2026-08-21: criado no P2-20. Tokens navy/azul, shell com sidebar, bento, e o hero de equity com
-  aura e sparkline do P2-21. Paineis, tabelas e graficos ainda rodam nos aliases de transicao e
-  serao migrados em P2-22, P2-23 e P2-24.
+  aura e sparkline do P2-21.
