@@ -207,7 +207,13 @@ ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None
                # (book indisponivel). Zero e a operacao normal; qualquer numero aqui
                # e portao anunciado que nao rodou. Aparece sozinho no /status: o
                # endpoint devolve este dicionario inteiro sob a chave "scan".
-               "fluxo_indisponivel": 0}
+               "fluxo_indisponivel": 0,
+               # [P2-15] `ultimo_erro` e do scan CORRENTE (zerado a cada varredura);
+               # `ultimo_erro_historico` nunca e zerado. Sao a mesma string com dois
+               # significados, e o bug era um campo so servindo aos dois: depois de uma
+               # varredura 100% verde o /status seguia exibindo o erro de horas atras como
+               # se fosse de agora. Separar e o que deixa limpar um sem perder o outro.
+               "ultimo_erro_historico": None}
 
 
 REJEITADO_FLUXO = "rejeitado_fluxo"      # [Q-4] status fora da fila: nenhuma consulta de
@@ -365,7 +371,10 @@ def scan():
     ativos = [a.strip() for a in cfg["ativos"].split(",") if a.strip()]
     tfs = [t.strip() for t in cfg.get("timeframes", cfg.get("timeframe", "15m")).split(",") if t.strip()]
     ts = str(pd.Timestamp.now())
-    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0, fluxo_indisponivel=0)   # zera a cada varredura
+    # [P2-15] `ultimo_erro=None` entra aqui: o scan zera ts/total/ok/falhas mas nao zerava
+    # o erro, e por isso o painel de saude nao distinguia problema atual de memoria.
+    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0, fluxo_indisponivel=0,
+                       ultimo_erro=None)                                   # zera a cada varredura
     try:
         # [P1-9] limpeza ANTES da varredura: o que for gravado agora nasce dentro da janela, e
         # o auto-trader (que roda logo depois, no mesmo ciclo do worker) já lê a fila limpa.
@@ -385,6 +394,7 @@ def scan():
             except Exception as e:
                 ultimo_scan["falhas"] += 1
                 ultimo_scan["ultimo_erro"] = f"{a} {tf}: {type(e).__name__}: {str(e)[:140]}"
+                ultimo_scan["ultimo_erro_historico"] = f"{ts} {ultimo_scan['ultimo_erro']}"
                 log(f"scan falhou {a} {tf}: {e}", "error")
                 continue
             for s in sigs:

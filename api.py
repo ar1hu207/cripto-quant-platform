@@ -9,6 +9,7 @@ import base64
 import os
 import re
 import secrets
+import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -29,11 +30,34 @@ import autotrader
 from logbot import log
 
 POLL_ATUALIZAR = 15   # marca posições a cada 15s
-CICLOS_POR_SCAN = 4   # roda scan de sinais a cada 4 ciclos (~60s)
+INTERVALO_SCAN = 60   # [P2-15] scan de sinais a cada 60s, por RELÓGIO (ver _scan_devido)
 _worker_on = {"v": True}
 _health = {"iniciado": None, "ultimo_ciclo": None, "ciclos": 0, "erros": 0}
 _saidas = {"v": []}   # recomendações de saída ativa, atualizadas pelo worker
 _auto = {"v": {"ativo": False}}   # último ciclo do auto-trader
+_poda = {"dia": None, "ultimo": None}   # [P2-11] retenção da curva de equity, 1x/dia
+_scan_sched = {"proximo": 0.0}          # [P2-15] instante (monotonic) do próximo scan; 0 = já vence
+
+
+def _scan_devido(agora=None):
+    """[P2-15] O scan vence AGORA? Ao dizer que sim, já reagenda o próximo.
+
+    Era `_health["ciclos"] % CICLOS_POR_SCAN == 0`, avaliado DENTRO do try do ciclo. Quando
+    uma exceção anterior abortava o try (o caso do [P1-1]), aquele slot era perdido e o scan
+    seguinte só vinha 4 ciclos depois: sob falha intermitente o intervalo real virava 2-3
+    minutos, sem ninguém ter decidido isso. Contar ciclos EXECUTADOS mede o que sobreviveu;
+    o que a cadência precisa medir é tempo, e quem mede tempo é relógio.
+
+    Reagenda ANTES de rodar, e é chamada de FORA do try do ciclo — as duas coisas juntas são
+    o card. Reagendamento depois de um `except` que pode ser pulado é o mesmo bug com outra
+    roupa. Está extraída do worker porque a regra não é testável dentro de um `while True`
+    com `sleep`: com o instante como parâmetro, `python api.py` prova a cadência sem esperar.
+    """
+    agora = time.monotonic() if agora is None else agora
+    if agora < _scan_sched["proximo"]:
+        return False
+    _scan_sched["proximo"] = agora + INTERVALO_SCAN
+    return True
 
 
 def equity_total():
@@ -52,8 +76,6 @@ def worker():
             abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
             _saidas["v"] = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
             dca.processar_devidos()                     # aportes DCA vencidos
-            if _health["ciclos"] % CICLOS_POR_SCAN == 0:
-                signal_engine.scan()                    # atualiza sinais
             try:
                 _auto["v"] = autotrader.auto_executar(_saidas["v"])   # bot abre/fecha sozinho (se ligado)
             except Exception as e:                      # falha do bot não derruba o snapshot de equity abaixo
@@ -66,6 +88,31 @@ def worker():
         except Exception as e:                          # nunca derruba o loop
             _health["erros"] += 1
             log(f"worker erro: {e}", "error")
+        # [P2-15] o scan sai de dentro do try acima: falha na marcação não consome mais o
+        # slot da varredura. Fica DEPOIS do ciclo, e não antes, porque marcar posição é o
+        # caminho do stop/liquidação — atrasá-lo pela duração do scan seria trocar um
+        # instrumento impreciso por um risco real. O auto-trader passa a consumir o sinal
+        # no ciclo seguinte (15s), folgado dentro dos `auto_freshness_min` (12 min).
+        if _scan_devido():
+            try:
+                signal_engine.scan()                    # atualiza sinais
+            except Exception as e:                      # já reagendado: erro não trava a cadência
+                _health["erros"] += 1
+                log(f"scan erro: {e}", "error")
+        # [P2-11] retenção da curva de equity, 1x por dia. Bloco PRÓPRIO, fora do try
+        # acima: faxina de banco não pode nem derrubar o ciclo nem ser derrubada por ele.
+        # Marca o dia ANTES de podar — se a poda falhar, ela volta amanhã e não a cada 15s
+        # martelando o mesmo banco. Roda também no primeiro ciclo após um start, que é o
+        # que faz o deploy num banco antigo se acertar sozinho.
+        hoje = str(pd.Timestamp.now().date())
+        if _poda["dia"] != hoje:
+            _poda["dia"] = hoje
+            try:
+                _poda["ultimo"] = db.podar_equity()
+                log(f"[P2-11] poda da equity: {_poda['ultimo']}")
+            except Exception as e:
+                _health["erros"] += 1
+                log(f"poda da equity falhou: {e}", "error")
         _health["ciclos"] += 1
         time.sleep(POLL_ATUALIZAR)
 
@@ -387,9 +434,43 @@ def config_js():
     return FileResponse(os.path.join(WEB, "config.js"), media_type="application/javascript")
 
 
+def _commit_em_producao(raiz=None):
+    """[P2-3] Hash do commit que ESTE processo está rodando.
+
+    A VM não é repositório git e o deploy é cópia manual, então "commit na main" nunca
+    significou "código rodando" — não havia como responder *qual* código está na VM sem
+    comparar md5 de arquivo a arquivo. Publicar o hash no /health é o que transforma isso
+    numa pergunta com resposta.
+
+    Ordem: `COMMIT_SHA` do ambiente (o deploy pode injetá-lo onde não há git) → `git
+    rev-parse` → **None**. None DECLARADO, nunca `"desconhecido"` ou `"dev"`: string
+    inventada responde à pergunta com algo que parece resposta, e a checagem de deploy
+    passaria a comparar com um valor que nunca foi um commit. É o portão do M2, o mesmo
+    princípio que o [P2-10] acabou de aplicar ao funding não medido.
+
+    `raiz` existe para a prova conseguir apontar para um diretório sem git."""
+    sha = (os.environ.get("COMMIT_SHA") or "").strip()
+    if sha:
+        return sha
+    try:
+        r = subprocess.run(["git", "-C", raiz or os.path.dirname(os.path.abspath(__file__)),
+                            "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:               # sem git instalado, sem repositório, timeout: tudo é None
+        pass
+    return None
+
+
+# Lido UMA vez, no import. Nunca por requisição: /health é o endpoint de saúde e o único
+# que responde sem autenticação — pôr um subprocesso no caminho dele seria dar a quem bate
+# na porta um `fork` de graça. E o commit de um processo não muda enquanto ele vive.
+COMMIT = _commit_em_producao()
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "versao": "0.3"}
+    return {"status": "ok", "versao": "0.3", "commit": COMMIT}
 
 
 @app.get("/status")
@@ -402,7 +483,17 @@ def status():
     # cego nas POSIÇÕES: o ciclo tentou marcar e nenhuma foi marcada. É mais grave que o
     # scan cego — posição não marcada é posição sem stop, sem trailing e sem liquidação.
     cego_pos = mk["total"] > 0 and mk["ok"] == 0
+    # [P2-10] o funding que NÃO foi medido já para de virar zero no banco — mas medição
+    # ausente que ninguém vê é silêncio com outro nome. `funding_medicao` é cumulativo
+    # (não zera por ciclo, ao contrário de `scan`): é a contagem da vida do processo, e é
+    # por ela que se percebe um 451 que só afeta o endpoint de futuros. Publicado do mesmo
+    # jeito que `scan` e `marcacao` — o dicionário inteiro, sob a sua chave.
+    #
+    # `saudavel` NÃO mudou: continua `not (cego or cego_pos)`. Falha de funding não cega o
+    # bot (ele segue marcando e fechando posição), e transformá-la em critério de saúde
+    # seria mexer no detector de cegueira, que é decisão do dono (CLAUDE.md §2).
     return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
+            "funding": simulador.funding_medicao,
             "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
@@ -447,14 +538,19 @@ def reset(req: ResetReq):
 def _amostrar(seq, alvo=125):
     """Reduz a série para ~alvo pontos, preservando o intervalo e o ponto mais recente.
     A curva de equity é reenviada inteira a cada poll de 3s e sozinha era 72% do payload
-    (51 KB de 71 KB). Com franquia de saída de 15 GB/mês na Azure, isso importa."""
-    if len(seq) <= alvo:
+    (51 KB de 71 KB). Com franquia de saída de 15 GB/mês na Azure, isso importa.
+
+    [P1-4] Passo FRACIONÁRIO. Era `passo = len(seq) // alvo` + `seq[::passo]`: divisão
+    inteira, então qualquer len entre `alvo` e `2*alvo - 1` dava passo=1 e a série voltava
+    INTEIRA — a função não reduzia nada justamente na faixa em que ela começa a ser
+    necessária, e a economia só ligava no dobro do alvo (medido: 200 -> 200, 249 -> 249).
+    Indexar por `round(i * n / alvo)` faz o passo médio ser n/alvo mesmo quando ele é
+    fracionário. O `| {n - 1}` garante o ponto mais recente, que é o requisito original."""
+    n = len(seq)
+    if n <= alvo:
         return seq
-    passo = len(seq) // alvo
-    amostra = seq[::passo]
-    if amostra[-1] is not seq[-1]:
-        amostra.append(seq[-1])
-    return amostra
+    idx = sorted({min(round(i * n / alvo), n - 1) for i in range(alvo)} | {n - 1})
+    return [seq[i] for i in idx]
 
 
 @app.get("/estado")
@@ -467,7 +563,12 @@ def estado():
         "pendentes": db.listar("sinais", 30, "WHERE status='novo'"),
         "posicoes": db.listar("posicoes", 50, "WHERE status='aberta'"),
         "trades": db.listar("trades", 30),
-        "equity_hist": _amostrar(db.listar("equity", 500)[::-1]),
+        # [P2-11] a série INTEIRA (a poda a mantém pequena), reduzida a ~125 pontos pelo
+        # _amostrar. Era `listar("equity", 500)[::-1]`: 500 linhas de 15s = 125 minutos, ou
+        # seja o "gráfico da banca" mostrava ~2h e nunca a trajetória — que é a única
+        # leitura que ele existe para dar. O formato do payload não muda (ts/banca/
+        # equity_total, em ordem cronológica), então o front não muda junto.
+        "equity_hist": _amostrar(db.serie_equity()),
         "metricas": db.metricas(),
         "risco": simulador.guarda_risco(),
         "dca": dca.listar(),
@@ -693,3 +794,164 @@ def dca_aportar(req: IdReq):
 def dca_remover(req: IdReq):
     dca.remover(req.id)
     return {"ok": True}
+
+
+# ---------- provas de regressao do territorio T-API-DADOS ----------
+# No proprio modulo, e nao num script solto, porque prova fora do repositorio nao e
+# reexecutavel. Importar api.py nao abre banco nem rede (init_db so roda no lifespan).
+#
+#     python api.py           # asseracoes; exit 1 se qualquer uma falhar
+
+
+def _prova_api():
+    import tempfile
+    ok = fail = 0
+
+    def check(nome, cond, detalhe=""):
+        nonlocal ok, fail
+        print(("  PASSA  " if cond else "  FALHA  ") + nome + ("" if cond else "  <- " + str(detalhe)))
+        if cond:
+            ok += 1
+        else:
+            fail += 1
+
+    # ---------- [P1-4] _amostrar reduz na faixa em que antes nao reduzia nada
+    # A tabela de medicao do card (2026-08-19) e o teste: era 200 -> 200 e 249 -> 249.
+    print("  [P1-4] _amostrar(alvo=125)")
+    print("      entrada -> saida:", {n: len(_amostrar(list(range(n)))) for n in
+                                      (124, 125, 126, 200, 249, 250, 500)})
+    for n in (200, 249):
+        check("%d pontos reduzem para ~125" % n, len(_amostrar(list(range(n)))) <= 126,
+              str(len(_amostrar(list(range(n))))))
+    check("124 pontos passam intactos (abaixo do alvo)", _amostrar(list(range(124))) == list(range(124)))
+    check("250 e 500 continuam em ~125",
+          len(_amostrar(list(range(250)))) <= 126 and len(_amostrar(list(range(500)))) <= 126)
+    # varredura: as tres propriedades que a funcao promete, para todo tamanho ate 3x o alvo
+    falhou_ult = falhou_teto = falhou_ordem = falhou_1o = None
+    for n in range(1, 601):
+        seq = list(range(n))
+        a = _amostrar(seq)
+        if a[-1] != seq[-1]:
+            falhou_ult = n
+        if len(a) > 126:
+            falhou_teto = (n, len(a))
+        if a != sorted(a):
+            falhou_ordem = n
+        if a[0] != seq[0]:
+            falhou_1o = n
+    check("o ultimo ponto da serie esta SEMPRE na amostra", falhou_ult is None, "n=%s" % falhou_ult)
+    check("o primeiro ponto tambem (preserva o intervalo)", falhou_1o is None, "n=%s" % falhou_1o)
+    check("nenhum tamanho ate 600 passa de 126 pontos", falhou_teto is None, str(falhou_teto))
+    check("a ordem cronologica e preservada", falhou_ordem is None, "n=%s" % falhou_ordem)
+    # criterio "o grafico mantem a mesma forma visual": a amostragem e uniforme, entao
+    # media e extremos da amostra acompanham os da serie inteira.
+    import math
+    curva = [1000 + 200 * math.sin(i / 40) for i in range(500)]
+    am = _amostrar(curva)
+    dm = abs(sum(am) / len(am) - sum(curva) / len(curva))
+    check("a forma da curva sobrevive (media %.2f, topo %.2f, fundo %.2f de erro)"
+          % (dm, abs(max(am) - max(curva)), abs(min(am) - min(curva))),
+          dm < 1 and abs(max(am) - max(curva)) < 1 and abs(min(am) - min(curva)) < 1)
+
+    # ---------- [P2-15] a cadencia do scan para de derivar quando o ciclo falha
+    print("  [P2-15] cadencia do scan (INTERVALO_SCAN=%ds, ciclo=%ds)"
+          % (INTERVALO_SCAN, POLL_ATUALIZAR))
+    ciclos = [i * POLL_ATUALIZAR for i in range(41)]        # 10 minutos de worker
+    aborta = lambda i: i % 3 != 0                          # 2 de cada 3 ciclos abortam o try
+
+    def intervalos(d):
+        return [b - a for a, b in zip(d, d[1:])]
+
+    # O MODELO DO BUG: `ciclos % 4 == 0` avaliado DENTRO do try. O contador sempre avanca,
+    # mas o scan so acontece se o ciclo chegou ate ele -- entao a falha come o slot.
+    antigo = [t for i, t in enumerate(ciclos) if i % 4 == 0 and not aborta(i)]
+    check("modelo do bug: sob falha intermitente a cadencia ANTIGA ia a %ds"
+          % max(intervalos(antigo)), max(intervalos(antigo)) > INTERVALO_SCAN, str(antigo))
+
+    # A CORRECAO: `_scan_devido` e chamada de FORA do try, entao `aborta` nao a alcanca --
+    # por isso a lista abaixo nao filtra por ela. Que esteja fora do try se ve no diff;
+    # que a cadencia nao derive por conta do relogio e o que se prova aqui.
+    _scan_sched["proximo"] = 0.0
+    novo_d = [t for t in ciclos if _scan_devido(float(t))]
+    check("agendado por relogio, o scan vem a cada %ds mesmo com os ciclos falhando"
+          % INTERVALO_SCAN, set(intervalos(novo_d)) == {INTERVALO_SCAN}, str(novo_d))
+
+    # reagendou ANTES de rodar: mesmo que o proprio scan levante, o proximo continua a 60s
+    _scan_sched["proximo"] = 0.0
+    _scan_devido(1000.0)                                   # "rodou" e explodiu logo depois
+    check("scan que levanta nao trava a cadencia (reagenda antes de rodar)",
+          _scan_devido(1000.0 + INTERVALO_SCAN - 1) is False
+          and _scan_devido(1000.0 + INTERVALO_SCAN) is True)
+
+    # ---------- [P2-15] scan verde apaga o erro do painel, sem apagar o forense
+    # /status le o banco; aponta para um TEMPORARIO -- o trading.db local esta vazio.
+    db.DB = os.path.join(tempfile.mkdtemp(), "prova_api.db")
+    db.init_db()
+    signal_engine.ultimo_scan.update(ts="2026-08-22 10:00:00", total=3, ok=0, falhas=3,
+                                     ultimo_erro="BTC/USDT 15m: ExchangeError: 451",
+                                     ultimo_erro_historico="2026-08-22 10:00:00 BTC/USDT 15m: "
+                                                           "ExchangeError: 451")
+    st = status()
+    check("scan cego: /status mostra o erro e saudavel=False",
+          st["scan"]["ultimo_erro"] and st["saudavel"] is False, str(st["scan"]))
+    # exatamente o que scan() faz ao comecar uma varredura, agora com ultimo_erro=None
+    signal_engine.ultimo_scan.update(ts="2026-08-22 11:00:00", total=0, ok=0, falhas=0,
+                                     fluxo_indisponivel=0, ultimo_erro=None)
+    signal_engine.ultimo_scan.update(total=3, ok=3, falhas=0)          # varredura 100% verde
+    st = status()
+    check("scan verde depois de scan com falha: /status sem ultimo_erro atual",
+          st["scan"]["ultimo_erro"] is None, str(st["scan"]))
+    check("o forense sobrevive em ultimo_erro_historico",
+          "451" in (st["scan"]["ultimo_erro_historico"] or ""),
+          str(st["scan"]["ultimo_erro_historico"]))
+    check("/status continua expondo saudavel exatamente como hoje", st["saudavel"] is True)
+    check("o contador do [P2-9] segue publicado (sem regressao)",
+          "fluxo_indisponivel" in st["scan"])
+
+    # ---------- [P2-10] o contador de falhas de funding aparece no /status
+    simulador.funding_medicao.update(medidos=7, falhas=2,
+                                     ultimo_erro="BTC/USDT: ExchangeNotAvailable: 451",
+                                     ultimo_erro_ts="2026-08-22 09:30:00")
+    st = status()
+    check("/status publica o contador de funding",
+          st.get("funding", {}).get("falhas") == 2 and st["funding"]["medidos"] == 7,
+          str(st.get("funding")))
+    check("e publica o motivo da ultima falha, nao so a contagem",
+          "451" in (st["funding"]["ultimo_erro"] or ""), str(st["funding"]["ultimo_erro"]))
+    check("falha de funding NAO derruba saudavel (criterio inalterado)",
+          st["saudavel"] is True, str(st["saudavel"]))
+    check("scan e marcacao seguem publicados ao lado (sem regressao)",
+          "scan" in st and "marcacao" in st)
+
+    # ---------- [P2-3] /health responde QUAL commit esta rodando
+    print("  [P2-3] /health =", health())
+    h = health()
+    check("/health continua com status e versao (sem regressao)",
+          h["status"] == "ok" and h["versao"] == "0.3", str(h))
+    check("/health devolve o commit", "commit" in h)
+    check("o commit vem do valor lido no import, nao de um subprocesso por requisicao",
+          h["commit"] is COMMIT)
+    check("neste repositorio o commit e o HEAD de verdade",
+          h["commit"] == subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                                        text=True).stdout.strip(), str(h["commit"]))
+    sem_git = _commit_em_producao(raiz=tempfile.mkdtemp())
+    check("sem git, devolve None DECLARADO -- nunca 'desconhecido' nem 'dev'",
+          sem_git is None, repr(sem_git))
+    os.environ["COMMIT_SHA"] = "deadbeefcafe"
+    try:
+        check("COMMIT_SHA do ambiente tem precedencia (deploy sem git)",
+              _commit_em_producao() == "deadbeefcafe")
+    finally:
+        os.environ.pop("COMMIT_SHA", None)
+
+    print("\n  %d passaram, %d falharam" % (ok, fail))
+    return 1 if fail else 0
+
+
+if __name__ == "__main__":
+    import sys
+    try:                                   # console do Windows em cp1252 mutila o acento
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    sys.exit(_prova_api())
