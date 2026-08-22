@@ -101,16 +101,25 @@
   /* auto-trader */
   /* borda so, sem o anel extra: uma coisa por elemento. Azul e nao verde porque "bot ligado" e
      estado de interface, e verde aqui e vocabulario de dinheiro. */
+  /* borda so, sem o anel extra: uma coisa por elemento. Azul e nao verde porque "bot ligado"
+     e estado de interface, e verde aqui e vocabulario de dinheiro. */
   #auto-panel.on{border-color:var(--accent)}
-  /* Ativar e a acao primaria do painel: azul solido com texto branco (4.92:1). Desativar e a
-     acao de parar, e ai o vermelho E o significado -- mesma logica do botao Panico. */
-  .btn-auto{background:var(--accent);color:var(--txt);border:1px solid transparent;font-weight:700;padding:9px 16px;font-size:var(--fs-100)}
+  /* Ativar e a acao primaria da aba: azul solido com texto branco (4.92:1). Desativar e a acao
+     de parar, e ai o vermelho E o significado -- mesma logica do botao Panico. */
+  .btn-auto{background:var(--accent);color:var(--txt);border:1px solid transparent;font-weight:600;padding:9px 16px;font-size:var(--fs-100)}
+  @media(hover:hover){.btn-auto:hover{background:var(--accent-hover);filter:none}}
   .btn-auto.on{background:var(--neg-bg);color:var(--neg);border-color:var(--neg-b)}
-  .auto-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
-  .auto-cfg{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px}
-  .auto-cfg label{font-size:11px;color:var(--txt3);display:flex;flex-direction:column;gap:3px}
-  .auto-cfg input{width:82px;background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);padding:7px 9px;font-size:13px}
-  .auto-warn{font-size:11.5px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-b);border-radius:var(--r-sm);padding:9px 11px;margin-top:10px;line-height:1.5}
+  @media(hover:hover){.btn-auto.on:hover{background:var(--neg-bg);filter:brightness(1.15)}}
+  .auto-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+  .auto-status{font-size:var(--fs-75);color:var(--txt2)}
+  .auto-cfg{display:flex;gap:12px 16px;flex-wrap:wrap;align-items:flex-end}
+  .auto-cfg label{font-size:var(--fs-75);color:var(--txt3);display:flex;flex-direction:column;gap:5px}
+  .auto-cfg input{width:88px;padding:7px 9px;font-size:var(--fs-100)}
+  .auto-log{font-size:var(--fs-75);line-height:1.9;margin-top:14px}
+  .auto-log:empty{display:none}
+  .auto-warn{font-size:var(--fs-75);color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-b);
+    border-radius:var(--r-sm);padding:10px 12px;margin-top:16px;line-height:1.5}
   .auto-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
   .auto-badge.on{background:var(--pos);animation:pulse 2s infinite}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
@@ -302,6 +311,10 @@
   @media(hover:hover){tbody tr:hover>td{background:var(--surface)}}
   /* tabela de metrica: duas colunas, rotulo e valor. Era grade de tiles (.mstat), que dava a
      14 numeros de importancia diferente o mesmo peso visual. */
+  /* "largura cheia" e regra para a tabela larga, que e a protagonista. Com duas ou quatro
+     colunas, esticar ate 1392px so afasta o rotulo do valor e obriga o olho a atravessar a
+     tela. Estas ficam num bloco legivel. */
+  .tbl-met,#funding table{max-width:640px}
   .tbl-met td:first-child{color:var(--txt2)}
   .tbl-met td:last-child{text-align:right;font-weight:600;white-space:nowrap}
   .met-nota{color:var(--txt3);font-weight:500;font-size:var(--fs-75);margin-left:6px}
@@ -340,14 +353,31 @@
   .analise-box{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;margin-bottom:14px}
   .grid-ind{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin-top:11px;font-size:12.5px;}
   .grid-ind b{text-align:right}
-  .fund-alert{font-size:12.5px;padding:10px 13px;border-radius:var(--r-sm);background:var(--surface2);color:var(--txt2);margin-bottom:12px;border:1px solid var(--line)}
+  /* ---------- aba Mercado ----------
+     Gauge de Fear & Greed. O gradiente vermelho-gold-verde e o UNICO gradiente do sistema, e
+     esta aqui porque e escala de medida: ele diz o que cada ponta significa. Nao e decoracao. */
+  .fg{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+  .fg-num{font-size:var(--fs-1000);font-weight:700;line-height:1;letter-spacing:-1px;white-space:nowrap}
+  .fg-lbl{font-size:var(--fs-100);font-weight:600;margin-left:9px}
+  .fg-escala{flex:1;min-width:220px;max-width:520px}
+  .fg-barra{height:8px;border-radius:var(--r-pill);position:relative;
+    background:linear-gradient(90deg,var(--neg),var(--warn),var(--pos))}
+  .fg-agulha{position:absolute;top:-4px;width:3px;height:16px;background:var(--txt);
+    border-radius:var(--r-pill);transform:translateX(-1.5px);box-shadow:0 0 0 1px var(--bg)}
+  .fg-pontas{display:flex;justify-content:space-between;font-size:var(--fs-75);color:var(--txt3);margin-top:7px}
+  .fg-breadth{font-size:var(--fs-100);color:var(--txt2);margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+  .fund-alert{font-size:var(--fs-75);padding:9px 12px;border-radius:var(--r-sm);background:var(--surface);
+    color:var(--txt2);margin-bottom:14px;border:1px solid var(--line)}
   .fund-alert.on{background:var(--warn-bg);color:var(--warn);font-weight:600;border-color:var(--warn-b)}
-  .fund-list{display:grid;gap:6px}
-  .fund-row{display:grid;grid-template-columns:62px 1fr 92px 70px;gap:10px;align-items:center;font-size:12px}
-  .fund-a{font-weight:600}
-  .fund-bar{height:7px;background:var(--surface2);border-radius:4px;overflow:hidden}
-  .fund-bar i{display:block;height:100%;border-radius:4px}
-  .fund-v{font-weight:600;text-align:right}
+  .fund-a{font-weight:600;white-space:nowrap}
+  /* a barra e comparativa entre as moedas da lista, nao percentual absoluto: por isso a
+     escala e o maior |anual| da propria lista */
+  .fund-bar{display:block;min-width:90px;height:6px;background:var(--surface2);border-radius:var(--r-pill);overflow:hidden}
+  .fund-bar i{display:block;height:100%;border-radius:var(--r-pill)}
+  .fund-bar i.b-pos{background:var(--pos)}
+  .fund-bar i.b-neg{background:var(--neg)}
+  #funding thead th,#funding tbody td{width:1px;white-space:nowrap}
+  #funding thead th:nth-child(2),#funding tbody td:nth-child(2){width:auto}
   .dca-form{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
   .dca-form select{width:auto;background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);padding:8px 11px;font-family:inherit;font-weight:600;font-size:13px}
   .dca-form input{width:80px;padding:8px 10px;font-size:13px}
@@ -682,27 +712,32 @@
     </section>
 
     <section class="subview" id="sub-mercado" data-sub="mercado" role="tabpanel" aria-labelledby="tab-mercado" hidden>
-      <div class="panel"><h2>🌡️ Sentimento do mercado</h2><div id="sentimento" class="mut card">carregando...</div></div>
+      <!-- Sentimento nao e tabela: card. Funding e tabela: sem card em volta. -->
+      <div class="panel"><h2>🌡️ Sentimento do mercado</h2><div id="sentimento" class="card mut">carregando...</div></div>
       <div class="panel"><h2>🔥 Funding Monitor <span class="mut" style="font-weight:400">— radar do carry (long spot + short perp)</span></h2><div id="funding" class="mut">carregando...</div></div>
     </section>
 
     <section class="subview" id="sub-auto" data-sub="auto" role="tabpanel" aria-labelledby="tab-auto" hidden>
-  <div class="panel" id="auto-panel"><h2>🤖 Auto-trade <span class="mut" style="font-size:11px;font-weight:400">— experimento: o bot abre/fecha sozinho (paper)</span></h2>
-    <div class="auto-row">
-      <button id="auto-toggle" class="btn-auto" onclick="toggleAuto()" aria-pressed="false">Ativar bot 🤖</button>
-      <span id="auto-status" class="mut" style="font-size:12px"><span class="auto-badge"></span> desligado</span>
-    </div>
-    <div class="auto-cfg">
-      <label for="a-conv">Convicção mín<input id="a-conv" type="number" min="0" max="100" value="60"></label>
-      <label for="a-lev" id="a-lev-lbl">Alav. teto (x)<input id="a-lev" type="number" min="1" max="125" value="20"></label>
-      <label for="a-risco">Risco/trade %<input id="a-risco" type="number" min="0.1" max="20" step="0.5" value="3"></label>
-      <label for="a-maxpos">Máx posições<input id="a-maxpos" type="number" min="1" max="20" value="5"></label>
-      <label for="a-levmodo" style="flex-direction:row;align-items:center;gap:6px"><input id="a-levmodo" type="checkbox" checked style="width:auto"> Alav. ∝ convicção</label>
-      <button class="btn-sec" onclick="salvarAuto()">Salvar</button>
-    </div>
-    <div id="auto-log" class="mut" style="font-size:12px"></div>
-    <div class="auto-warn">⚠️ Paper trading (dinheiro fictício). Já provamos que essa estratégia <b>não tem edge</b> — o esperado é o bot derivar pra perda (taxa + alavancagem). Roda dentro da trava diária e do teto de exposição. É pra <b>observar</b>, não pra ganhar.</div>
-  </div>
+      <div class="panel"><h2>🤖 Auto-trade <span class="mut" style="font-weight:400">— experimento: o bot abre/fecha sozinho (paper)</span></h2>
+        <!-- nao e tabela, entao e card: e a regra do DESIGN.md. #auto-panel continua sendo
+             este elemento porque renderAuto() liga/desliga o .on nele. -->
+        <div class="card" id="auto-panel">
+          <div class="auto-row">
+            <button id="auto-toggle" class="btn-auto" onclick="toggleAuto()" aria-pressed="false">Ativar bot 🤖</button>
+            <span id="auto-status" class="auto-status"><span class="auto-badge"></span> desligado</span>
+          </div>
+          <div class="auto-cfg">
+            <label for="a-conv">Convicção mín<input id="a-conv" type="number" min="0" max="100" value="60"></label>
+            <label for="a-lev" id="a-lev-lbl">Alav. teto (x)<input id="a-lev" type="number" min="1" max="125" value="20"></label>
+            <label for="a-risco">Risco/trade %<input id="a-risco" type="number" min="0.1" max="20" step="0.5" value="3"></label>
+            <label for="a-maxpos">Máx posições<input id="a-maxpos" type="number" min="1" max="20" value="5"></label>
+            <label for="a-levmodo" style="flex-direction:row;align-items:center;gap:7px"><input id="a-levmodo" type="checkbox" checked style="width:auto"> Alav. ∝ convicção</label>
+            <button class="btn-sec" onclick="salvarAuto()">Salvar</button>
+          </div>
+          <div id="auto-log" class="auto-log mut"></div>
+          <div class="auto-warn">⚠️ Paper trading (dinheiro fictício). Já provamos que essa estratégia <b>não tem edge</b> — o esperado é o bot derivar pra perda (taxa + alavancagem). Roda dentro da trava diária e do teto de exposição. É pra <b>observar</b>, não pra ganhar.</div>
+        </div>
+      </div>
     </section>
   </div><!-- /view-painel -->
 
@@ -1223,17 +1258,19 @@ async function carregarSentimento(){
     const s=await apiFetch('/sentimento').then(r=>r.json());
     const fg=s.fear_greed, br=s.breadth; let h='';
     if(fg){
+      // faixa: a cor do numero e a mesma escala da barra. Todas saem de token, e todas passam
+      // 4.5:1 sobre --surface (o --neg corrigido inclusive).
       const cor=fg.valor<25?'var(--neg)':fg.valor<45?'var(--warn)':fg.valor<55?'var(--txt2)':'var(--pos)';
-      h+=`<div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
-        <div><div style="font-size:10.5px;letter-spacing:.5px;color:var(--txt3)">FEAR &amp; GREED</div>
-        <div style="font-size:30px;font-weight:800;color:${cor};letter-spacing:-1px">${fg.valor}<span style="font-size:13px;font-weight:600;margin-left:6px">${fg.label}</span></div></div>
-        <div style="flex:1;min-width:220px">
-          <div style="height:10px;border-radius:5px;background:linear-gradient(90deg,var(--neg),var(--warn),var(--pos));position:relative">
-            <div style="position:absolute;left:calc(${fg.valor}% - 2px);top:-3px;width:4px;height:16px;background:var(--txt);border-radius:2px;box-shadow:0 0 0 1px rgba(10,16,32,.75)"></div></div>
-          <div style="font-size:10px;color:var(--txt2);display:flex;justify-content:space-between;margin-top:4px"><span>Medo extremo</span><span>Ganância extrema</span></div>
+      h+=`<div class="fg">
+        <div><div class="lbl">Fear &amp; Greed</div>
+          <div class="fg-num mono" style="color:${cor}">${fg.valor}<span class="fg-lbl">${fg.label}</span></div></div>
+        <div class="fg-escala">
+          <div class="fg-barra" role="img" aria-label="Fear and Greed em ${fg.valor} de 100: ${fg.label}">
+            <span class="fg-agulha" style="left:${fg.valor}%"></span></div>
+          <div class="fg-pontas"><span>Medo extremo</span><span>Ganância extrema</span></div>
         </div></div>`;
     }
-    if(br) h+=`<div style="font-size:12.5px;margin-top:13px;color:var(--txt3)">📊 <b style="color:var(--txt)">${br.pct_subindo}%</b> das ${br.n} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
+    if(br) h+=`<div class="fg-breadth">📊 <b>${br.pct_subindo}%</b> das ${br.n} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
     document.getElementById('sentimento').innerHTML=h||'sentimento indisponível';
   }catch(e){}
 }
@@ -1248,14 +1285,18 @@ async function carregarFunding(){
     const banner=gordos.length
       ? `<div class="fund-alert on">🔥 ${gordos.length} moeda(s) com funding GORDO — possível janela de CARRY! (${gordos.map(x=>x.ativo.replace('/USDT','')).join(', ')})</div>`
       : `<div class="fund-alert">😴 Mercado calmo — funding fraco, sem prêmio de carry agora. Gatilho: funding anualizado ≥ 15%/ano.</div>`;
+    // barra comparativa dentro da propria lista: a escala e o maior |anual| que veio agora
     const max=Math.max(1,...arr.map(x=>Math.abs(x.anual)));
-    const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100), cor=x.anual>=0?'var(--pos)':'var(--neg)';
-      return `<div class="fund-row"><span class="fund-a">${x.gordo?'🔥':''} ${x.ativo.replace('/USDT','')}</span>
-        <span class="fund-bar"><i style="width:${w}%;background:${cor}"></i></span>
-        <span class="fund-v ${x.anual>=0?'pos':'neg'}">${x.anual>=0?'+':''}${x.anual}%/ano</span>
-        <span class="mut" style="font-size:10.5px;text-align:right">${x.funding_pct}%/8h</span></div>`;
+    const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100);
+      return `<tr><td class="fund-a">${x.gordo?'🔥 ':''}${x.ativo.replace('/USDT','')}</td>
+        <td><span class="fund-bar"><i class="${x.anual>=0?'b-pos':'b-neg'}" style="width:${w}%"></i></span></td>
+        <td class="mono num ${x.anual>=0?'pos':'neg'}" style="font-weight:600">${x.anual>=0?'+':''}${x.anual}%</td>
+        <td class="mono num mut">${x.funding_pct}%</td></tr>`;
     }).join('');
-    el.innerHTML=banner+`<div class="fund-list">${linhas}</div>`;
+    // Sem sparkline aqui, e de proposito: o /funding devolve so o instante, nao serie. Inventar
+    // uma curva a partir de um ponto seria desenho, nao dado.
+    el.innerHTML=banner+'<table><thead><tr><th>Ativo</th><th>Carry (relativo)</th>'+
+      '<th class="num">%/ano</th><th class="num">%/8h</th></tr></thead><tbody>'+linhas+'</tbody></table>';
   }catch(e){}
 }
 

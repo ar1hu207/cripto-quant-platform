@@ -343,6 +343,16 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-32): Sentimento e Funding ganharam a aba **Mercado**, o painel do bot ganhou a
+  aba **Auto-trade**. O gauge de Fear & Greed mantem o gradiente vermelho-gold-verde: e o unico
+  gradiente do sistema e esta la porque e **escala de medida** - diz o que cada ponta significa -
+  e nao decoracao. Os dez `style` inline do `carregarSentimento()` viraram classes; o
+  `rgba(10,16,32,.75)` do contorno da agulha (navy morto) virou `--bg`. Funding virou tabela de
+  verdade; **nao ganhou sparkline**, e de proposito: o `/funding` devolve o instante, nao serie, e
+  inventar curva a partir de um ponto seria desenho, nao dado.
+  Nota de largura: `.tbl-met` e a tabela de funding tem `max-width`. "Largura cheia" e regra para
+  a tabela larga, que e a protagonista; com duas ou quatro colunas, esticar ate 1392px so afasta
+  o rotulo do valor.
 - 2026-08-22 (P2-31): Posicoes, Journal, DCA e Metricas na tabela do sistema - largura cheia, sem
   card em volta, cabecalho grudado, numero a direita, hover de linha em `--surface`, sem zebra.
   Posicoes ganhou a coluna de evolucao do P&L. Metricas deixou de ser grade de tiles: os `.mstat`
