@@ -216,6 +216,10 @@ gigante de equity.
   prioridade (`.col-2` em 1100px, `.col-3` em 820px, `.col-4` em 620px) e o que sumiu continua
   legivel na sub-linha expansivel. A pagina nunca rola na horizontal, e o cabecalho gruda em
   qualquer largura.
+  Nas tabelas **sem** sub-linha (posicoes, journal, DCA, metricas) a saida e outra: elas cabem
+  inteiras acima de 820px, e so abaixo disso o container vira rolador horizontal. Ali o
+  cabecalho deixa de grudar - troca deliberada, porque a alternativa era esconder coluna sem
+  ter onde por o que sumiu.
 - **Status bar** fixa no rodape: 12px, `--txt2`, borda em cima, fundo `--bg-el`. Carrega o que
   precisa estar sempre visivel (banca, exposicao, risco do dia, AO VIVO, hora do ultimo poll).
   **Substitui os banners de risco** que hoje empurram o conteudo para baixo.
@@ -339,6 +343,13 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-31): Posicoes, Journal, DCA e Metricas na tabela do sistema - largura cheia, sem
+  card em volta, cabecalho grudado, numero a direita, hover de linha em `--surface`, sem zebra.
+  Posicoes ganhou a coluna de evolucao do P&L. Metricas deixou de ser grade de tiles: os `.mstat`
+  davam a 14 numeros de importancia muito diferente o mesmo peso visual, e viraram tabela de duas
+  colunas. `#risco-guard` parou de renderizar banner e virou item da status bar (banca, risco do
+  dia, exposicao); o banner sobrou so para os dois estados que travam operacao. Registrado acima
+  o segundo caso de rolagem de tabela.
 - 2026-08-22 (P2-30): a fila de sinais deixou de ser lista de cards e virou tabela com linha
   expansivel. Nota de cor: o sparkline da coluna Tendencia fica **azul**, como todo sparkline
   deste sistema, e nao verde/vermelho como o 7d do CMC. Com LONG e SHORT na mesma tabela, curva

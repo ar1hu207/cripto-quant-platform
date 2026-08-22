@@ -90,10 +90,14 @@
   button:active{filter:brightness(.92);transform:translateY(1px)}
   button:disabled{opacity:.5;cursor:not-allowed;filter:none;transform:none}
   button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .tbl-wrap table{min-width:560px}
-  #posicoes,#trades,#dca,#metricas{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  #posicoes>table,#trades>table,#dca>table,#metricas table{min-width:540px}
+  /* Rolagem horizontal SO onde ela nao custa o cabecalho grudado. Um container com overflow
+     vira o contexto de rolagem e o `position:sticky` do th deixa de mirar a viewport - por
+     isso o wrapper nasce transparente e so vira rolador abaixo de 820px, largura em que
+     cabecalho grudado nao e o que se perde. Acima disso a tabela cabe e o th gruda. */
+  @media(max-width:820px){
+    #pendentes,#posicoes,#trades,#dca,#metricas{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    #posicoes>table,#trades>table,#dca>table{min-width:600px}
+  }
   /* auto-trader */
   /* borda so, sem o anel extra: uma coisa por elemento. Azul e nao verde porque "bot ligado" e
      estado de interface, e verde aqui e vocabulario de dinheiro. */
@@ -243,9 +247,6 @@
   /* direcao continua verde/vermelha: e o uso legitimo do par */
   .tag{display:inline-block;padding:2px 8px;border-radius:var(--r-sm);font-size:var(--fs-75);font-weight:600}
   .tag.long{background:var(--pos-bg);color:var(--pos)}.tag.short{background:var(--neg-bg);color:var(--neg)}
-  .row-spark{display:block;width:76px;height:22px;pointer-events:none}
-  .row-spark svg{display:block;width:76px;height:22px}
-  .row-spark.vazio{color:var(--txt3);font-size:var(--fs-75)}
   .acts-cell{white-space:nowrap;text-align:right}
   .acts-cell button{margin-left:6px}
   /* Operar e a acao primaria da tela inteira: azul solido, texto branco (4.92:1). Era um
@@ -295,12 +296,30 @@
     background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent);animation:shimmer 1.4s infinite}
   @keyframes shimmer{100%{transform:translateX(100%)}}
   @media (prefers-reduced-motion:reduce){.skel::after{animation:none}}
-  .btn-close{background:var(--neg-bg);color:var(--neg);padding:5px 11px;font-size:12px;border:1px solid var(--neg-b)}
-  .mstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:12px}
-  .mstat{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;display:flex;flex-direction:column;gap:5px}
-  .mstat span{font-size:11px}
-  /* tabular-nums: sem isto a grade de tiles dança de largura a cada poll */
-  .mstat b{font-size:20px;font-weight:700;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .btn-close{background:var(--neg-bg);color:var(--neg);padding:5px 11px;font-size:var(--fs-75);border:1px solid var(--neg-b)}
+  /* hover de linha em --surface, SEM zebra: o separador de 1px basta, e zebra em tema escuro
+     briga com as tintas das linhas de saida sugerida */
+  @media(hover:hover){tbody tr:hover>td{background:var(--surface)}}
+  /* tabela de metrica: duas colunas, rotulo e valor. Era grade de tiles (.mstat), que dava a
+     14 numeros de importancia diferente o mesmo peso visual. */
+  .tbl-met td:first-child{color:var(--txt2)}
+  .tbl-met td:last-child{text-align:right;font-weight:600;white-space:nowrap}
+  .met-nota{color:var(--txt3);font-weight:500;font-size:var(--fs-75);margin-left:6px}
+  /* Mesma regra da tabela de sinais: coluna encolhe ate o conteudo e a folga vai para uma so,
+     senao o width:100% da tabela espalha o vazio por igual e abre buracos entre numeros.
+     Em Posicoes e DCA a folga vai para a coluna de acao (vira alinhamento a direita); no
+     Journal vai para Motivo, que e a unica de texto livre. */
+  #posicoes thead th,#posicoes tbody tr:not(.saida)>td,
+  #trades thead th,#trades tbody td,
+  #dca thead th,#dca tbody td{width:1px;white-space:nowrap}
+  #posicoes thead th:nth-child(9),#posicoes tbody tr:not(.saida)>td:nth-child(9){width:auto}
+  #trades thead th:nth-child(6),#trades tbody td:nth-child(6){width:auto;white-space:normal}
+  #dca thead th:nth-child(7),#dca tbody td:nth-child(7){width:auto}
+  .saida td{white-space:normal}
+  /* evolucao do P&L da posicao: mesma mini-curva que fecha a linha de sinal */
+  .row-spark{display:block;width:76px;height:22px;pointer-events:none}
+  .row-spark svg{display:block;width:76px;height:22px}
+  .row-spark.vazio{color:var(--txt3);font-size:var(--fs-75)}
   #tv-ativo{background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);
     padding:6px 11px;font-family:inherit;font-weight:600;font-size:13px}
   #tvchart{width:100%;height:calc(100vh - 248px);min-height:420px}
@@ -336,14 +355,12 @@
   .btn-sug{background:var(--accent-bg);color:var(--accent-txt);border:1px solid var(--accent);padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;margin-left:7px}
   .aviso-liq{background:var(--neg-bg);color:var(--neg);font-size:11.5px;padding:8px 11px;border-radius:7px;margin:7px 0;line-height:1.45}
   .btn-panico{background:var(--neg-bg);color:var(--neg);padding:9px 12px;border:1px solid var(--neg-b);font-weight:700}
-  /* guarda de risco: era banner de largura cheia empurrando o conteudo, agora e item da
-     status bar. Sem card, sem margem, altura de uma linha. O texto que estes seletores
-     recebem ainda e o do M5; o render curto e do P2-31. */
-  .rg-line{display:flex;align-items:center;gap:8px;font-size:var(--fs-75);white-space:nowrap}
-  .rg-bar{width:56px;flex:none;height:6px;background:var(--surface2);border-radius:var(--r-pill);overflow:hidden}
-  .rg-bar i{display:block;height:100%;background:var(--neg);border-radius:var(--r-pill)}
-  .rg-banner{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:var(--r-sm);
-    font-weight:600;font-size:var(--fs-75);background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
+  /* Guarda de risco: era banner de largura cheia empurrando o conteudo; agora sao itens da
+     status bar. A barra ficou nos tiles do P2-29 - aqui so o numero, porque status bar e
+     glance, nao painel. O banner sobrevive apenas para os dois estados que travam operacao. */
+  .rg-item{display:flex;align-items:center;gap:5px;white-space:nowrap}
+  .rg-banner{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:var(--r-sm);
+    font-weight:600;background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
   .hidden{display:none}
   .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
   @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
@@ -376,8 +393,10 @@
   .saida-lucro td,.saida-lucro.saida-side{background:var(--warn-bg);color:var(--warn)}
   .saida-alvo td,.saida-alvo.saida-side{background:var(--warn-bg);color:var(--warn)}
   .saida-risco td,.saida-risco.saida-side{background:var(--neg-bg);color:var(--neg)}
-  /* vender realiza dinheiro: verde e o significado. Texto escuro sobre o verde da 8.64:1. */
-  .btn-vender{background:var(--pos);color:#04130c;border:none;padding:4px 12px;border-radius:6px;font-weight:700;font-size:11px;float:right;cursor:pointer}
+  /* vender realiza dinheiro: verde E o significado, mesma logica do Panico em vermelho. Tinta
+     + texto + borda do proprio token, em vez do #04130c cravado que sobrou do tema navy. */
+  .btn-vender{background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos-b);
+    padding:4px 12px;border-radius:var(--r-sm);font-weight:600;font-size:var(--fs-75);float:right;cursor:pointer}
 
   /* ---------- responsivo ----------
      A casca nova nao tem coluna lateral para recolher: o que muda com a largura e (1) a topbar
@@ -946,6 +965,22 @@ function anotaSerie(precos){
     if(v.length>SERIE_MAX)v.splice(0,v.length-SERIE_MAX);
   });
 }
+// Evolucao do P&L por posicao, para o sparkline que fecha a linha. O /estado manda o P&L
+// atual a cada poll, nao a serie; entao a serie e o que o painel observou, comecando em zero -
+// que e o P&L no momento da entrada. Dado honesto, sem requisicao nova.
+const _pnlHist={}, PNL_MAX=60;
+function anotaPnl(posicoes){
+  const vivos=new Set();
+  (posicoes||[]).forEach(p=>{
+    vivos.add(String(p.id));
+    const v=_pnlHist[p.id]||(_pnlHist[p.id]=[0]);
+    const pl=p.pnl||0;
+    if(v[v.length-1]!==pl)v.push(pl);
+    if(v.length>PNL_MAX)v.splice(1,v.length-PNL_MAX);
+  });
+  // posicao fechada nao acumula serie para sempre
+  Object.keys(_pnlHist).forEach(k=>{if(!vivos.has(k))delete _pnlHist[k];});
+}
 function toggleSinal(ev,id){
   // clique num botao da linha e acao, nao expansao
   if(ev&&ev.target&&ev.target.closest&&ev.target.closest('button'))return;
@@ -1076,95 +1111,103 @@ async function carregar(){
   sparkline(h.map(x=>x.equity_total),'spark');
   sparkline(h.map(x=>x.banca),'spark-banca',{area:false});   // discreto: so a linha
 
-  // guarda de risco (drawdown do dia)
+  // guarda de risco: alimenta a status bar. A leitura detalhada (barra, limite, percentual)
+  // vive nos tiles de Risco do dia e Exposicao aberta; aqui fica so o que precisa estar
+  // sempre visivel, e o banner sobrou para os DOIS estados que travam operacao.
   const rg=e.risco, rgEl=document.getElementById('risco-guard');
   if(rg&&rgEl){
-    let rgh='';
-    if(rg.trava_dia){
-      rgh+=`<div class="rg-banner trava">🛑 TRAVA DIÁRIA — perda do dia ${brl(rg.pnl_dia)} atingiu o limite (${brl(-rg.limite_rs)}). Novos trades bloqueados até amanhã.</div>`;
-    }else{
-      const usado=Math.min(Math.max(-rg.pnl_dia/rg.limite_rs*100,0),100);
-      rgh+=`<div class="rg-line"><span class="mut">🛡️ Risco do dia (limite ${rg.limite_pct}%)</span><span class="rg-bar"><i style="width:${usado}%"></i></span><span class="mono ${rg.pnl_dia>=0?'pos':'neg'}">${brl(rg.pnl_dia)} / ${brl(-rg.limite_rs)}</span></div>`;
-    }
+    let rgh=`<span class="rg-item"><span class="mut">banca</span><b class="mono">${brl(e.banca.atual)}</b></span>`;
+    rgh+=`<span class="rg-item"><span class="mut">risco dia</span><b class="mono ${rg.pnl_dia>=0?'pos':'neg'}">${brl(rg.pnl_dia)}</b><span class="mut">de ${brl(-rg.limite_rs)}</span></span>`;
     if(rg.risco_aberto_max_rs){
       const usadoAb=Math.min(Math.max(rg.risco_aberto_rs/rg.risco_aberto_max_rs*100,0),100);
-      rgh+=`<div class="rg-line"><span class="mut">📊 Exposição aberta (teto ${rg.risco_aberto_pct}%)</span><span class="rg-bar"><i style="width:${usadoAb}%;background:${rg.teto_aberto?'var(--neg)':'var(--warn)'}"></i></span><span class="mono ${rg.teto_aberto?'neg':''}">${brl(rg.risco_aberto_rs)} / ${brl(rg.risco_aberto_max_rs)}</span></div>`;
-      if(rg.teto_aberto) rgh+=`<div class="rg-banner trava">🛑 TETO DE EXPOSIÇÃO atingido — feche uma posição antes de abrir outra.</div>`;
+      rgh+=`<span class="rg-item"><span class="mut">exposição</span><b class="mono${rg.teto_aberto?' neg':''}">${usadoAb.toFixed(0)}%</b><span class="mut">do teto</span></span>`;
     }
+    if(rg.trava_dia) rgh+=`<span class="rg-banner">🛑 trava diária — sem novos trades hoje</span>`;
+    if(rg.teto_aberto) rgh+=`<span class="rg-banner">🛑 teto de exposição — feche uma posição antes de abrir outra</span>`;
     rgEl.innerHTML=rgh;
   }
 
   // pendentes: uma linha por sinal, sub-linha sob demanda
   carregarPendentes(e);
 
-  // posicoes
+  // posicoes: a linha fecha com a evolucao do P&L da propria posicao
+  anotaPnl(e.posicoes);
   const po=document.getElementById('posicoes');
   if(e.posicoes.length){
-    po.innerHTML='<table><tr><th>Ativo</th><th>Lado</th><th>Entrada</th><th>Atual</th><th>Tam.</th><th style="text-align:right">P&L (ROE)</th><th style="text-align:right">Liq.</th><th></th></tr>'+
+    po.innerHTML='<table><thead><tr><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada</th>'+
+    '<th class="num">Atual</th><th class="col-2">Tam.</th><th class="num">P&L (ROE)</th>'+
+    '<th class="num col-3">Liq.</th><th class="col-3">Evolução</th><th></th></tr></thead><tbody>'+
     e.posicoes.map(p=>{const pl=p.pnl||0, roe=p.valor_reais?pl/p.valor_reais*100:0, d=p.direcao==='LONG'?1:-1, liq=p.entrada*(1-d*0.9/p.alavancagem), sd=_saidas[p.id];
-      return `<tr><td style="font-weight:600">${p.ativo}</td>
+      const spark=sparkSVG(_pnlHist[p.id],{area:false,id:'pos'+p.id});
+      return `<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
       <td><span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span></td>
-      <td class="mono mut">${num(p.entrada)}</td>
-      <td class="mono">${num(p.preco_atual)}</td>
-      <td class="mono mut">R$${p.valor_reais}·${p.alavancagem}x</td>
-      <td class="mono ${pl>=0?'pos':'neg'}" style="text-align:right;font-weight:600">${brl(pl)} <span style="font-size:12px;font-weight:700">${pct(roe)}</span></td>
-      <td class="mono neg" style="text-align:right;font-size:12px">${num(liq)}</td>
-      <td style="text-align:right"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${sd.nivel}"><td colspan="8">${sd.acao}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</table>';
+      <td class="mono mut num col-2">${num(p.entrada)}</td>
+      <td class="mono num">${num(p.preco_atual)}</td>
+      <td class="mono mut col-2">R$${p.valor_reais}·${p.alavancagem}x</td>
+      <td class="mono num ${pl>=0?'pos':'neg'}" style="font-weight:600">${brl(pl)} <span class="met-nota ${pl>=0?'pos':'neg'}">${pct(roe)}</span></td>
+      <td class="mono neg num col-3">${num(liq)}</td>
+      <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
+      <td class="acts-cell"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${sd.nivel}"><td colspan="9">${sd.acao}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</tbody></table>';
   } else po.innerHTML='<div class="empty">Nenhuma posição aberta</div>';
 
   // trades
   const tr=document.getElementById('trades'), ts=e.trades||[];
   if(ts.length){
-    tr.innerHTML='<table><tr><th>Hora</th><th>Ativo</th><th>Lado</th><th>Entrada→Saída</th><th>Tam.</th><th>Motivo</th><th style="text-align:right">Resultado (ROE)</th></tr>'+
-    ts.map(t=>`<tr><td class="mono mut">${(t.fechado_em||'').slice(11,16)}</td><td style="font-weight:600">${t.ativo}</td>
+    tr.innerHTML='<table><thead><tr><th>Hora</th><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada→Saída</th>'+
+    '<th class="col-2">Tam.</th><th class="col-3">Motivo</th><th class="num">Resultado (ROE)</th></tr></thead><tbody>'+
+    ts.map(t=>`<tr><td class="mono mut">${(t.fechado_em||'').slice(11,16)}</td><td style="font-weight:600">${t.ativo.replace('/USDT','')}</td>
       <td><span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span></td>
-      <td class="mono mut" style="font-size:12px">${num(t.entrada)}→${num(t.saida)}</td>
-      <td class="mono mut" style="font-size:12px">R$${t.valor_reais}·${t.alavancagem}x</td><td class="mut" style="font-size:12px">${t.motivo_saida}</td>
-      <td class="mono ${t.pnl_reais>=0?'pos':'neg'}" style="text-align:right;font-weight:600">${brl(t.pnl_reais)} <span style="font-size:11px">(${pct(t.valor_reais?t.pnl_reais/t.valor_reais*100:0)})</span></td></tr>`).join('')+'</table>';
+      <td class="mono mut num col-2">${num(t.entrada)}→${num(t.saida)}</td>
+      <td class="mono mut col-2">R$${t.valor_reais}·${t.alavancagem}x</td><td class="mut col-3">${t.motivo_saida}</td>
+      <td class="mono num ${t.pnl_reais>=0?'pos':'neg'}" style="font-weight:600">${brl(t.pnl_reais)} <span class="met-nota ${t.pnl_reais>=0?'pos':'neg'}">${pct(t.valor_reais?t.pnl_reais/t.valor_reais*100:0)}</span></td></tr>`).join('')+'</tbody></table>';
   } else tr.innerHTML='<div class="empty">Nenhum trade ainda</div>';
 
   // metricas
   const m=e.metricas||{};
   const sqn=m.sqn||0, sqnCor=sqn>=2?'pos':(sqn>=1.6?'':'neg'),
     sqnLbl=sqn<=0?'sem dados':(sqn>7?'suspeito (overfit?)':sqn>=3?'excelente':sqn>=2?'bom':sqn>=1.6?'médio':'fraco');
-  let mh=`<div class="mstats">
-    <div class="mstat"><span class="mut">Trades</span><b>${m.n_trades||0}</b></div>
-    <div class="mstat"><span class="mut">Win rate</span><b>${(m.win_rate||0).toFixed(1)}%</b></div>
-    <div class="mstat"><span class="mut">Profit factor</span><b>${(m.profit_factor||0).toFixed(2)}</b></div>
-    <div class="mstat"><span class="mut">P&L total</span><b class="${m.pnl_total>=0?'pos':'neg'}">${brl(m.pnl_total)}</b></div>
-    <div class="mstat"><span class="mut">Taxa paga</span><b class="neg">${brl(m.taxa_total)}</b></div></div>
-    <div class="mstats" style="margin-top:12px">
-    <div class="mstat"><span class="mut">SQN <span style="font-size:9.5px">· ${sqnLbl}</span></span><b class="${sqnCor}">${sqn.toFixed(2)}</b></div>
-    <div class="mstat"><span class="mut">Sortino</span><b class="${(m.sortino||0)>=0?'pos':'neg'}">${(m.sortino||0).toFixed(2)}</b></div>
-    <div class="mstat"><span class="mut">Max Drawdown</span><b class="neg">${brl(m.max_drawdown)} <span style="font-size:11px">(${(m.max_drawdown_pct||0).toFixed(1)}%)</span></b></div>
-    <div class="mstat"><span class="mut">Calmar</span><b>${(m.calmar||0).toFixed(2)}</b></div>
-    <div class="mstat"><span class="mut">Expectativa/trade</span><b class="${m.expectancia>=0?'pos':'neg'}">${brl(m.expectancia)}</b></div></div>
-    <div class="mstats" style="margin-top:12px">
-    <div class="mstat"><span class="mut">Sharpe (diário)</span><b class="${(m.sharpe||0)>=0?'pos':'neg'}">${(m.sharpe||0).toFixed(2)}</b></div>
-    <div class="mstat"><span class="mut">SQN-R (R-múltiplos)</span><b>${(m.sqn_r||0).toFixed(2)}</b></div>
-    <div class="mstat"><span class="mut">Expectativa-R</span><b class="${(m.expectancia_r||0)>=0?'pos':'neg'}">${(m.expectancia_r||0).toFixed(2)}R</b></div>
-    <div class="mstat"><span class="mut">Max DD (mark-to-market)</span><b class="neg">${(m.max_dd_mtm_pct||0).toFixed(1)}%</b></div></div>`;
+  // Tabela de duas colunas, que e o que o CMC faz com dado tabular. A grade de .mstat dava a
+  // 14 numeros de importancia muito diferente exatamente o mesmo peso visual.
+  const linhaMet=(rot,val,nota,cls)=>`<tr><td>${rot}</td><td class="mono${cls?' '+cls:''}">${val}${nota?`<span class="met-nota">${nota}</span>`:''}</td></tr>`;
+  let mh='<table class="tbl-met"><thead><tr><th>Métrica</th><th class="num">Valor</th></tr></thead><tbody>'+
+    linhaMet('Trades',m.n_trades||0)+
+    linhaMet('Win rate',(m.win_rate||0).toFixed(1)+'%')+
+    linhaMet('Profit factor',(m.profit_factor||0).toFixed(2))+
+    linhaMet('P&L total',brl(m.pnl_total),'',m.pnl_total>=0?'pos':'neg')+
+    linhaMet('Taxa paga',brl(m.taxa_total),'','neg')+
+    linhaMet('SQN',sqn.toFixed(2),sqnLbl,sqnCor)+
+    linhaMet('SQN-R (R-múltiplos)',(m.sqn_r||0).toFixed(2))+
+    linhaMet('Sortino',(m.sortino||0).toFixed(2),'',(m.sortino||0)>=0?'pos':'neg')+
+    linhaMet('Sharpe (diário)',(m.sharpe||0).toFixed(2),'',(m.sharpe||0)>=0?'pos':'neg')+
+    linhaMet('Calmar',(m.calmar||0).toFixed(2))+
+    linhaMet('Max drawdown',brl(m.max_drawdown),`${(m.max_drawdown_pct||0).toFixed(1)}%`,'neg')+
+    linhaMet('Max DD (mark-to-market)',(m.max_dd_mtm_pct||0).toFixed(1)+'%','','neg')+
+    linhaMet('Expectativa/trade',brl(m.expectancia),'',m.expectancia>=0?'pos':'neg')+
+    linhaMet('Expectativa-R',(m.expectancia_r||0).toFixed(2)+'R','',(m.expectancia_r||0)>=0?'pos':'neg')+
+    '</tbody></table>';
   if(m.por_conviccao&&m.por_conviccao.length){
-    mh+=`<div style="margin-top:14px"><div class="mut" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Win rate por convicção — a tunagem 🎯</div>
-    <table><tr><th>Faixa</th><th>Trades</th><th>Win rate</th><th style="text-align:right">P&L</th></tr>`+
-    m.por_conviccao.map(c=>`<tr><td class="mono">${c.faixa}</td><td class="mono mut">${c.n}</td>
-      <td class="mono ${c.win_rate>=50?'pos':'neg'}" style="font-weight:600">${c.win_rate}%</td>
-      <td class="mono ${c.pnl>=0?'pos':'neg'}" style="text-align:right">${brl(c.pnl)}</td></tr>`).join('')+'</table></div>';
-  } else mh+='<div class="mut" style="font-size:12px;margin-top:10px">Confirme alguns trades pra ver o win rate por convicção.</div>';
+    mh+=`<h2 style="margin-top:24px">🎯 Win rate por convicção — a tunagem</h2>
+    <table><thead><tr><th>Faixa</th><th class="num">Trades</th><th class="num">Win rate</th><th class="num">P&L</th></tr></thead><tbody>`+
+    m.por_conviccao.map(c=>`<tr><td class="mono">${c.faixa}</td><td class="mono num mut">${c.n}</td>
+      <td class="mono num ${c.win_rate>=50?'pos':'neg'}" style="font-weight:600">${c.win_rate}%</td>
+      <td class="mono num ${c.pnl>=0?'pos':'neg'}">${brl(c.pnl)}</td></tr>`).join('')+'</tbody></table>';
+  } else mh+='<div class="empty">Confirme alguns trades pra ver o win rate por convicção.</div>';
   document.getElementById('metricas').innerHTML=mh;
 
   // DCA / acumulação
   const dcaEl=document.getElementById('dca'), planos=e.dca||[];
   if(dcaEl){
     if(planos.length){
-      dcaEl.innerHTML='<table><tr><th>Ativo</th><th>Investido</th><th>Preço médio</th><th>Valor atual</th><th style="text-align:right">P&L</th><th>Aportes</th><th></th></tr>'+
-        planos.map(p=>`<tr><td style="font-weight:600">${p.ativo}</td>
-          <td class="mono mut">${brl(p.total_investido)}</td>
-          <td class="mono mut">${num(p.preco_medio)}</td>
-          <td class="mono">${brl(p.valor_atual)}</td>
-          <td class="mono ${p.pnl>=0?'pos':'neg'}" style="text-align:right;font-weight:600">${brl(p.pnl)} (${pct(p.pnl_pct)})</td>
-          <td class="mono mut" style="font-size:11px">${p.n_aportes}× · R$${p.valor_aporte}/${p.freq_dias}d</td>
-          <td style="text-align:right;white-space:nowrap"><button class="btn-sug" onclick="aportarDca(${p.id})">aportar</button> <button class="btn-skip" onclick="removerDca(${p.id})" aria-label="remover plano DCA" title="remover">×</button></td></tr>`).join('')+'</table>';
+      dcaEl.innerHTML='<table><thead><tr><th>Ativo</th><th class="num col-2">Investido</th>'+
+        '<th class="num col-2">Preço médio</th><th class="num">Valor atual</th><th class="num">P&L</th>'+
+        '<th class="col-3">Aportes</th><th></th></tr></thead><tbody>'+
+        planos.map(p=>`<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
+          <td class="mono mut num col-2">${brl(p.total_investido)}</td>
+          <td class="mono mut num col-2">${num(p.preco_medio)}</td>
+          <td class="mono num">${brl(p.valor_atual)}</td>
+          <td class="mono num ${p.pnl>=0?'pos':'neg'}" style="font-weight:600">${brl(p.pnl)} <span class="met-nota ${p.pnl>=0?'pos':'neg'}">${pct(p.pnl_pct)}</span></td>
+          <td class="mono mut col-3">${p.n_aportes}× · R$${p.valor_aporte}/${p.freq_dias}d</td>
+          <td class="acts-cell"><button class="btn-sug" onclick="aportarDca(${p.id})">aportar</button> <button class="btn-skip" onclick="removerDca(${p.id})" aria-label="remover plano DCA" title="remover">×</button></td></tr>`).join('')+'</tbody></table>';
     } else dcaEl.innerHTML='<div class="empty">Nenhum plano. Crie um abaixo pra acumular cripto de forma disciplinada (sem adivinhar timing).</div>';
     const dsel=document.getElementById('dca-ativo');
     if(dsel&&!dsel.options.length&&e.config){e.config.ativos.split(',').forEach(a=>{const o=document.createElement('option');o.value=a.trim();o.textContent=a.trim().replace('/USDT','');dsel.appendChild(o);});}
