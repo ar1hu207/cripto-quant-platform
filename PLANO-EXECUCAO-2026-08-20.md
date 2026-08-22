@@ -175,6 +175,51 @@ VM (`CLAUDE.md` §6, `ORQUESTRACAO-ORCA.md` §1).
 **Portão do M2:** todo número no painel ou é medido, ou está declaradamente ausente — nenhum é um
 zero que na verdade é um erro engolido.
 
+> ### ✅ Portão do M2 — RODADO em 2026-08-22, sobre a `main` mesclada e depois em produção
+>
+> Merges: `27856ea` (T-SINAL), `c911786` (T-MERCADO), `6f2d7bb` (T-EXEC), `6f166fa` (T-API-DADOS).
+> Deploy na VM pelo `cripto-deploy`: `f3d2ce9 → 7c65df1`, com backup, congelamento, compilação no
+> venv de produção, restart e verificação. **110 asserções verdes** sobre a `main` completa
+> (`prova_m1.py` 7, `simulador.py` 11, `db.py prova` 18, `api.py` 27, e três auditorias
+> independentes da matriz: 22, 18 e 7).
+>
+> A frase do portão tem forma mecânica — varredura do repositório atrás de `except` que devolve
+> zero, fora de teste e backtest. **Restou uma ocorrência**, `autotrader.ts_val()`, e ela está
+> certa: o zero é chave de ordenação em empate, não número que alguém lê. Nenhuma outra.
+>
+> Cada número do painel, e o que o torna honesto:
+>
+> | Número | Antes | Agora | Card |
+> |---|---|---|---|
+> | funding no P&L | `except: return 0.0` — zero falso gravado no banco | `None` no código, `NULL` no banco, `n/d` no log | `P2-10` |
+> | fluxo do sinal | portão pulado em silêncio | `"fluxo n/d"` nos motivos + `scan.fluxo_indisponivel` | `P2-9` |
+> | `breadth` | ativo entrava em `tot` antes de ter valor | só quem respondeu conta; falha total → `None` | `P1-5` |
+> | `ultimo_erro` | erro de horas atrás exibido como atual | zerado a cada scan; forense em `ultimo_erro_historico` | `P2-15` |
+> | cadência do scan | contava ciclos executados | agendada por relógio, reagendada antes de rodar | `P2-15` |
+> | curva de equity | últimas 500 linhas = 125 min | história inteira, rareada — 126 pontos cobrindo 2d16h | `P2-11`+`P1-4` |
+> | commit em produção | não havia | `/health` devolve o SHA, ou `None` declarado | `P2-3` |
+>
+> Produção depois do deploy:
+> ```json
+> "scan":    {"total": 72, "ok": 72, "falhas": 0, "ultimo_erro": null,
+>             "fluxo_indisponivel": 0, "ultimo_erro_historico": null}
+> "funding": {"medidos": 0, "falhas": 0, "ultimo_erro": null}
+> "saudavel": true
+> /sentimento.breadth: {"pct_subindo": 83, "variacao_media": 2.81, "n": 24}
+> /estado.equity_hist: 126 pontos, de 2026-08-19 21:34 a 2026-08-22 14:30
+> /health: {"status":"ok","versao":"0.3","commit":"7c65df11c6f2..."}
+> ```
+>
+> **Três cards ficam em 🔍 Validando, e não por falta de prova: por falta de evento.** O `P1-9`
+> precisa de um pendente passar da janela, o `P2-10` de um trade fechar, o `P2-15` de uma falha
+> de rede acontecer. Os critérios estão provados por comando; o que falta é o mercado.
+>
+> **Um card fica em 🔨 Fazendo:** o `P2-5`. A medição foi feita e **falhou** nos dois critérios
+> (pico 600 MB = 64% dos 892 MiB, contra os 60% pedidos; swap com 112 MiB em uso). O resize para
+> `B2als_v2` sai do tier gratuito do Students, e gasto é decisão do dono — o auditor para e
+> entrega o parecer (§9.8 em espírito). Anotado junto: o `MemoryMax` do service é `900M` numa VM
+> de 892 MiB, ou seja, **acima da RAM física** — não protege nada, e o OOM killer chega antes.
+
 #### 4b. Por que as ondas do M2 mudaram
 
 Quatro correções, todas por regra escrita neste documento — nenhuma por preferência:
