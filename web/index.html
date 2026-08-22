@@ -10,7 +10,13 @@
      display e sem mono -- a hierarquia sai de peso e tamanho. Stylesheet de fonte e a unica
      excecao a regra "nada de terceiro": ela nao executa JS, entao nao e vetor para roubar a
      credencial do localStorage, que e o motivo da regra. Ver DESIGN.md > Typography. -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- A folha entra como preload e vira stylesheet no onload: é a MESMA folha, na mesma URL, com
+     a mesma prioridade de rede — só deixa de BLOQUEAR a primeira pintura. Ela custava 294 ms de
+     render-blocking, e o que ela bloqueava não era a fonte (o &display=swap já manda pintar na
+     face de fallback e trocar depois): era a página inteira esperando um round-trip a
+     fonts.googleapis.com para mostrar o fallback que ela já ia mostrar de qualquer jeito.
+     Sem <noscript>: este painel é 100% JS e sem script não há tela nenhuma para envergonhar. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" onload="this.rel='stylesheet'">
 <!-- libs servidas por nós (chart.js 4.4.1, lightweight-charts 4.1.3): sem CDN de terceiro,
      que seria um vetor de XSS capaz de roubar a credencial guardada no localStorage.
      Elas SAÍRAM daqui e entram sob demanda (ver carregarLib(), no fim do <body>) -- continuam
