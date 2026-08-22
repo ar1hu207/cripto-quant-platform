@@ -333,25 +333,32 @@
   .row-spark{display:block;width:76px;height:22px;pointer-events:none}
   .row-spark svg{display:block;width:76px;height:22px}
   .row-spark.vazio{color:var(--txt3);font-size:var(--fs-75)}
-  #tv-ativo{background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);
-    padding:6px 11px;font-family:inherit;font-weight:600;font-size:13px}
-  #tvchart{width:100%;height:calc(100vh - 248px);min-height:420px}
+  #tv-ativo{background:var(--surface2);border:1px solid var(--line2);color:var(--txt);border-radius:var(--r-sm);
+    padding:6px 11px;font-family:inherit;font-weight:600;font-size:var(--fs-100)}
+  /* Altura recalibrada para a casca nova. O 248px do M5 era a conta da topbar antiga; agora a
+     conta e feita com a folga MEDIDA da status bar (--sb-h), porque ela quebra de linha em tela
+     estreita e um numero fixo faria a vista Grafico nascer rolada.
+     185 = topbar 56 + padding do main 20+24 + h2 32+12 + legenda 10+13 + folga. Medido no
+     navegador: com 175 a pagina passava 5px da viewport e a vista nascia rolada. */
+  #tvchart{width:100%;height:calc(100vh - var(--sb-h) - 185px);min-height:300px}
   /* o full-bleed de 100vw morreu com o .wrap: dentro do shell com sidebar ele vazava por baixo
      da nav. A coluna de conteudo ja da a largura toda. */
   #view-grafico{width:100%;padding:0}
   .tv-tfs{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
-  .tv-tfs button{background:var(--surface2);color:var(--txt2);border:1px solid var(--line);font-size:11px;padding:5px 10px;border-radius:7px;font-weight:600;cursor:pointer}
+  .tv-tfs button{background:transparent;color:var(--txt2);border:1px solid var(--line2);font-size:var(--fs-75);padding:5px 10px;border-radius:var(--r-sm);font-weight:600;cursor:pointer}
   /* selecionado e estado de interface: azul, nao verde */
   .tv-tfs button.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
-  .tv-expand{background:var(--surface2);color:var(--txt2);border:1px solid var(--line);font-size:11px;padding:5px 11px;border-radius:7px;font-weight:600;cursor:pointer;float:right}
+  /* .tv-expand e .tv-ind sao alvo de document.querySelector no toggleExpand() e no
+     toggleIndicadores(): as classes TEM que sobreviver, mesmo com o visual trocado. */
+  .tv-expand{background:transparent;color:var(--txt2);border:1px solid var(--line2);font-size:var(--fs-75);padding:5px 11px;border-radius:var(--r-sm);font-weight:600;cursor:pointer;float:right}
   .expandido .grafico-side{display:none}
   .expandido .grafico-layout{grid-template-columns:1fr}
-  .tv-ind{background:var(--surface2);color:var(--txt2);border:1px solid var(--line);font-size:11px;padding:5px 11px;border-radius:7px;font-weight:600;cursor:pointer;float:right;margin-right:8px}
+  .tv-ind{background:transparent;color:var(--txt2);border:1px solid var(--line2);font-size:var(--fs-75);padding:5px 11px;border-radius:var(--r-sm);font-weight:600;cursor:pointer;float:right;margin-right:8px}
   .tv-ind.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
   /* --accent-txt e nao --accent: o --accent como TEXTO sobre superficie da 4.28:1 e reprova */
   .btn-analise{background:var(--surface);color:var(--accent-txt);padding:8px 13px;border:1px solid var(--line)}
-  .analise-box{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;margin-bottom:14px}
-  .grid-ind{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;margin-top:11px;font-size:12.5px;}
+  .analise-box{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:14px}
+  .grid-ind{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin-top:12px;font-size:var(--fs-75)}
   .grid-ind b{text-align:right}
   /* ---------- aba Mercado ----------
      Gauge de Fear & Greed. O gradiente vermelho-gold-verde e o UNICO gradiente do sistema, e
@@ -394,8 +401,8 @@
   .hidden{display:none}
   .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
   @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
-  .grafico-side{max-height:calc(100vh - 248px);overflow:auto}
-  .gs-titulo{font-size:11px;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px}
+  .grafico-side{max-height:calc(100vh - var(--sb-h) - 185px);overflow:auto}
+  .gs-titulo{font-size:var(--fs-75);color:var(--txt3);font-weight:700;margin-bottom:8px}
   .why-lbl{font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-right:4px}
   .tf-badge{background:var(--surface);color:var(--txt3);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600}
   .tipo-badge{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:600}
@@ -437,7 +444,8 @@
     .main{padding:18px 16px 24px}
     .topbar{padding:8px 16px}
     .statusbar{padding:7px 16px}
-    #tvchart{height:calc(100vh - 240px)}
+    /* a topbar quebra em duas linhas aqui, e a legenda desce: mais 40px de chrome */
+    #tvchart{height:calc(100vh - var(--sb-h) - 215px)}
     .grafico-side{max-height:none}
   }
   @media(max-width:560px){
@@ -448,6 +456,8 @@
     .topacts{justify-content:flex-start}
     .statusbar{padding:7px 12px;gap:4px 12px}
     .sb-hora{margin-left:0}
+    /* topbar em tres linhas: a conta do #tvchart cresce junto */
+    #tvchart{height:calc(100vh - var(--sb-h) - 300px)}
   }
 
   /* modal */
@@ -946,8 +956,10 @@ const TEMA=(()=>{ const cs=getComputedStyle(document.documentElement);
   const t=n=>cs.getPropertyValue('--'+n).trim();
   return {pos:t('pos'),neg:t('neg'),warn:t('warn'),accent:t('accent'),accentTxt:t('accent-txt'),
           txt:t('txt'),txt2:t('txt2'),txt3:t('txt3'),line:t('line')}; })();
-// mesma cor do --accent em rgba, para o gradiente de area da curva de capital
+// Variacoes de alpha DECLARADAS dos tokens, para as libs que so aceitam string de cor:
+// --accent (#3861FB) na area da curva de capital, --txt2 (#A1A7BB) nas bandas de Bollinger.
 const ACCENT_RGB='56,97,251';
+const BOLL='rgba(161,167,187,.5)', BOLL_MID='rgba(161,167,187,.25)';
 
 // Sparkline generico: recebe a SERIE e o ALVO. Antes mirava o #spark do hero, que era o unico
 // que existia; com cinco tiles o mesmo desenho serve equity e banca e o alvo tem que vir de fora.
@@ -1138,7 +1150,8 @@ async function carregar(){
 
   // chart
   if(!chart){const ctx=document.getElementById('chart').getContext('2d');const g=ctx.createLinearGradient(0,0,0,230);
-    g.addColorStop(0,`rgba(${ACCENT_RGB},.34)`);g.addColorStop(1,`rgba(${ACCENT_RGB},0)`);
+    // area da curva de capital: rgba(56,97,251,.28), o valor que o DESIGN.md fixa
+    g.addColorStop(0,`rgba(${ACCENT_RGB},.28)`);g.addColorStop(1,`rgba(${ACCENT_RGB},0)`);
     chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{data:[],borderColor:TEMA.accentTxt,borderWidth:2,fill:true,backgroundColor:g,tension:.3,pointRadius:0}]},
       options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},
         tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:TEMA.line},ticks:{color:TEMA.txt3,callback:v=>brl(v)}}}}});}
@@ -1397,13 +1410,15 @@ function analisarSinal(s){
 function garanteIndSeries(){
   if(_indSeries.ema20)return;
   // EMA20 azul (era teal, cor que saiu da paleta), EMA50 gold, Bollinger cinza-azulado.
-  // O roxo rgba(150,140,225) das bandas saiu: e exatamente a faixa de matiz que o resto do
-  // sistema evita, e ali nao dizia nada que um cinza nao diga.
+  // Mapa de cor do DESIGN.md > Graficos: EMA20 azul (--accent-txt), EMA50 gold (--warn),
+  // Bollinger cinza translucido. O roxo do tema antigo ja tinha saido, mas o cinza que ficou no
+  // lugar era inventado: nao correspondia a token nenhum. Agora e o --txt2 (#A1A7BB) a 50%, que
+  // e variacao de alpha DECLARADA de um token que existe.
   _indSeries.ema20=_tv.addLineSeries({color:TEMA.accentTxt,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
   _indSeries.ema50=_tv.addLineSeries({color:TEMA.warn,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.bbU=_tv.addLineSeries({color:'rgba(148,161,189,.55)',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.bbL=_tv.addLineSeries({color:'rgba(148,161,189,.55)',lineWidth:1,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.bbM=_tv.addLineSeries({color:'rgba(148,161,189,.25)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
+  _indSeries.bbU=_tv.addLineSeries({color:BOLL,lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+  _indSeries.bbL=_tv.addLineSeries({color:BOLL,lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+  _indSeries.bbM=_tv.addLineSeries({color:BOLL_MID,lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
 }
 function limparInd(){Object.values(_indSeries).forEach(s=>{try{s.setData([])}catch(_){}});}
 async function carregarIndicadores(ativo,tf){
@@ -1434,7 +1449,7 @@ function renderAnalise(s,a){
       <span class="mut">ADX</span><b>${snap.adx}</b>
       <span class="mut">EMA20</span><b style="color:var(--accent-txt)">${num(snap.ema20)}</b>
       <span class="mut">EMA50</span><b style="color:var(--warn)">${num(snap.ema50)}</b>
-      <span class="mut">Bollinger</span><b style="color:var(--txt2)">${num(snap.bb_lo)}–${num(snap.bb_up)}</b>
+      <span class="mut">Bollinger</span><b style="color:var(--txt2)">${num(snap.bb_lo)}–${num(snap.bb_up)}</b><!-- mesma cor da banda no grafico -->
     </div>
     <div style="margin-top:9px;font-size:12px">entrada <b>${num(s.preco)}</b> · stop <b class="neg">${num(s.stop_sugerido)}</b></div>
     <div class="entry-status ${st.cls}" style="margin-top:8px">${st.txt}</div>

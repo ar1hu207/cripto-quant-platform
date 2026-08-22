@@ -281,7 +281,7 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 | vela | `--pos` / `--neg` |
 | curva de capital, sparkline dos tiles e sparkline de linha | `--accent-txt`, area em `rgba(56,97,251,.28)` |
 | EMA20 / EMA50 | `--accent-txt` / `--warn` |
-| Bollinger | `rgba(161,167,187,.5)` (`--txt2` translucido) |
+| Bollinger | `rgba(161,167,187,.5)` (`--txt2` translucido; a mediana em `.25`) |
 | entrada / stop | `--pos` / `--neg` |
 | liquidez, posicao aberta | `--warn` |
 | grade | `--line` |
@@ -343,6 +343,12 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-33): mapa de cor dos graficos aplicado. As bandas de Bollinger eram
+  `rgba(148,161,189,...)`, um cinza que nao correspondia a token nenhum; viraram `--txt2`
+  (#A1A7BB) a 50%, variacao de alpha declarada. Area da curva de capital ajustada de `.34` para
+  o `.28` que este arquivo fixa. A altura de `#tvchart` deixou de ser numero fixo calibrado na
+  topbar do M5 e passou a `calc(100vh - var(--sb-h) - 185px)`, usando a folga MEDIDA da status
+  bar - com um numero fixo a vista Grafico nasce rolada assim que a barra quebra de linha.
 - 2026-08-22 (P2-32): Sentimento e Funding ganharam a aba **Mercado**, o painel do bot ganhou a
   aba **Auto-trade**. O gauge de Fear & Greed mantem o gradiente vermelho-gold-verde: e o unico
   gradiente do sistema e esta la porque e **escala de medida** - diz o que cada ponta significa -
