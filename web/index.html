@@ -19,6 +19,17 @@
      existir uma linha de markup: 124 KB bloqueando a renderização, dos quais o Lighthouse
      mediu 92,3% e 88,9% nunca executados no carregamento. -->
 <script src="config.js"></script>
+<!-- Preconnect ao backend. A primeira tela deste painel NAO é markup: é a resposta do
+     backend que abre o gate de login, e o Lighthouse mede o gate como elemento de LCP. Sem
+     esta linha o browser só descobre o host quando o primeiro fetch sai, e paga DNS + TCP +
+     TLS ali, dentro do caminho crítico — a VM fica na África do Sul, então esse round-trip
+     não é barato. É o mesmo recurso já usado para as fontes (linhas 7-8), com uma diferença
+     que importa: a origem vem do window.API_BASE em vez de literal, porque a URL do backend
+     tem um dono só e é o config.js. Repetir a URL aqui criaria a segunda cópia que
+     dessincroniza no próximo deploy. anonymous porque o fetch é CORS sem credencial de
+     navegador (a senha vai no header Authorization, não em cookie). -->
+<script>if(window.API_BASE){var _pc=document.createElement('link');
+  _pc.rel='preconnect';_pc.href=window.API_BASE;_pc.crossOrigin='';document.head.appendChild(_pc);}</script>
 <style>
   /* Tokens medidos do CoinMarketCap, tema escuro, com as quatro correcoes de contraste.
      Fonte da verdade: DESIGN.md na raiz do repositorio -- se este bloco e o DESIGN.md
