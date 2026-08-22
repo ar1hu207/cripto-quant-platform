@@ -333,6 +333,28 @@ precisar de arqueologia no `git log`. O que ela custa: `legado/` fica no reposit
 decidir apagá-lo. A alternativa continua disponível a custo zero depois do M4, porque mover não
 destrói nada.
 
+**O que de fato quebra na reorganização, medido em 2026-08-22 e não estimado.** O mapa de módulos
+do card é de 2026-08-19; a matriz o reconferiu montando o grafo de imports por AST sobre a `main`
+`1646b04`. As três listas do card estão **corretas** — o fecho transitivo de `api.py` dá exatamente
+os onze módulos que ele chama de plataforma viva (`alertas`, `api`, `autotrader`, `db`, `dca`,
+`indicadores`, `logbot`, `mercado`, `scoring`, `signal_engine`, `simulador`), e `config.py` é
+importado **só** por módulos do legado, o que torna a morte dele limpa. O que o card não viu:
+
+- **`scoring.py` e `indicadores.py` são compartilhados entre plataforma e pesquisa.** `scoring` é
+  importado por `signal_engine` (vivo) e por `backtest_plataforma`, `validacao` e os
+  `validar_reversao*` (pesquisa); `indicadores` é importado por `scoring` (vivo) e por
+  `scalp_backtest`. Eles **ficam na raiz** — mas isso significa que `pesquisa/validacao.py` vai
+  fazer `import scoring` de um módulo que não está mais no mesmo diretório. Rodar
+  `python pesquisa/validacao.py` põe `pesquisa/` no `sys.path`, **não** a raiz, e o import falha.
+  É a quebra concreta desta onda, e ela tem que ser resolvida deliberadamente: `python -m
+  pesquisa.validacao` a partir da raiz (com `pesquisa/__init__.py`), ou um shim de `sys.path` no
+  topo dos módulos de pesquisa. Escolher em silêncio, não — o critério de aceite do card já exige
+  `validacao.py` executando depois da mudança.
+- **`dados.py` é compartilhado entre pesquisa e legado**, e por isso `legado/monte_carlo.py` vai
+  deixar de importar. Isso é **aceitável e precisa estar escrito**: o `legado/README.md` declara que
+  nada ali é importado pela plataforma **e que os módulos de lá não são mais executáveis no lugar
+  onde estão** — quem quiser rodar um, o git tem a versão que rodava.
+
 **Segunda decisão do dono, mesma data: o M3 é deployado na VM depois do merge, com verificação.**
 A plataforma viva não sai da raiz (decisão 3 acima), então o `uvicorn api:app` do service não muda —
 mas o `git checkout` na VM vai mover ~30 arquivos, e isso é ato deliberado, não consequência. O
