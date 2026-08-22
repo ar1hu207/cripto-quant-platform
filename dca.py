@@ -7,6 +7,7 @@ o "imposto" de giro/taxas. Dinheiro fictício, preço real. Separado da banca de
 import pandas as pd
 
 import db
+import mercado
 import simulador
 from logbot import log
 
@@ -24,19 +25,21 @@ def criar(ativo, valor_aporte, freq_dias):
 def aportar(plano):
     """Executa 1 aporte (compra valor_aporte do ativo no preço ao vivo, acumula unidades)."""
     pid = plano["id"] if isinstance(plano, dict) else plano
-    with db.conectar() as c:
+    with db.conectar() as c:                                   # leitura curta: so pega o plano
         p = c.execute("SELECT * FROM dca WHERE id=? AND status='ativo'", (pid,)).fetchone()
-        if not p:
-            return None
-        preco = simulador.preco_ao_vivo(p["ativo"])
-        if not preco:
-            return None
-        unid = p["valor_aporte"] / preco
-        c.execute("UPDATE dca SET unidades=unidades+?, total_investido=total_investido+?, "
-                  "n_aportes=n_aportes+1, ultimo_aporte=? WHERE id=? AND status='ativo'",
-                  (unid, p["valor_aporte"], str(pd.Timestamp.now()), pid))
-        ativo = p["ativo"]
-    log(f"DCA aporte #{pid} {ativo} R${p['valor_aporte']} @ {preco} (+{unid:.6f} un)")
+    if not p:
+        return None
+    preco = simulador.preco_ao_vivo(p["ativo"])                # rede FORA da conexao
+    if not preco:
+        return None
+    unid = p["valor_aporte"] / preco
+    with db.conectar() as c:                                   # escrita curta: so o UPDATE
+        cur = c.execute("UPDATE dca SET unidades=unidades+?, total_investido=total_investido+?, "
+                        "n_aportes=n_aportes+1, ultimo_aporte=? WHERE id=? AND status='ativo'",
+                        (unid, p["valor_aporte"], str(pd.Timestamp.now()), pid))
+        if not cur.rowcount:      # o plano saiu do ar durante a viagem de rede: nada foi aportado,
+            return None           # e o log nao pode dizer que foi
+    log(f"DCA aporte #{pid} {p['ativo']} R${p['valor_aporte']} @ {preco} (+{unid:.6f} un)")
     return preco
 
 
@@ -57,14 +60,14 @@ def listar():
     """Planos ativos com valor atual + P&L (preço médio, valor de mercado)."""
     with db.conectar() as c:
         planos = [dict(r) for r in c.execute("SELECT * FROM dca WHERE status='ativo' ORDER BY id")]
+    ativos = sorted({p["ativo"] for p in planos if p["unidades"]})
+    try:
+        cotacao = mercado.precos(ativos) if ativos else {}     # 1 request pelos N planos, cache de 5s
+    except Exception:
+        cotacao = {}
     out = []
     for p in planos:
-        preco = 0.0
-        if p["unidades"]:
-            try:
-                preco = simulador.preco_ao_vivo(p["ativo"])
-            except Exception:
-                preco = 0.0
+        preco = (cotacao.get(p["ativo"]) or 0.0) if p["unidades"] else 0.0
         valor = p["unidades"] * preco
         inv = p["total_investido"]
         out.append({**p,
