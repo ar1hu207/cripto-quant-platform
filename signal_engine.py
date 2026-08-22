@@ -3,8 +3,10 @@ Sprint 1 - Engine de Sinais. Varre as criptos AO VIVO (preço real Binance),
 pontua a convicção de cada oportunidade (trend + ADX + rompimento + RSI + volume)
 e grava os sinais no banco. Esses sinais alimentam a fila de "confirmar trade".
 
-Rodar:  python signal_engine.py          (loop)
-        python signal_engine.py --once   (uma varredura)
+Rodar:  python signal_engine.py               (loop)
+        python signal_engine.py --once        (uma varredura)
+        python signal_engine.py --desfechos   ([Q-4] marca desfecho hipotético agora)
+        python signal_engine.py --relatorio   ([Q-4] portão de fluxo: passou x rejeitado)
 """
 import sys
 import time
@@ -32,6 +34,10 @@ def analisa(ativo, tf):
     if i < 60:
         return []
     c = float(df["close"].iloc[i])
+    # instante em que esse preço foi impresso = abertura do candle seguinte (o em formação).
+    # [Q-4] ancora o desfecho hipotético aqui, e não na hora do scan: num sinal de 1h o scan
+    # pode acontecer 59 min depois do fechamento, e o contrafactual começaria de um preço morto.
+    vela_ms = int(df["timestamp"].iloc[i + 1])
     out = []
     for fn in (pontuar, pontuar_reversao):              # mesma pontuação do backtest + reversão
         p = fn(df, i)
@@ -42,7 +48,7 @@ def analisa(ativo, tf):
                         direcao="LONG" if p["direcao"] == 1 else "SHORT",
                         conviccao=p["conviccao"], motivos=p["motivos"],
                         preco=round(c, 6), stop_sugerido=round(stop, 6),
-                        adx=p["adx"], n_fatores=p["n_fatores"]))
+                        adx=p["adx"], n_fatores=p["n_fatores"], vela_ms=vela_ms))
     return out
 
 
@@ -75,9 +81,12 @@ def confirmado(s, ativo, cfg):
         bk = mercado.book(ativo)
         if bk:
             fc = bk["fluxo_comprador"]
+            s["fluxo_comprador"] = fc        # [Q-4] medido: vale pros DOIS grupos, não só pro rejeitado
             if s["direcao"] == "LONG" and fc < 50:
+                s["rejeitado_por"] = "fluxo"
                 return False, f"fluxo contra o LONG ({fc:.0f}% comprador)"
             if s["direcao"] == "SHORT" and fc > 50:
+                s["rejeitado_por"] = "fluxo"
                 return False, f"fluxo contra o SHORT ({fc:.0f}% comprador)"
             s["motivos"] += f", fluxo {fc:.0f}% taker"
     return True, "confirmado"
@@ -180,6 +189,112 @@ def analise(ativo, tf="15m", limite=200):
 ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
 
 
+REJEITADO_FLUXO = "rejeitado_fluxo"      # [Q-4] status fora da fila: nenhuma consulta de
+                                         # pendentes/auto-trader o lê (todas filtram status='novo')
+HORIZONTE_H = 24                         # janela do desfecho hipotético
+HORIZONTE_MS = HORIZONTE_H * 3600 * 1000
+DESFECHOS_POR_SCAN = 6                   # teto de fetch extra por varredura (o scan já faz ~72)
+
+
+def _repetido(con, s, ativo, tf, status):
+    """Dedupe por ativo+tf+tipo DENTRO da própria linhagem de status.
+
+    A fila e o log de rejeição não se enxergam: cada um compara com o último da SUA espécie.
+    Sem essa separação, uma rejeição gravada viraria o "último sinal" de ativo+tf+tipo e
+    mudaria quando a fila aceita um sinal novo — efeito colateral proibido pelo card ([Q-4]
+    exige zero impacto na fila) e colisão direta com o dedupe do [P1-9].
+    """
+    lado = "= ?" if status == REJEITADO_FLUXO else "<> ?"
+    ult = con.execute("SELECT direcao,conviccao FROM sinais WHERE ativo=? AND tf=? AND tipo=? "
+                      f"AND IFNULL(status,'novo') {lado} ORDER BY id DESC LIMIT 1",
+                      (ativo, tf, s["tipo"], REJEITADO_FLUXO)).fetchone()
+    # mudou de direção, convicção variou >=10, ou é o primeiro -> não é repetido
+    return not (ult is None or ult["direcao"] != s["direcao"]
+                or abs(s["conviccao"] - ult["conviccao"]) >= 10)
+
+
+def _gravar(con, ts, s, ativo, tf, status, rejeicao):
+    """INSERT único pros dois grupos — a mesma linha, o mesmo dedupe, só o status muda.
+    É o que permite comparar os dois depois sem discutir se a amostragem foi diferente."""
+    con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
+                "status,vela_ms,fluxo_comprador,rejeicao) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
+                 s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
+                 s.get("fluxo_comprador"), rejeicao))
+
+
+def _desfecho(sinal, velas):
+    """Desfecho HIPOTÉTICO de um sinal contra candle de 5m, na janela de 24h.
+
+    Contrafactual declarado: stop = a distância do `stop_sugerido` (3xATR), alvo = a MESMA
+    distância espelhada (1R). 1R simétrico porque sob passeio aleatório o acerto é 50% — é o
+    nulo certo pra comparar dois grupos. Empate na mesma vela conta como STOP (5m não ordena
+    o que aconteceu dentro dela; o viés fica no lado pessimista, igual pros dois grupos).
+    Não é P&L: sem fill, sem taxa, sem funding, sem alavancagem.
+    """
+    ini = sinal["vela_ms"]
+    velas = [v for v in velas if ini <= v[0] <= ini + HORIZONTE_MS]
+    if len(velas) < 12:                     # menos de 1h de mercado: não dá pra marcar nada
+        return None
+    d = 1 if sinal["direcao"] == "LONG" else -1
+    entrada = float(sinal["preco"])
+    dist = abs(entrada - float(sinal["stop_sugerido"]))
+    if entrada <= 0 or dist <= 0:
+        return None
+    stop, alvo = entrada - d * dist, entrada + d * dist
+    saida = "aberto"
+    for t, o, h, l, c, v in velas:
+        bateu_stop = (l <= stop) if d == 1 else (h >= stop)
+        bateu_alvo = (h >= alvo) if d == 1 else (l <= alvo)
+        if bateu_stop:
+            saida = "stop"
+            break
+        if bateu_alvo:
+            saida = "alvo"
+            break
+
+    def fechamento(horas):
+        ate = ini + horas * 3600 * 1000
+        antes = [v for v in velas if v[0] <= ate]
+        return round(float(antes[-1][4]), 8) if antes else None
+
+    return {"desfecho": saida, "preco_1h": fechamento(1),
+            "preco_4h": fechamento(4), "preco_24h": fechamento(24)}
+
+
+def marcar_desfechos(limite=DESFECHOS_POR_SCAN, agora_ms=None):
+    """[Q-4] Job leve do worker: marca o desfecho hipotético dos sinais já VENCIDOS.
+
+    Roda sobre os DOIS grupos — quem passou e quem o fluxo rejeitou — com a mesma régua.
+    Medir só o rejeitado não responderia nada: o grupo que passou virou trade com política de
+    saída própria (auto-saida/trailing), e comparar isso com um contrafactual seria comparar
+    duas coisas diferentes. Só pega sinal que já completou 24h de mercado: aí uma única
+    chamada de candles resolve stop, alvo e os três horizontes de uma vez.
+    """
+    agora = agora_ms if agora_ms is not None else int(time.time() * 1000)
+    with db.conectar() as con:
+        pend = [dict(r) for r in con.execute(
+            "SELECT id,ativo,direcao,preco,stop_sugerido,vela_ms FROM sinais "
+            "WHERE desfecho IS NULL AND vela_ms IS NOT NULL AND vela_ms <= ? "
+            "ORDER BY vela_ms LIMIT ?", (agora - HORIZONTE_MS, limite))]
+    feitos = 0
+    for r in pend:
+        try:                                    # 289 velas de 5m = 24h05 a partir do sinal
+            velas = ex.fetch_ohlcv(r["ativo"], timeframe="5m", since=int(r["vela_ms"]), limit=289)
+        except Exception as e:
+            log(f"desfecho falhou {r['ativo']} #{r['id']}: {type(e).__name__}: {e}", "error")
+            continue
+        d = _desfecho(r, velas)
+        if not d:
+            continue
+        with db.conectar() as con:
+            con.execute("UPDATE sinais SET desfecho=?,desfecho_ts=?,preco_1h=?,preco_4h=?,preco_24h=? "
+                        "WHERE id=?", (d["desfecho"], str(pd.Timestamp.now()), d["preco_1h"],
+                                       d["preco_4h"], d["preco_24h"], r["id"]))
+        feitos += 1
+    return feitos
+
+
 def scan():
     cfg = db.get_config()
     ativos = [a.strip() for a in cfg["ativos"].split(",") if a.strip()]
@@ -203,17 +318,21 @@ def scan():
                 ok, motivo_rej = confirmado(s, a, cfg)
                 if not ok:
                     s["rejeicao"] = motivo_rej
+                    if s.get("rejeitado_por") == "fluxo":
+                        # [Q-4] a rejeição por fluxo é o único dado que valida o portão, e ela
+                        # só existe agora: não há book/taker histórico pra reconstruir depois.
+                        with db.conectar() as con:
+                            if not _repetido(con, s, a, tf, REJEITADO_FLUXO):
+                                _gravar(con, ts, s, a, tf, REJEITADO_FLUXO, motivo_rej)
                     continue
                 with db.conectar() as con:
-                    # dedupe por ativo+tf+tipo: mudou direção, convicção variou >=10, ou é o primeiro
-                    ult = con.execute("SELECT direcao,conviccao FROM sinais WHERE ativo=? AND tf=? AND tipo=? "
-                                      "ORDER BY id DESC LIMIT 1", (a, tf, s["tipo"])).fetchone()
-                    if ult is None or ult["direcao"] != s["direcao"] or abs(s["conviccao"] - ult["conviccao"]) >= 10:
-                        con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,"
-                                    "stop_sugerido,status) VALUES(?,?,?,?,?,?,?,?,?,'novo')",
-                                    (ts, a, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
-                                     s["preco"], s["stop_sugerido"]))
+                    if not _repetido(con, s, a, tf, "novo"):
+                        _gravar(con, ts, s, a, tf, "novo", None)
                         novos += 1
+    try:
+        marcar_desfechos()          # job leve do worker: nunca pode derrubar a varredura
+    except Exception as e:
+        log(f"marcar_desfechos falhou: {e}", "error")
     return resultados, novos
 
 
@@ -233,5 +352,34 @@ def run(once=False, intervalo=60):
         time.sleep(intervalo)
 
 
+def imprimir_relatorio_fluxo():
+    """[Q-4] Imprime a comparação passou x rejeitado pelo portão de fluxo.
+    Fica aqui como comando pra não depender de endpoint: `api.py` é território de outro
+    agente nesta onda, e o número da pesquisa tem que ser obtenível sem subir a API."""
+    r = db.relatorio_fluxo()
+    print("PORTAO DE FLUXO — validacao prospectiva [Q-4]\n")
+    print(f"{'grupo':<12}{'n':>5}{'alvo':>6}{'stop':>6}{'aberto':>8}{'win%':>8}"
+          f"{'ret1h%':>9}{'ret4h%':>9}{'ret24h%':>9}{'fluxo%':>9}")
+    for nome in ("passou", "rejeitado"):
+        g = r[nome]
+        f = lambda v: "-" if v is None else f"{v}"
+        print(f"{nome:<12}{g['n']:>5}{g['alvo']:>6}{g['stop']:>6}{g['aberto']:>8}"
+              f"{f(g['win']):>8}{f(g['ret_1h']):>9}{f(g['ret_4h']):>9}"
+              f"{f(g['ret_24h']):>9}{f(g['fluxo_medio']):>9}")
+    d = r["delta_win"]
+    print(f"\ndelta win (passou - rejeitado): {'-' if d is None else f'{d:+.1f} p.p.'}"
+          f"   z={r['z']}  p={r['p']}")
+    print(f"veredito: {r['veredito']}")
+    print(f"nota: {r['nota']}")
+    return r
+
+
 if __name__ == "__main__":
-    run(once="--once" in sys.argv)
+    if "--relatorio" in sys.argv:
+        db.init_db()
+        imprimir_relatorio_fluxo()
+    elif "--desfechos" in sys.argv:
+        db.init_db()
+        print(f"{marcar_desfechos(limite=200)} desfechos marcados")
+    else:
+        run(once="--once" in sys.argv)
