@@ -18,21 +18,33 @@ import db
 ex_spot = ccxt.binance({"enableRateLimit": True})
 ex_fut = ccxt.binanceusdm({"enableRateLimit": True})
 _cache = {"sent": None, "sent_t": 0.0}
-_pcache = {"p": {}, "t": 0.0, "key": ""}
+_tcache = {}                                   # ativo -> (ts, ticker cru do ccxt); guarda so o que esta fresco
+
+
+def _tickers(ativos):
+    """Tickers crus de vários ativos: 1 request (fetch_tickers) pelo que venceu, cache
+    de 5s POR ATIVO. É o único ponto do módulo que fala com o ccxt por lista de ativo —
+    cache por consumidor, chaveado pela lista pedida, faz listas diferentes se
+    invalidarem entre si e a janela de 5s nunca acertar."""
+    agora = time.time()
+    for a in [k for k, (t, _) in list(_tcache.items()) if agora - t >= 5]:
+        del _tcache[a]                         # vencido sai: estar no cache já significa estar fresco
+    faltam = [a for a in ativos if a not in _tcache]
+    if faltam:
+        try:
+            novos = ex_spot.fetch_tickers(faltam)
+        except Exception:
+            novos = {}                         # falhou: quem chama vê o ativo AUSENTE, nunca um zero
+        for a in faltam:
+            _tcache[a] = (agora, novos.get(a))  # o que não voltou entra como None: a ausência também
+                                                # é cacheada, senão um símbolo que a corretora não
+                                                # lista refaz o request a cada chamada
+    return {a: _tcache[a][1] for a in ativos if _tcache.get(a, (0.0, None))[1]}
 
 
 def precos(ativos):
     """Preço ao vivo (last) de vários ativos num request só (fetch_tickers). Cache 5s."""
-    key = ",".join(sorted(ativos))
-    if time.time() - _pcache["t"] < 5 and _pcache["key"] == key:
-        return _pcache["p"]
-    try:
-        tk = ex_spot.fetch_tickers(ativos)
-        p = {a: tk[a]["last"] for a in ativos if a in tk}
-    except Exception:
-        p = {}
-    _pcache.update(p=p, t=time.time(), key=key)
-    return p
+    return {a: t["last"] for a, t in _tickers(ativos).items()}
 
 
 def fear_greed():
@@ -46,15 +58,13 @@ def fear_greed():
 
 def breadth():
     ativos = [a.strip() for a in db.get_config()["ativos"].split(",") if a.strip()]
+    tk = _tickers(ativos)                  # 1 request pelos 24, nao 24 sequenciais
     up = tot = 0
     soma = 0.0
     for a in ativos:
-        try:
-            p = ex_spot.fetch_ticker(a)["percentage"]
-        except Exception:
-            continue                       # nao respondeu: nao e amostra, nao entra em tot
-        if p is None:                      # par sem estatistica de 24h: leitura AUSENTE, nao zero
-            continue
+        p = (tk.get(a) or {}).get("percentage")
+        if p is None:                      # nao veio na resposta, ou par sem estatistica de 24h:
+            continue                       # leitura AUSENTE, nao zero - fica fora de tot
         tot += 1                           # daqui pra baixo o ativo entra nos tres contadores ou em nenhum
         soma += p
         up += 1 if p > 0 else 0
