@@ -38,6 +38,12 @@ web/index.html ──► FastAPI (api.py) ──► SQLite (WAL)
                                           escaneia sinais, grava equity
 ```
 
+O desenho completo — fluxo do worker, ciclo de vida do sinal, esquema das 7 tabelas, topologia
+do deploy e a razão registrada de cada decisão, tudo com `arquivo:linha` — está em
+**[ARQUITETURA.md](ARQUITETURA.md)**. Se você é uma sessão de IA, comece pelo
+**[CLAUDE.md](CLAUDE.md)**: é o contrato entre sessões, e traz os invariantes que não se
+relaxam sem decisão humana.
+
 ### Mapa de pastas
 
 Três eras do projeto, e a divisória é explícita desde o `[P2-16]`. Qual arquivo você edita
@@ -152,6 +158,8 @@ bash deploy/provisionar-azure.sh
 
 | Documento | Conteúdo |
 |---|---|
+| [CLAUDE.md](CLAUDE.md) | **Contrato entre sessões de IA**: mapa de módulos, comandos, convenções e os invariantes que não se relaxam sem decisão humana |
+| [ARQUITETURA.md](ARQUITETURA.md) | **Como funciona por dentro**: fluxo do worker, ciclo do sinal, esquema do banco, topologia do deploy, decisões com o porquê |
 | [BASE-CONHECIMENTO-TRADING.md](BASE-CONHECIMENTO-TRADING.md) | Base teórica: AT, microestrutura, risco/validação, cripto on-chain, o que funciona vs mito |
 | [AUDITORIA-SISTEMA.md](AUDITORIA-SISTEMA.md) | Auditoria: 21 bugs + 6 gargalos sistêmicos, com as correções aplicadas |
 | [PLANO-REPOS-QUANT.md](PLANO-REPOS-QUANT.md) | Próximos passos de pesquisa (Reality Check, Ornstein-Uhlenbeck, dollar bars) |
