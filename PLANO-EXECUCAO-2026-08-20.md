@@ -412,6 +412,78 @@ fazer.
 
 **Portão do M3:** sessão nova, prompt frio, faz um fix — e o teste pega uma regressão plantada de propósito.
 
+> ### ✅ Portão do M3 — RODADO em 2026-08-22, nas duas metades, e depois deployado
+>
+> Merges: `95096fe` (T-TESTE), `3498ca4` (T-ESTRUTURA), `e5fb090` (T-DOCS). Deploy na VM pelo
+> `cripto-deploy`: `7c65df1 → e5fb090`, com backup, congelamento, `py_compile` no venv de produção,
+> restart e verificação.
+>
+> A frase do portão — *"sessão nova, prompt frio, faz um fix, e o teste pega uma regressão plantada
+> de propósito"* — tem **duas** metades, e cada uma foi rodada como comando da matriz, não como
+> relato de worker.
+>
+> **Metade 1 — o teste pega regressão plantada.** A matriz plantou **sete** regressões reais, uma
+> por vez, em worktree separada, e exigiu que a suíte ficasse vermelha:
+>
+> | Regressão plantada | Resultado |
+> |---|---|
+> | trava diária deixa de ser sticky | PEGOU (3 failed) |
+> | `_pnl` perde o cap na margem | PEGOU |
+> | direção do `_pnl` invertida | PEGOU |
+> | liquidação ignora a alavancagem | PEGOU |
+> | cap do sizing ignora `max_frac` | PEGOU (2 failed) |
+> | `_alavancagem` sem teto `lev_max` | PEGOU (2 failed) |
+> | sizing opera banca morta | PEGOU (2 failed) |
+>
+> Uma oitava tentativa — trocar a ordem de piso e cap no `_tamanho` — **não** foi pega, e conferindo,
+> **a suíte estava certa e a mutação errada**: a guarda `cap < min_valor → return 0` logo acima
+> garante `cap >= min_valor`, então as duas ordens são equivalentes. Fica registrado porque auditoria
+> que erra e diz que acertou é pior que auditoria nenhuma.
+>
+> **A metade 1 foi rodada duas vezes**: na branch do `T-TESTE` e de novo **sobre a `main` já com o
+> `P2-16` mesclado** — que é o único momento em que a reorganização e a rede de segurança existem
+> juntas. A regressão da trava diária continuou sendo pega depois de 44 arquivos mudarem de lugar.
+>
+> **Metade 2 — a sessão fria acerta lendo só o contrato.** A matriz criou um diretório **vazio**
+> contendo **apenas o `CLAUDE.md`** e rodou uma sessão sem repositório, sem histórico e sem contexto.
+> Ela acertou onde vive a configuração (`db.CONFIG_PADRAO` + tabela `config`, e que o `config.py`
+> foi para `legado/`), listou os **sete** invariantes, **recusou** trocar `web/vendor/` por CDN
+> citando a credencial no `localStorage` e oferecendo a alternativa certa, **recusou** converter
+> timestamps para UTC explicando que o banco inteiro é naive-SP, e soube o comando de teste e a saída
+> esperada — inclusive que o `1 xfailed` é card em aberto, não teste quebrado.
+>
+> **O estado do repositório que o marco deixa:**
+>
+> | Antes do M3 | Depois |
+> |---|---|
+> | pytest não instalado, nenhum teste rodando | `python -m pytest` → **143 passed, 1 xfailed** (~36 s) |
+> | cinco provas reexecutáveis, uma a uma, de memória | um comando executa as seis e confere **exit code E contagem de asserções** |
+> | `test_sim.py` sem asserção nenhuma, saindo 0 nos dois casos | 13 asserções, banco temporário, sem rede |
+> | 51 `.py` na raiz misturando três eras | 14 na raiz (11 da plataforma + 3 provas), `pesquisa/` e `legado/` |
+> | dois arquivos reivindicando "Fonte UNICA da verdade" | um: `db.py:49` |
+> | `ARQUITETURA.md` não existia | 457 linhas, **91 citações `arquivo:linha`, todas resolvem** |
+> | `CLAUDE.md` sem mapa de módulos, sem comandos, sem CDN nem banda nos invariantes | os cinco blocos do card, 195 linhas |
+>
+> **Produção depois do deploy:**
+> ```json
+> "scan": {"total": 52, "ok": 51, "falhas": 0, "ultimo_erro": null, "fluxo_indisponivel": 0}
+> "funding": {"medidos": 0, "falhas": 0}   "saudavel": true   "posicoes_abertas": 0
+> /health: {"status":"ok","versao":"0.3","commit":"e5fb0904f04311b4e9838bd334420e462cd8c695"}
+> ```
+> `pesquisa/` e `legado/` chegaram na VM; o `uvicorn api:app` não mudou, como a decisão 3 da §4c
+> previu. `auto_trade` foi restaurado para `1` depois da verificação — e **a guarda que segura hoje é
+> a trava diária**, engatada em `2026-08-22`, que é o comportamento sticky do `CLAUDE.md` §2.
+>
+> **Dois achados do marco que viraram trabalho novo, nenhum deles no plano original:**
+>
+> - **`P2-36`** (`oDireXwJ`) — `db.metricas()` soma `pnl_reais` cru depois de classificar tolerando
+>   NULL; um NULL derruba o `/estado`. Latente hoje. O teste já está plantado como
+>   `xfail(strict=True)`: quem consertar sem promover o teste **quebra a suíte**.
+> - **`analise_dia.py` está na raiz da VM e não é rastreado pelo git** — sobra do deploy por cópia
+>   manual da era M1, que o `git status` da VM confirma como untracked. É exatamente a classe de
+>   armadilha que o `P2-16` veio remover, só que do lado de produção, onde a reorganização do
+>   repositório não alcança.
+
 ---
 
 ### 🔬 M4 — "A régua mede a estratégia que eu opero" · 10 cards
