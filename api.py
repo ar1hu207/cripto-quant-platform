@@ -34,6 +34,7 @@ _worker_on = {"v": True}
 _health = {"iniciado": None, "ultimo_ciclo": None, "ciclos": 0, "erros": 0}
 _saidas = {"v": []}   # recomendações de saída ativa, atualizadas pelo worker
 _auto = {"v": {"ativo": False}}   # último ciclo do auto-trader
+_poda = {"dia": None, "ultimo": None}   # [P2-11] retenção da curva de equity, 1x/dia
 
 
 def equity_total():
@@ -66,6 +67,20 @@ def worker():
         except Exception as e:                          # nunca derruba o loop
             _health["erros"] += 1
             log(f"worker erro: {e}", "error")
+        # [P2-11] retenção da curva de equity, 1x por dia. Bloco PRÓPRIO, fora do try
+        # acima: faxina de banco não pode nem derrubar o ciclo nem ser derrubada por ele.
+        # Marca o dia ANTES de podar — se a poda falhar, ela volta amanhã e não a cada 15s
+        # martelando o mesmo banco. Roda também no primeiro ciclo após um start, que é o
+        # que faz o deploy num banco antigo se acertar sozinho.
+        hoje = str(pd.Timestamp.now().date())
+        if _poda["dia"] != hoje:
+            _poda["dia"] = hoje
+            try:
+                _poda["ultimo"] = db.podar_equity()
+                log(f"[P2-11] poda da equity: {_poda['ultimo']}")
+            except Exception as e:
+                _health["erros"] += 1
+                log(f"poda da equity falhou: {e}", "error")
         _health["ciclos"] += 1
         time.sleep(POLL_ATUALIZAR)
 
@@ -467,7 +482,12 @@ def estado():
         "pendentes": db.listar("sinais", 30, "WHERE status='novo'"),
         "posicoes": db.listar("posicoes", 50, "WHERE status='aberta'"),
         "trades": db.listar("trades", 30),
-        "equity_hist": _amostrar(db.listar("equity", 500)[::-1]),
+        # [P2-11] a série INTEIRA (a poda a mantém pequena), reduzida a ~125 pontos pelo
+        # _amostrar. Era `listar("equity", 500)[::-1]`: 500 linhas de 15s = 125 minutos, ou
+        # seja o "gráfico da banca" mostrava ~2h e nunca a trajetória — que é a única
+        # leitura que ele existe para dar. O formato do payload não muda (ts/banca/
+        # equity_total, em ordem cronológica), então o front não muda junto.
+        "equity_hist": _amostrar(db.serie_equity()),
         "metricas": db.metricas(),
         "risco": simulador.guarda_risco(),
         "dca": dca.listar(),

@@ -6,6 +6,7 @@ import math
 import os
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 
 # caminho do banco: env DB_PATH (ex.: volume /data/trading.db no Railway) ou local
 DB = os.environ.get("DB_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "trading.db")
@@ -111,10 +112,30 @@ def _migrar(c):
                 c.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
 
 
+# [P2-11] Indices. Ficam FORA do SCHEMA e rodam DEPOIS do _migrar de proposito: indice
+# sobre coluna que o _migrar acabou de acrescentar nao existiria se o CREATE viesse antes.
+# `IF NOT EXISTS` nao e estilo, e o requisito: isto roda a cada init_db (todo start do
+# worker) contra o banco de PRODUCAO, que ja tem dados e que o autor da migracao nao ve.
+#
+# `idx_equity_dia` e indice de EXPRESSAO, e existe porque a consulta que mais dói --
+# `WHERE substr(ts,1,10)=?`, o baseline do dia da trava diaria em `simulador.guarda_risco`
+# -- e rodada a cada poll de 3s e nenhum indice sobre a coluna crua a serve: `substr` sobre
+# a coluna esconde a coluna do planejador. Ou muda a consulta (range) ou muda o indice
+# (expressao); a consulta mora em `simulador.py`, que nao e territorio deste card, entao
+# aqui vai o indice. Medido em banco sintetico de 1 ano: 255 ms -> 0 ms.
+INDICES = [
+    "CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_equity_dia ON equity(substr(ts,1,10))",
+    "CREATE INDEX IF NOT EXISTS idx_trades_fechado ON trades(fechado_em)",
+]
+
+
 def init_db():
     with conectar() as c:
         c.executescript(SCHEMA)
         _migrar(c)
+        for sql in INDICES:
+            c.execute(sql)
         if c.execute("SELECT COUNT(*) FROM banca").fetchone()[0] == 0:
             c.execute("INSERT INTO banca(id,nome,inicial,atual) VALUES(1,'principal',1000,1000)")
         for k, v in CONFIG_PADRAO.items():
@@ -142,6 +163,82 @@ def listar(tabela, limite=50, where=""):
     with conectar() as c:
         q = f"SELECT * FROM {tabela} {where} ORDER BY rowid DESC LIMIT ?"  # rowid serve p/ toda tabela
         return [dict(r) for r in c.execute(q, (limite,))]
+
+
+# ---------- [P2-11] retencao e leitura da curva de equity ----------
+# O worker grava um snapshot a cada 15s: 5.760 linhas/dia, ~2,1 milhoes/ano, e nada
+# apagava nem compactava. Duas consequencias, e as duas moram aqui:
+#   1. a tabela cresce sem limite e toda leitura de `metricas()` cresce junto;
+#   2. o painel lia as ULTIMAS 500 linhas, ou seja 125 minutos -- o "grafico da banca"
+#      mostrava ~2h de historia, que e a unica leitura que ele NAO deveria dar.
+# A poda resolve as duas: reduz a RESOLUCAO do passado em vez de CORTAR o passado, entao
+# a curva longa continua inteira e a tabela para de crescer.
+EQUITY_H_CHEIA = 48        # ultimas 48h: resolucao cheia (15s), que e o zoom operacional
+EQUITY_D_5MIN = 90         # ate 90 dias: 1 ponto a cada 5 min; alem disso, 1 ponto por hora
+
+# Baldes por fatiamento de STRING, nao por strftime: o ts e naive em hora de Sao Paulo
+# (CLAUDE.md §1) e vem de `str(pd.Timestamp.now())`, que ora traz microssegundos ora nao.
+# strftime teria de parsear isso; substr nao parseia nada e nunca inventa fuso.
+_BALDE_5MIN = "substr(ts,1,14) || (CAST(substr(ts,15,2) AS INTEGER)/5)"   # 'AAAA-MM-DD HH:' + bloco
+_BALDE_HORA = "substr(ts,1,13)"                                          # 'AAAA-MM-DD HH'
+
+
+def podar_equity(agora=None):
+    """Aplica a retencao a tabela `equity`. Idempotente e convergente: rodar duas vezes
+    seguidas nao quebra e a segunda nao remove nada -- o que sobra ja e um ponto por balde.
+
+    Guarda o MAIOR rowid de cada balde (o ponto mais recente dele), nunca o primeiro: o
+    ultimo ponto de cada janela e o que o grafico e o max-drawdown leem como o valor
+    daquele instante. E a janela cheia de 48h protege, por construcao, o primeiro ponto do
+    dia corrente -- que e o baseline da trava diaria em `guarda_risco`. Podar isso seria
+    afrouxar invariante de risco (CLAUDE.md §2) por efeito colateral de faxina.
+    """
+    agora = agora if agora is not None else datetime.now()          # naive, hora de SP (§1)
+    if isinstance(agora, str):
+        agora = datetime.fromisoformat(agora)
+    corte_cheia = str(agora - timedelta(hours=EQUITY_H_CHEIA))
+    corte_hora = str(agora - timedelta(days=EQUITY_D_5MIN))
+    with conectar() as c:
+        antes = c.execute("SELECT COUNT(*) FROM equity").fetchone()[0]
+        # faixa do meio (48h .. 90d) -> 1 ponto/5min
+        c.execute(f"DELETE FROM equity WHERE ts >= ? AND ts < ? AND rowid NOT IN "
+                  f"(SELECT MAX(rowid) FROM equity WHERE ts >= ? AND ts < ? GROUP BY {_BALDE_5MIN})",
+                  (corte_hora, corte_cheia, corte_hora, corte_cheia))
+        # cauda longa (> 90d) -> 1 ponto/hora
+        c.execute(f"DELETE FROM equity WHERE ts < ? AND rowid NOT IN "
+                  f"(SELECT MAX(rowid) FROM equity WHERE ts < ? GROUP BY {_BALDE_HORA})",
+                  (corte_hora, corte_hora))
+        depois = c.execute("SELECT COUNT(*) FROM equity").fetchone()[0]
+    return {"antes": antes, "depois": depois, "removidas": antes - depois,
+            "corte_cheia": corte_cheia, "corte_hora": corte_hora}
+
+
+def serie_equity(max_linhas=50000):
+    """Curva de equity INTEIRA (nao uma janela), em ordem cronologica, so com as colunas
+    que o grafico usa.
+
+    `max_linhas` nao e janela, e teto de RAM: quanto o servidor materializa por requisicao.
+    Com a poda a tabela fica em ~43k linhas apos um ano (medido), entao na operacao normal
+    ele nunca morde; ele existe para o unico intervalo em que a poda ainda nao rodou --
+    primeiro start contra um banco antigo, quando a tabela ainda tem os 2,1 milhoes.
+
+    E quando morde, ele RAREIA, nao CORTA pelo fim: cortar seria reintroduzir exatamente a
+    janela enganosa que este card fecha. O balde e faixa de ROWID (nao contagem de linhas)
+    porque o rowid avanca ~1 a cada 15s mesmo depois de podas, entao faixa de rowid e faixa
+    de TEMPO -- que e o eixo do grafico. O ultimo balde contem MAX(rowid), logo o ponto mais
+    recente esta sempre na serie.
+    """
+    with conectar() as c:
+        n, r0, r1 = c.execute("SELECT COUNT(*), MIN(rowid), MAX(rowid) FROM equity").fetchone()
+        if not n:
+            return []
+        if n <= max_linhas:
+            q, p = "SELECT ts,banca,equity_total FROM equity ORDER BY rowid", ()
+        else:
+            q = ("SELECT ts,banca,equity_total FROM equity WHERE rowid IN "
+                 "(SELECT MAX(rowid) FROM equity GROUP BY (rowid - ?) * ? / ?) ORDER BY rowid")
+            p = (r0, max_linhas, r1 - r0 + 1)
+        return [dict(r) for r in c.execute(q, p)]
 
 
 def metricas():
@@ -317,7 +414,158 @@ def relatorio_fluxo(min_amostra=100):
 
 
 
+# ---------- [P2-11] prova de regressao ----------
+# Escrita aqui, dentro do modulo, e nao num script solto, porque prova que nao esta no
+# repositorio nao e reexecutavel: a onda 1 rodou provas otimas que ninguem conseguiu
+# repetir. Roda contra banco TEMPORARIO e sem rede.
+#
+#     python db.py prova          # 18 asseracoes; exit 1 se qualquer uma falhar
+#
+# As consultas de `guarda_risco` aparecem aqui como STRING LITERAL de proposito: elas
+# moram em `simulador.py`, que nao e territorio deste card. Copia-las e o unico jeito de
+# provar o plano de consulta delas sem editar aquele arquivo -- e se alguem mudar a
+# consulta la sem mudar a copia aqui, a prova deixa de valer; e para isso que este
+# comentario existe.
+Q_GUARDA_EQUITY = "SELECT equity_total FROM equity WHERE substr(ts,1,10)=? ORDER BY rowid ASC LIMIT 1"
+Q_GUARDA_RANGE = "SELECT equity_total FROM equity WHERE ts >= ? AND ts < ? ORDER BY rowid ASC LIMIT 1"
+Q_GUARDA_TRADES = "SELECT COALESCE(SUM(pnl_reais),0) FROM trades WHERE substr(fechado_em,1,10)=?"
+Q_METRICAS_DIA = "SELECT MAX(rowid) mr, equity_total e FROM equity GROUP BY substr(ts,1,10) ORDER BY mr"
+Q_METRICAS_EQ = "SELECT equity_total FROM equity ORDER BY rowid"
+
+
+def _plano(c, q, p=()):
+    """EXPLAIN QUERY PLAN em uma linha - a unica coisa que prova uso de indice."""
+    return " | ".join(r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + q, p))
+
+
+def _prova_p2_11(dias=365):
+    global DB
+    import sys, tempfile, time
+    DB = os.path.join(tempfile.mkdtemp(), "prova_p2_11.db")     # nunca toca no de producao
+    ok = fail = 0
+
+    def check(nome, cond, detalhe=""):
+        nonlocal ok, fail
+        print(("  PASSA  " if cond else "  FALHA  ") + nome + ("" if cond else "  <- " + str(detalhe)))
+        if cond:
+            ok += 1
+        else:
+            fail += 1
+
+    def indices():
+        with conectar() as c:
+            return sorted(r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"))
+
+    # ---------- idempotencia da migracao: PROVADA rodando duas vezes, nao afirmada
+    init_db()
+    ix1 = indices()
+    init_db()                                   # 2a rodada no MESMO banco, ja com esquema
+    ix2 = indices()
+    check("init_db roda 2x sem quebrar e sem duplicar indice", ix1 == ix2 and len(ix1) == 3,
+          str(ix1) + " vs " + str(ix2))
+    check("os 3 indices existem com o nome esperado",
+          ix1 == ["idx_equity_dia", "idx_equity_ts", "idx_trades_fechado"], str(ix1))
+
+    # ---------- dado sintetico de 1 ano: 1 snapshot a cada 15s, como o worker grava
+    agora = datetime(2026, 8, 22, 12, 0, 0)     # instante FIXO: prova nao depende do relogio
+    ini = agora - timedelta(days=dias)
+    n = dias * 24 * 3600 // 15
+    print("  ... gerando %d linhas de equity (%d dias a cada 15s)" % (n, dias))
+    t0 = time.time()
+    with conectar() as c:
+        c.execute("PRAGMA synchronous=OFF")     # so na prova: o banco e descartavel
+        c.executemany("INSERT INTO equity(ts,banca,equity_total) VALUES(?,?,?)",
+                      ((str(ini + timedelta(seconds=15 * i)), 1000.0, 1000.0 + i * 0.001)
+                       for i in range(n)))
+    print("      %.1fs" % (time.time() - t0))
+
+    dia_hoje = str(agora.date())
+    with conectar() as c:
+        antes_ultimo = c.execute("SELECT MAX(ts) FROM equity").fetchone()[0]
+        antes_dias = c.execute("SELECT COUNT(DISTINCT substr(ts,1,10)) FROM equity").fetchone()[0]
+        antes_1o_hoje = c.execute(Q_GUARDA_EQUITY, (dia_hoje,)).fetchone()[0]
+
+    # ---------- planos de consulta (o antes/depois completo esta no relatorio do card)
+    with conectar() as c:
+        planos = [("guarda_risco/equity  ", _plano(c, Q_GUARDA_EQUITY, (dia_hoje,))),
+                  ("guarda_risco/equity R", _plano(c, Q_GUARDA_RANGE, (dia_hoje, dia_hoje + "z"))),
+                  ("guarda_risco/trades  ", _plano(c, Q_GUARDA_TRADES, (dia_hoje,))),
+                  ("metricas/eq_diario   ", _plano(c, Q_METRICAS_DIA)),
+                  ("metricas/curva equity", _plano(c, Q_METRICAS_EQ))]
+    for nome, pl in planos:
+        print("      " + nome + " : " + pl)
+    for nome, pl in planos[:2] + planos[3:4]:
+        check("EXPLAIN " + nome.strip() + " usa indice", "INDEX" in pl, pl)
+
+    # ---------- a poda: a contagem estabiliza, e ela e CONVERGENTE
+    t0 = time.time()
+    r1 = podar_equity(agora)
+    print("  ... poda 1: %.1fs %s" % (time.time() - t0, r1))
+    t0 = time.time()
+    r2 = podar_equity(agora)
+    print("  ... poda 2: %.1fs %s" % (time.time() - t0, r2))
+    # 48h a 15s  +  (90d - 48h) a 5min  +  o que passou de 90d a 1h
+    esperado = (EQUITY_H_CHEIA * 240
+                + max(0, min(dias * 24, EQUITY_D_5MIN * 24) - EQUITY_H_CHEIA) * 12
+                + max(0, dias - EQUITY_D_5MIN) * 24)
+    check("poda estabiliza a contagem no esperado (+-2%)",
+          abs(r1["depois"] - esperado) <= esperado * 0.02,
+          "%d vs esperado ~%d" % (r1["depois"], esperado))
+    check("poda e convergente: a 2a rodada nao remove nada", r2["removidas"] == 0, str(r2))
+    check("poda e idempotente: mesma contagem nas duas rodadas", r1["depois"] == r2["depois"])
+
+    with conectar() as c:
+        depois_ultimo = c.execute("SELECT MAX(ts) FROM equity").fetchone()[0]
+        depois_dias = c.execute("SELECT COUNT(DISTINCT substr(ts,1,10)) FROM equity").fetchone()[0]
+        depois_1o_hoje = c.execute(Q_GUARDA_EQUITY, (dia_hoje,)).fetchone()[0]
+        n_48h = c.execute("SELECT COUNT(*) FROM equity WHERE ts >= ?",
+                          (str(agora - timedelta(hours=EQUITY_H_CHEIA)),)).fetchone()[0]
+        n_meio = c.execute("SELECT COUNT(*) FROM equity WHERE ts >= ? AND ts < ?",
+                           (str(agora - timedelta(days=EQUITY_D_5MIN)),
+                            str(agora - timedelta(hours=EQUITY_H_CHEIA)))).fetchone()[0]
+    check("poda preserva o ponto mais recente", depois_ultimo == antes_ultimo,
+          str(antes_ultimo) + " -> " + str(depois_ultimo))
+    check("poda preserva o baseline da trava diaria (1o ponto de hoje)",
+          depois_1o_hoje == antes_1o_hoje, str(antes_1o_hoje) + " -> " + str(depois_1o_hoje))
+    check("poda nao perde nenhum DIA (metricas/eq_diario intacta)", depois_dias == antes_dias,
+          "%d -> %d" % (antes_dias, depois_dias))
+    check("as 48h recentes mantem resolucao cheia (15s)", n_48h == EQUITY_H_CHEIA * 240,
+          "%d != %d" % (n_48h, EQUITY_H_CHEIA * 240))
+    check("a faixa do meio cai para ~1 ponto/5min",
+          abs(n_meio - (EQUITY_D_5MIN * 24 - EQUITY_H_CHEIA) * 12) <= 2, str(n_meio))
+
+    # ---------- /estado passa a ver a historia inteira, nao ~2h
+    def span_h(serie):
+        return (datetime.fromisoformat(serie[-1]["ts"])
+                - datetime.fromisoformat(serie[0]["ts"])).total_seconds() / 3600
+
+    t0 = time.time()
+    serie = serie_equity()
+    ms = (time.time() - t0) * 1000
+    print("  ... serie_equity(): %d pontos em %.1f ms" % (len(serie), ms))
+    check("serie_equity cobre a historia inteira, nao ~2h", span_h(serie) > (dias - 2) * 24,
+          "%.1f h" % span_h(serie))
+    check("serie_equity termina no ponto mais recente", serie[-1]["ts"] == depois_ultimo)
+    curta = serie_equity(max_linhas=500)
+    check("serie_equity respeita o teto de RAM", len(curta) <= 500, str(len(curta)))
+    check("serie_equity rareada ainda termina no ponto mais recente",
+          curta[-1]["ts"] == depois_ultimo, str(curta[-1]["ts"]))
+    check("serie_equity rareada RAREIA, nao CORTA a historia", span_h(curta) > (dias - 2) * 24,
+          "%.1f h" % span_h(curta))
+
+    print("\n  %d passaram, %d falharam" % (ok, fail))
+    return 1 if fail else 0
+
+
 if __name__ == "__main__":
+    import sys
+    try:                                   # console do Windows em cp1252 mutila o acento
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    if len(sys.argv) > 1 and sys.argv[1] == "prova":
+        sys.exit(_prova_p2_11())
     init_db()
     with conectar() as c:
         tabelas = [r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
