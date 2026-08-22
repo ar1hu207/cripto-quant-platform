@@ -302,3 +302,358 @@ com posições abertas e banca fictícia acima da inicial.
 
 **Primeiro despacho:** `T-API-GUARDA` e `T-INFRA-BACKUP` em paralelo, abrindo o M1. E o `M5` numa
 sessão separada, se o `P2-14` já estiver decidido.
+
+
+---
+
+## 9. O portão: isolamento, auditor e devolução
+
+> Desenhada pela sessão `1-99` com contraponto da `1-69` (§9.12 traz o registro das mudanças);
+> aterrissada em 2026-08-22 por decisão do dono do projeto. Os casos citados são reais, desta
+> operação.
+
+A §3 até a §7 dizem como **despachar**. Nada diz como **receber de volta**. Enquanto isso não
+existir, "card fechado = commit + portão verificado" (§7) é autodeclaração do agente que escreveu
+o código.
+
+### 9.0 Pré-requisitos
+
+**(a) A numeração — resolvido em `origin/main`, mas a lição fica.** A série do front reusou
+`P2-19..25`, que o M4 já usava para os cards quant; por seis dias dois cards responderam por cada
+número. A série quant saiu da sequência disputada e virou `Q-1..6` (`16fae7e`). A lista `toca-risco`
+da §7 foi corrigida junto — `P2-21` virou `Q-3`.
+
+O que **não** se resolve renumerando, e por isso vira regra desta seção:
+
+> A primeira tentativa moveu a série quant para `P2-29..34` e **colidiu de novo no mesmo dia**,
+> porque outra sessão criava os cards do M6 exatamente nessa faixa ao mesmo tempo.
+
+`P2-` é sequência compartilhada, e **alocar número é escrita em estado mutável comum — o mesmo
+problema do índice do git (§9.1), só que no quadro.** Duas sessões numerando em paralelo colidem
+sempre. Duas regras decorrem:
+
+1. **Cada fluxo de trabalho tem prefixo próprio** (`Q-` pesquisa quant, `P0/P1/P2` operação,
+   front na sua faixa). Nenhuma sessão cria número em sequência de outro fluxo.
+2. **A chave de card no auditor é o shortLink do Trello** (`xqtBId7v`), nunca o `[N]` do título.
+   Renumeração acontece; shortLink não muda. Isso vale mesmo com a colisão já desfeita — é o que
+   torna o portão imune à próxima.
+
+**(b) A base não é a `main`, e a `main` local fica velha.** Retrato de 2026-08-22, quando
+isto foi escrito (a `main` local chegou a ficar **27 commits** atrás no mesmo dia — o push
+`origin HEAD:main` a partir de worktrees nunca a adianta):
+
+| Ref | SHA | O que tem |
+|---|---|---|
+| `origin/main` | `16fae7e` | a verdade — inclui a renumeração `Q-` |
+| `main` local | `588c10b` | dois commits atrás; **não** tem a renumeração |
+| `HEAD` (checkout) | `de64ead` | `feat/m6-design-system-cmc`; leva `DESIGN.md` e `PLANO-FRONTEND-REDESIGN.md` à frente, e também não tem a renumeração |
+
+Worker que branche do `HEAD` atual sai com dois problemas: carrega dois arquivos alheios para dentro
+do próprio diff (e o portão de fronteira reprova código bom), e lê um plano com a numeração antiga.
+
+**Regra:** `git fetch` primeiro; todo território branca de **`origin/main`** explicitamente, e **o
+SHA da base vai escrito no card**.
+
+**Contrapartida da base fixa: a documentação congela junto.** O plano mora no repositório, então o
+worker lê a versão que existia no SHA dele — inclusive erro já corrigido na `main`. Aconteceu: os
+dois territórios do M1 saíram de `16fae7e` e carregam o `Q-1..24` que o `8735e43` consertou.
+
+**A base fixa vale para o código, não para as instruções.** Card e território vão embutidos no
+briefing (é o que torna a deriva inofensiva); qualquer releitura do plano é de `origin/main`, não da
+cópia da worktree.
+
+```bash
+git fetch origin
+git worktree add ../1-T-API-GUARDA -b terr/api-guarda origin/main   # base é argumento, não o HEAD
+```
+
+### 9.1 Território não isola o git
+
+A §3 resolve colisão **de arquivo**. Não resolve colisão **de repositório**. Dois agentes em
+territórios distintos, no mesmo diretório, ainda compartilham um índice e um `HEAD`:
+
+| O que quebra | Como |
+|---|---|
+| `git commit -am` | varre junto o arquivo meio pronto do outro território |
+| "um commit por card" (§3) | morre no primeiro commit concorrente |
+| `index.lock` | duas sessões commitando ao mesmo tempo dão erro |
+| qualquer teste | lê a árvore de trabalho de outro agente |
+
+**Uma worktree por território, uma branch por território, base `origin/main` explícita.**
+
+Nota de ambiente (Orca): worktree isolada por task é nativo, e é a única coisa que a ferramenta
+resolve sozinha. A unidade padrão dela é a task — o que se faz é **mapear task = território**, e aí
+o modelo do Orca passa a ser exatamente o que a §3 pede. Não há conflito, há convenção a impor. O
+board integrado é GitHub/Linear; com Trello o auditor lê e escreve pela API, com o token permanente.
+
+Cada worktree quer o próprio venv. São cópias, não links.
+
+### 9.2 O mapa de territórios só vale dentro de uma onda
+
+**Esta é a restrição mais perigosa do plano, e ela não está na §4.**
+
+A §4 garante território disjunto **dentro de uma onda**. Não garante nada **entre marcos**:
+
+| Arquivo | Territórios que o reivindicam |
+|---|---|
+| `simulador.py` | `T-API-GUARDA` (M1), `T-EXEC` (M2), `T-EXEC-REAL` (M4) |
+| `validacao.py` | `T-EXEC` (M2), `T-REGUA` (M4) |
+| `autotrader.py` | `T-SINAL` (M2), `T-REGUA` (M4) |
+
+Enquanto os marcos correrem **em série**, o mapa vale. Mas uma frota existe para rodar em paralelo —
+e no instante em que alguém despacha M1 e M4 juntos, o mapa vira mentira e o portão de fronteira
+passa a **aprovar colisão real**, porque cada agente está dentro do próprio território no papel.
+
+**Regra: o paralelismo é dentro do marco, nunca entre marcos.** A única exceção é o M5, que tem
+território exclusivo (`web/index.html`) e por isso já roda em paralelo a tudo desde o dia 1 (§4).
+
+Cards que cruzam fronteira, já conhecidos:
+
+| Card | Cruza |
+|---|---|
+| `P2-15` | `signal_engine.py` (`T-SINAL`) + `api.py` (`T-API-DADOS`) — ondas diferentes |
+| `P2-14` | `api.py`+`simulador.py` (M1) + `web/index.html` (M5) — **marcos diferentes**; já anotado na §4 |
+| `P2-8` | `autotrader.py`/`scoring.py` (`T-SINAL`, M2) + `validacao.py` (`T-REGUA`, M4) |
+| `P1-9` | `signal_engine.py` + `autotrader.py` |
+| `P2-10` | `simulador.py` + `validacao.py` |
+
+O `P2-14` é o único que a §4 já pegou. Que os outros quatro tenham passado é a prova de que a
+omissão é estrutural, não descuido pontual.
+
+**Regra que fecha a §9.2: território sem lista de arquivos declarada não é despachável.** O portão
+P2 é `git diff --name-only` cruzado com uma lista — sem a lista, o portão não existe, e o agente
+fica inauditável por construção. Conferir isso custa uma leitura da §4 e é pré-condição do despacho,
+não do merge.
+
+> **Caso real, 2026-08-22.** O `Q-4` foi despachado em `terr/fluxo-log` sem território declarado: não
+> aparece na tabela de colisão da §3 nem em nenhuma linha de agente da §4 — a única menção é "sai
+> junto com o `T-API-GUARDA`" no M1, que diz *quando*, não *o quê*. O worker já editou `db.py`, que
+> a §4 dá ao `T-API-DADOS`. Não houve dano: o `T-API-GUARDA`, que roda em paralelo, é dono de
+> `api.py` e `simulador.py`, e não há interseção. Mas o portão de fronteira não pôde ser rodado, e o
+> território de fato do `Q-4` só existe no briefing — que o auditor nunca viu.
+
+Corolário, na forma dura: **o briefing não pode conter nada que o plano não contenha.** Não basta o
+território existir em algum lugar — no instante em que o prompt de despacho declara qualquer coisa
+que a §4 não declara, existem duas fontes de verdade, e a que a auditoria lê é a desatualizada. É a
+mesma classe de erro da numeração duplicada (§9.0a): dois lugares dizendo a mesma coisa, um errado,
+e o errado sendo o consultado. O briefing **transcreve** o plano; nunca acrescenta.
+
+**E o mapa da §3 tem um ponto cego estrutural.** A tabela de colisão foi *extraída* das citações
+`arquivo:linha` dos documentos de investigação — logo ela enxerga card que descreve **código que
+existe** e é cega a card que descreve **código que ainda não existe**. Instrumentação, teste e
+documento não têm citação para extrair, e por isso somem do mapa (`Q-4`, `P2-6`, `P2-17` ao menos).
+
+Consequência para o portão: **ausência na §3 não é prova de que o card não colide** — pode ser
+apenas prova de que ele não tinha o que citar. Card dessas três categorias precisa de território
+atribuído à mão, e é justamente onde o esquecimento acontece.
+
+### 9.2b O que o território não isola
+
+Esta é a espinha da seção inteira, e vale enunciar de uma vez. **Território particiona arquivo.**
+Todo estado compartilhado que *não* é arquivo continua sem dono, e cada um precisou da própria
+solução. Em três dias de operação, três apareceram:
+
+| Estado compartilhado | O que acontece sem isolar | Mecanismo |
+|---|---|---|
+| **Índice e `HEAD` do git** | `commit -am` varre trabalho alheio; `index.lock` colide | worktree por território (§9.1) |
+| **Sequência de numeração do quadro** | dois cards com o mesmo número; regra de risco aponta para identificador ambíguo | prefixo por fluxo + escritor único (§9.0a, §9.6b) |
+| **Esquema do banco** | dois cards alteram `trading.db`; quem chega depois lê o que o primeiro deixou | serializar: card que mexe em esquema não roda em paralelo com outro que mexa |
+
+O terceiro é o mais traiçoeiro porque **passa no portão de fronteira**: `Q-4` (`T-FLUXO-LOG`, M1) e
+`P2-11` (`T-API-DADOS`, M2) são donos de `db.py` em territórios distintos e ondas distintas — cada
+um dentro do seu no papel, e ainda assim mexendo na mesma tabela `equity`. O arquivo é territorial;
+o esquema que ele cria, não.
+
+**Regra: antes de declarar uma onda, pergunte o que ela compartilha além de arquivo.** Se a resposta
+for esquema de banco, migração, sequência de identificador ou qualquer recurso de produção único, o
+portão de fronteira não vai pegar — serialize.
+
+### 9.3 O que o auditor enxerga — e o que não enxerga
+
+O auditor vê três coisas: **git, arquivos e Trello**. Não vê o raciocínio de quem escreveu o código.
+Isso é a força do portão (checagem independente, não carimbo) e é também um limite duro:
+
+> Um auditor cego ao raciocínio do worker consegue reprovar **fronteira** e **critério de aceite**.
+> Não consegue reprovar **"consertou o sintoma"** — ver §9.5.
+
+Regra que decorre: **o auditor nunca aceita a palavra do worker; ele lê o commit.** A mensagem do
+worker serve para acordar o auditor, não para informá-lo.
+
+### 9.4 Os portões mecânicos
+
+Para cada card entregue, nesta ordem. Reprovou em um, para.
+
+| # | Portão | Como se verifica | Reprova quando |
+|---|---|---|---|
+| **P1** | Critério de aceite | roda o checklist do card | item não passa, ou não existe comando que o prove |
+| **P2** | Fronteira | `git diff --name-only <SHA-base>...terr/<x>` cruzado com a lista do §4 | tocou arquivo fora do território — **mesmo com o código certo** |
+| **P3** | Commit limpo | lê o diff daquele commit isolado | o commit mistura mais de um card |
+
+O **P2 é o mais barato e o que segura a erosão do plano**: uma linha de shell, zero julgamento.
+Rode primeiro. Use o SHA da base registrado no card (§9.0b), não o nome de branch.
+
+Violação de fronteira tem duas leituras, e o auditor precisa distinguir: ou o agente extrapolou, ou
+**a onda estava errada**. O segundo caso não é falta do worker; é correção de plano e sobe para
+decisão humana.
+
+**O P1 não é mecânico em todo marco.** Levantamento por card:
+
+| Marco | O P1 funciona? |
+|---|---|
+| **M1, M2** | **Sim.** Bug com sintoma reproduzível — é onde o auditor mecânico entrega. |
+| **M3** | Não. `P2-16` "repositório organizado", `P2-17` "CLAUDE.md serve para alguma coisa" — a metade verificável passa, a que importa não. |
+| **M4** | Não. `P1-10` pede "um veredito de edge em que você aposta"; `Q-4` precisa de semanas de mercado; `Q-3` aceita "alinhar **ou declarar**"; `Q-5`/`Q-6` são julgamento ou escopo aberto. |
+
+**Regra: o portão de M3 e M4 é revisão humana declarada, não checklist.** Assumir isso no desenho —
+o risco é o auditor virar carimbo exatamente onde a aposta é maior.
+
+### 9.5 O portão que não é mecânico: raiz ou sintoma
+
+Os três portões acima passam num conserto de sintoma. Exemplo real, `P1-1`:
+
+> Envolver o `for` **inteiro** num try/except passa em "o ciclo continua", passa na fronteira, e o
+> diff parece bom — e deixa **toda posição depois da primeira falha** sem stop, sem trailing e sem
+> checagem de liquidação. O card pede try/except **por posição**. A diferença é dinheiro.
+
+Como o auditor não vê o raciocínio (§9.3), esse portão só existe se o raciocínio for **escrito**:
+
+- **O worker registra no card**, junto do commit: a causa que identificou, por que a correção ataca
+  a causa, e como seria a versão-sintoma que ele **não** fez.
+- **O auditor lê isso contra o diff.** Ausência desse registro é reprovação por si só — é a única
+  parte auditável.
+- **Se ainda restar dúvida, sobe para o humano.** Não se aprova por cansaço.
+
+**Observado em 2026-08-22, e muda o peso desta seção:** o briefing do `T-API-GUARDA` pediu o
+registro do raciocínio, e o worker entregou — o `P1-1` saiu com a marcação de uma posição extraída
+para função própria, o try/except na chamada dela, os `continue` virados `return`, e o motivo escrito
+como comentário no código. A correção de raiz, não a de sintoma, **sem que existisse portão obrigando**.
+
+A leitura certa disso: **pedir no briefing é o que produz o comportamento; o portão é o que pega
+quem não fez.** Instrução ensina quem quer acertar, portão pega quem não fez — e as duas coisas
+precisam existir, na ordem: primeiro o briefing pede, depois o portão confere.
+
+### 9.6 Quem move o card
+
+**Reivindicação e veredito se separam.**
+
+| Movimento | Quem | Por quê |
+|---|---|---|
+| 📥 Triagem → 🔨 Fazendo | **worker** | é um *lock*, e só ele sabe a hora que começou. "Fazendo" é a única exclusão mútua entre sessões; precisa ser instantânea |
+| 🔨 Fazendo → **qualquer coisa** | **auditor** | veredito de quem fez o trabalho é autodeclaração |
+
+**Nada sai de Fazendo sem o auditor — inclusive voltar para Triagem.** Senão o worker desiste, o
+card fica preso e trava o território inteiro.
+
+| Veredito | Destino | O que vai no card |
+|---|---|---|
+| Passou, efeito observável em produção | 🔍 Validando | commit + comando + saída colada |
+| Passou, sem efeito observável | ✅ Feito | commit + comando + saída colada |
+| Reprovou | 🔨 Fazendo (segue com o worker) | **qual portão**, o comando que falhou e a saída dele |
+| Fronteira estourada por onda mal desenhada | 🧊 Bloqueado | o arquivo em disputa e os dois territórios |
+
+Reprovação sem o comando que falhou não é reprovação, é opinião.
+
+### 9.6b O quadro também é estado compartilhado
+
+Mover card é uma coisa (§9.6). **Criar, renumerar ou renomear é outra, e nenhum portão a cobre** —
+todos os três olham para o git. Uma sessão consegue estragar o trabalho de outra sem tocar em uma
+linha de código, e isso não é hipótese: aconteceu duas vezes em 2026-08-22, entre duas sessões
+apenas (§9.0a). Com oito, é regime permanente.
+
+- **Worker não cria, não renumera, não renomeia card.** Precisa de card novo, reporta; quem cria é
+  o auditor.
+- **Alocação de número tem um escritor só.** `P2-<próximo livre>` é leitura seguida de escrita sem
+  atomicidade, e o quadro não tem lock. Serializar no auditor é o que substitui o lock que não
+  existe.
+- **Fluxo novo nasce com prefixo próprio**, nunca numa faixa livre da sequência de outro (§9.0a).
+
+O paralelo com a §9.1 é exato: worktree isola a árvore de trabalho, prefixo isola o espaço de nomes.
+São o mesmo problema — escrita concorrente em estado compartilhado — resolvidos pela mesma via, que
+é dar a cada agente um espaço que só ele escreve.
+
+### 9.7 O que acontece quando reprova
+
+Veredito sem remediação deixa lixo na árvore de todo mundo.
+
+- **O commit reprovado não é revertido pelo auditor.** Ele fica na branch do território; quem
+  corrige é o worker dono, com um commit novo em cima. Auditor que reverte vira autor (§9.10).
+- **O território não bloqueia.** O worker segue nos outros cards dele enquanto refaz o reprovado —
+  o que bloqueia é o **merge** do território, que só sai com todos os cards aprovados (§9.9).
+- **Duas reprovações no mesmo card sobem para o humano.** Terceira tentativa sem diagnóstico novo é
+  sinal de que o card está mal escrito, não de que o worker é ruim.
+
+### 9.8 `toca-risco` não tem auditor automático
+
+São 10 cards com a label: `P0-1`, `P1-1`, `P1-6`, `P1-7`, `P1-10`, `P1-11`, `P2-2`, `P2-8`,
+`P2-18`, `Q-3`. A §7 já manda: invariante de risco não relaxa sem decisão humana registrada no
+card.
+
+**Um auditor que aprove esses sozinho converte um portão humano em automático** — é regressão de
+segurança vestida de automação, com posição aberta em produção agora. O auditor roda os portões e
+**para**, com o parecer pronto para o humano assinar. Ele nunca é o último a dizer sim.
+
+(`Q-3` entrou nessa lista pela renumeração de 2026-08-22 — era `P2-21`. §9.0a.)
+
+### 9.9 O portão do marco
+
+Merge de `terr/*` para a `main` só depois que **todos** os cards do território passaram. O portão do
+marco escrito em cada bloco da §4 é rodado sobre a `main` já mesclada, não sobre a branch.
+
+Dois territórios da mesma onda que se contradizem no merge é o caso de uso da skill `orquestrador`:
+consolidar as revisões, ordenar por dependência, aplicar sem que um fix quebre o aceite do outro.
+
+Assimetria que muda o peso do merge:
+
+- **Backend** — `main` não é produção; o deploy é cópia manual até o `P2-3` fechar (§7). Errar custa
+  retrabalho.
+- **Front (M5, `web/index.html`)** — publica sozinho no Vercel ao entrar na `main`. Aqui o merge
+  **é** a publicação.
+
+### 9.10 O que o auditor não faz
+
+- **Não corrige o código.** Auditor que edita vira autor e revisor do mesmo diff.
+- **Não aprova `toca-risco` sozinho** (§9.8).
+- **Não audita em lote no fim da onda.** Audita cada commit quando chega, senão vira o gargalo.
+
+### 9.11 Quantos workers ao mesmo tempo
+
+**Três, no máximo**, e **dentro do mesmo marco** (§9.2). O limite não é a máquina: gerar um diff
+leva minutos, lê-lo com cuidado leva uma hora, e o auditor é serial. Frota maior só enfileira diff
+esperando revisão — e diff parado envelhece contra uma base que se move.
+
+O M1 tem dois territórios em paralelo, mais o M5 em sessão separada. Cabe. É o teto, não a meta.
+
+---
+
+### 9.12 O que mudou da v1 para a v2
+
+| # | Achado da `1-69` | Onde entrou |
+|---|---|---|
+| 1 | numeração `[P2-n]` colidiu em 6 números | §9.0a — **já resolvido em `origin/main`** (série quant → `Q-1..6`); virou a regra de prefixo por fluxo + chave = shortLink |
+| 2 | base é `feat/m6-design-system-cmc`, não `main` | §9.0b — base é `origin/main` (a `main` local também está velha), SHA no card |
+| 3 | mapa de território não vale entre marcos | §9.2 — **a mudança mais importante da v2** |
+| 4 | M3 e M4 não têm aceite verificável por comando | §9.4 — portão desses marcos é revisão humana declarada |
+| 5 | worker precisa mover Triagem→Fazendo (é lock) | §9.6 — reivindicação separada de veredito |
+| 6 | não havia portão para raiz vs sintoma | §9.5 — novo, e é o único não-mecânico |
+| 7 | `toca-risco` não pode ter auditor automático | §9.8 — novo |
+| 8 | veredito sem remediação | §9.7 — novo |
+| 9 | Orca não conflita: task = território | §9.1 — reescrito, era "fricção" na v1 |
+| 10 | nenhum portão cobre o worker que mexe no **quadro** | §9.6b — novo, veio da segunda rodada |
+| 11 | `Q-4` despachado sem território declarado (caso real) | §9.2 — território sem lista não é despachável; briefing **transcreve**, nunca acrescenta |
+| 12 | base fixa congela a documentação junto | §9.0b — base fixa vale pro código, não pras instruções |
+| 13 | a tabela da §3 é cega a card sem citação `arquivo:linha` | §9.2 — instrumentação, teste e documento somem do mapa |
+| 14 | território não isola esquema de banco | §9.2b — **novo, é a espinha da seção** |
+| 15 | o registro do raciocínio funcionou como instrução, antes de virar portão | §9.5 — muda a ordem: briefing pede, portão confere |
+
+Duas correções na direção contrária, verificadas contra o repositório e **aceitas pela `1-69`**:
+
+- O que a branch leva à frente da `main` é `DESIGN.md` e `PLANO-FRONTEND-REDESIGN.md` — **não**
+  `web/index.html`. O problema apontado era real; o arquivo do exemplo, não.
+- Three-dot (`base...terr`) **não** esconde mudança do território quando a `main` anda: ele mede
+  desde a base de fusão, que é exatamente o que se quer. O que quebra o portão é branchar do `HEAD`
+  errado (§9.0b), e a correção é fixar a base — não trocar o operador.
+
+Uma decisão que os fatos resolveram melhor que o argumento: na renumeração, o critério que decidiu
+não foi "quantos lugares referenciam", foi **o que é imutável**. Os números do front vivem em
+mensagem de commit já pushada; os do quant, só em arquivos que uma sessão controla e conferiu por
+grep. Renomeia-se o lado mutável. Vale como regra geral para a próxima colisão.
