@@ -44,6 +44,13 @@ Dashboard de gestão de tarefas "G.Take", dark:
 - **Tipografia:** sans limpa (tipo Inter/Poppins). Coluna direita de cards de resumo. Pills de
   filtro com chevron, pilhas de avatares, mini gráfico de área.
 
+> ⚠️ **OBSOLETO desde 2026-08-22.** As decisões desta seção (navy, glassmorphism, vidro no
+> resumo, Space Grotesk, sidebar) foram substituídas pelo dono do projeto por uma transposição do
+> design system do **CoinMarketCap, tema escuro**. A direção vigente está em `DESIGN.md` na raiz,
+> que é a fonte da verdade. Esta seção fica no arquivo só como registro do que foi tentado antes.
+> O resto do plano (§1 contexto, §8 restrições críticas, §10 critério de aceite) **continua
+> valendo** — em especial a lista de IDs/handlers que não podem quebrar e o portão de contraste.
+
 ## 4. Decisões TRAVADAS (não repergunte)
 
 1. **Sidebar à esquerda** substitui as abas de cima (Painel/Gráfico).
