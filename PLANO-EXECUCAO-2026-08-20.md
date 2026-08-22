@@ -616,6 +616,45 @@ demonstração de que o valor de origem não reproduz — e aí o veredito é es
 (§9.9). Aqui o merge não é retrabalho se errar: é produção. O portão roda antes, e o dono decide o
 merge.
 
+> ### ✅ Portão do `P2-37` — RODADO e PUBLICADO em 2026-08-22
+>
+> Merge `724881a`. Publicação confirmada por hash: o Vercel serve `614e64ba7725283d`, byte a byte o
+> `724881a:web/index.html`.
+>
+> **O passo 1 tinha razão, e o preço de não tê-lo feito seria consertar o que não estava quebrado.**
+> O Speed Index de 7,2 s **não reproduz**: cinco rodadas (três do worker, duas do auditor) deram
+> 1,3 / 0,9 / 0,9 / 1,2 / 0,8 s. Era ruído de máquina.
+>
+> **Mas o buraco não sumiu — mudou de lugar, e é maior do que esta seção previa.** A §4e registrava
+> LCP em 1,1 s / 0,91 lendo o relatório ruidoso; o que reproduz é **LCP 2,1–2,3 s, score 0,51–0,60,
+> cerca de onze dos catorze pontos**. O elemento de LCP é o `div#gate-foot`, que espera o **401 do
+> backend**: `timeToFirstByte 93 ms` contra `elementRenderDelay 1385 ms`. E o maior item isolado do
+> caminho crítico é o **setup de conexão — 672 ms** (DNS 8 + TCP 325 + TLS 339) até a África do Sul.
+>
+> | Produção | perf | FCP | LCP | TBT | CLS | SI |
+> |---|---|---|---|---|---|---|
+> | antes (mediana de 5) | 0,89 | 1,1 s | **2,1 s (0,55)** | 0 ms | 0,001 | 0,9 s |
+> | depois (3 rodadas) | **0,90** | 0,7 s | **2,0 s (0,62)** | 0 ms | 0,001 | 0,8 s |
+>
+> **O ganho é real e é modesto, e o teto está dito:** o LCP é dominado por esperar o backend
+> atravessando um oceano. O maior lever restante era mostrar o gate de saída, e **o dono decidiu que
+> não** — quem tem credencial válida no `localStorage` passaria a ver um flash de login a cada
+> carregamento, e foi fricção de login que um dia levou a desligar a senha no servidor.
+>
+> ⚠️ **A11y apareceu em 1,00 e isso não é conserto**: o `td-has-header` voltou `notApplicable`
+> porque a tabela de sinais estava vazia na hora da medição. Com sinais pendentes as duas falhas
+> voltam. SEO segue em 0,90 — nenhum dos dois estava no escopo.
+>
+> **Duas premissas desta própria §4e foram derrubadas por medição, e as duas eram do auditor:**
+> o `Access-Control-Max-Age: 600` **já existe** (preflight não vira card), e os "334,8 ms de
+> latência do uvicorn" são atribuição errada — TTFB 338 ms com RTT de TCP em 333 ms significa que o
+> servidor pensa **~5 ms**. É card de **região**, e de custo, não de backend.
+>
+> **O que fica para a próxima sessão:** `PERF-FRONT-2026-08-22.md` na raiz, com o comando exato
+> copiável, o método do A/B ancorado em hash, e as duas armadilhas de ambiente no Windows — o
+> `EPERM` do `chrome-launcher` que mata laço de medição, e a regra de nunca rodar duas instâncias do
+> Lighthouse em paralelo, porque uma mede a outra.
+
 ---
 
 ## 5. Ordem geral
