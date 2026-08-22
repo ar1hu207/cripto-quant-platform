@@ -5,9 +5,16 @@
 
 > ⚠️ **Renumeração de 2026-08-22.** Os cards de pesquisa quant deste plano eram `P2-19..24`.
 > A série do redesign do front (M5/M6) reusou esses mesmos números, e por seis dias dois cards
-> diferentes responderam por cada um. A série quant moveu-se para **`P2-29..34`** — está sem
+> diferentes responderam por cada um. A série quant moveu-se para **`Q-1..34`** — está sem
 > trabalho em curso, enquanto a do front já vive em mensagens de commit, que não se reescrevem.
-> **A chave canônica de um card é o shortLink do Trello, nunca o `[P2-n]` do título.**
+> A primeira tentativa moveu a série quant para `P2-29..34` e colidiu **de novo** no mesmo dia:
+> outra sessão criava os cards do M6 exatamente nessa faixa ao mesmo tempo. A lição é que `P2-` é
+> uma sequência compartilhada e duas sessões numerando em paralelo vão colidir sempre. Por isso a
+> pesquisa quant saiu da sequência e ganhou prefixo `Q-`.
+>
+> **A chave canônica de um card é o shortLink do Trello, nunca o número do título.** Qualquer
+> automação — auditor de frota inclusive — que resolva card por `[P2-n]` está construída sobre
+> areia.
 >
 > **Documento auto-contido e único.** A sessão que for executar não tem o histórico da conversa
 > onde ele nasceu. É a fonte única do plano — se algum outro doc contradisser este, este vale.
@@ -65,9 +72,9 @@ Os 35 cards não se distribuem uniformemente pelo código. Contagem real, extra�
 |---|---|
 | **`api.py`** | **10** — P0-1, P1-1, P1-3, P1-4, P1-7, P1-8, P2-11, P2-12, P2-14, P2-15 |
 | **`simulador.py`** | **6** — P1-1, P1-6, P1-8, P2-10, P2-14, P2-18 |
-| `validacao.py` | 4 — P1-11, P2-8, P2-10, P2-29 |
+| `validacao.py` | 4 — P1-11, P2-8, P2-10, Q-1 |
 | `signal_engine.py` | 3 — P1-9, P2-9, P2-15 |
-| `trading.db` | 3 — P0-1, P2-2, P2-29 |
+| `trading.db` | 3 — P0-1, P2-2, Q-1 |
 | `autotrader.py`, `tune.py`, `validar_oos.py`, `web/index.html` | 2 cada |
 | `mercado.py`, `dca.py`, `db.py`, `logbot.py`, `scoring.py`, `config.py`, `live_engine.py`, `test_sim.py` | 1 cada |
 
@@ -109,7 +116,7 @@ O sistema está no ar **agora**, com posições abertas, sem ninguém olhando. M
 |---|---|
 | `P2-2` | Backup do `trading.db` — cron diário com `sqlite3 .backup` + cópia pra fora da VM |
 
-**Ligar aqui, colher no M4:** a instrumentação do `[P2-32]` (log do portão de fluxo por decisão +
+**Ligar aqui, colher no M4:** a instrumentação do `[Q-4]` (log do portão de fluxo por decisão +
 desfecho hipotético) precisa de tempo de mercado acumulando. É o único card que não dá pra
 comprimir depois — se ficar pro M4, você espera semanas paradas. **Sai junto com o `T-API-GUARDA`.**
 
@@ -175,18 +182,18 @@ Aqui mora a pergunta que justifica o projeto.
 
 | Agente | Arquivos | Cards |
 |---|---|---|
-| **`T-REGUA`** | `validacao.py`, `tune.py`, `validar_oos.py`, `scoring.py`, `autotrader.py` | `P2-29` consertos da régua (Item 1 revisado) · `P2-30` aposentar `tune.py`/`validar_oos.py` · `P1-11` cap geométrico de alavancagem (liq antes do stop em alts 1h) · `P2-8` piso de R$10 fura o `risco_por_trade` |
-| **`T-EXEC-REAL`** ‖ | `simulador.py`, `backtest*.py` | `P2-18` fill otimista no stop ao vivo · `P2-34` micro-realismo do modelo de execução |
-| **`T-DECLARACAO`** ‖ | docs, config | `P2-31` defaults de risco contradizem a base de conhecimento — alinhar ou declarar o experimento |
+| **`T-REGUA`** | `validacao.py`, `tune.py`, `validar_oos.py`, `scoring.py`, `autotrader.py` | `Q-1` consertos da régua (Item 1 revisado) · `Q-2` aposentar `tune.py`/`validar_oos.py` · `P1-11` cap geométrico de alavancagem (liq antes do stop em alts 1h) · `P2-8` piso de R$10 fura o `risco_por_trade` |
+| **`T-EXEC-REAL`** ‖ | `simulador.py`, `backtest*.py` | `P2-18` fill otimista no stop ao vivo · `Q-6` micro-realismo do modelo de execução |
+| **`T-DECLARACAO`** ‖ | docs, config | `Q-3` defaults de risco contradizem a base de conhecimento — alinhar ou declarar o experimento |
 
 > Os quatro cards do `T-REGUA` estão juntos porque **todos tocam `validacao.py`**. Separá-los em
 > agentes paralelos é o erro que a §3 descreve.
 
-**Onda 2** ▸ · **`T-PORTFOLIO`** — `P2-33` paridade de portfólio: o vivo é multi-ativo/multi-TF com
+**Onda 2** ▸ · **`T-PORTFOLIO`** — `Q-5` paridade de portfólio: o vivo é multi-ativo/multi-TF com
 slots, cooldown e tetos; o backtest é por-ativo isolado, 1 posição, tamanho fixo.
 
 **Onda 3** ▸ · **`P1-10`** ⭐⭐ **sozinho, com tudo acima pronto** — a política de saída viva nunca
-foi backtestada; o veredito "sem edge" mediu outra estratégia. Junto conclui o **`P2-32`**
+foi backtestada; o veredito "sem edge" mediu outra estratégia. Junto conclui o **`Q-4`**
 (instrumentado lá no M1).
 
 **Portão do M4:** rodar a validação corrigida sobre a política que está **viva** e ter um veredito
@@ -236,7 +243,7 @@ Leia primeiro, nesta ordem:
   3. O documento de investigação do seu card:
        STATUS-SISTEMA-2026-08-19.md        (P0-*, P1-1..5, P2-1..7)
        INVESTIGACAO-LOGICA-2026-08-19.md   (P1-6..9, P2-8..18)
-       INVESTIGACAO-TRADING-2026-08-19.md  (P1-10..11, P2-29..24)
+       INVESTIGACAO-TRADING-2026-08-19.md  (P1-10..11, Q-1..24)
 
 Seus arquivos: <lista>. NÃO edite nenhum arquivo fora dessa lista — outro agente
 é dono dele nesta mesma onda. Se precisar de um, pare e reporte.
@@ -257,7 +264,7 @@ comando que prova o critério de aceite rodado e colado no resultado.
 - **Nada pula de Fazendo direto pra Feito** se o efeito é observável em produção: passa por
   🔍 Validando com a evidência no card (foi assim que o `P0-2` fechou).
 - **Card com label `toca-risco` não relaxa invariante** sem decisão humana explícita registrada no
-  card. São eles: P0-1, P1-1, P1-6, P1-7, P1-10, P1-11, P2-2, P2-8, P2-18, P2-31.
+  card. São eles: P0-1, P1-1, P1-6, P1-7, P1-10, P1-11, P2-2, P2-8, P2-18, Q-3.
 - **O deploy ainda é cópia manual** até o `P2-3` fechar. Commit na `main` **não** significa que a
   VM está rodando aquilo.
 
