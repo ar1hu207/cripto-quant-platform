@@ -39,7 +39,9 @@
     --accent:#3861FB;--accent-hover:#2444D4;--accent-txt:#6B90FF;--accent-bg:#1E274F;
     /* Semanticos: SO dinheiro e direcao. --neg e o #EA3943 deles CORRIGIDO (dava 3.75:1 no
        card e 3.55:1 sobre a propria tinta); este da 4.86:1 sobre --neg-bg. */
-    --pos:#16C784;--pos-bg:#173C37;
+    /* --pos-rgb existe para o @keyframes do pulso: box-shadow animado precisa da cor em
+       componentes, e repetir o hex ali criaria uma segunda copia do verde fora deste bloco. */
+    --pos:#16C784;--pos-rgb:22,199,132;--pos-bg:#173C37;
     --neg:#EF6C73;--neg-bg:#411F2A;
     --warn:#F5B97F;--warn-bg:#433936;
     /* Variacao de alpha DECLARADA (a unica excecao a "nenhuma cor fora de token"): borda de
@@ -61,6 +63,11 @@
     /* altura da status bar, MEDIDA em JS (ela quebra de linha em tela estreita). Declarada
        aqui para nao existir var() sem declaracao antes do primeiro layout. */
     --sb-h:0px;
+    /* Variacoes de alpha DECLARADAS do branco, para o que e brilho e nao cor: o shimmer do
+       skeleton e o anel do spinner do gate sobre o azul do botao. */
+    --shimmer:rgba(255,255,255,.07);--sobre-azul:rgba(255,255,255,.35);
+    /* anel de foco do input, o --input-shadow-color-focus deles (--accent a 30%) */
+    --focus-ring:0 0 0 3px rgba(56,97,251,.3);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   /* Peso 500 como base e marca do CMC (507 de 647 elementos deles), e e o que segura a
@@ -123,12 +130,18 @@
   .auto-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
   .auto-badge.on{background:var(--pos);animation:pulse 2s infinite}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-  @media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+  /* prefers-reduced-motion zera animacao E shimmer. O ::after/::before precisa estar no
+     seletor: o `*` sozinho nao alcanca pseudo-elemento, e o shimmer do skeleton mora num. */
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+      transition-duration:.001ms!important;scroll-behavior:auto!important}
+    .skel::after{animation:none!important;background:none!important}
+  }
   /* input do DESIGN.md: fundo --surface2, borda --line2, raio 4. O foco troca a borda para
      --accent e poe o anel de 3px do --input-shadow-color-focus deles. */
   input{font-family:inherit;background:var(--surface2);border:1px solid var(--line2);color:var(--txt);
     border-radius:var(--r-sm);padding:11px 13px;font-size:var(--fs-100);width:100%}
-  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(56,97,251,.3)}
+  input:focus{outline:none;border-color:var(--accent);box-shadow:var(--focus-ring)}
 
   /* ---------- topbar (56px) ----------
      Substitui a sidebar de 232px. Marca a esquerda, nav principal ao lado, acoes a direita,
@@ -179,10 +192,9 @@
   .sb-cfg{color:var(--txt3)}
   .sb-hora{margin-left:auto;color:var(--txt3);flex:none}
   #risco-guard{display:contents}
-  /* o anel do pulso e variacao de alpha DECLARADA do --pos (#16C784 = 22,199,132): keyframes
-     nao aceita var() dentro de box-shadow em todo browser sem reflow, entao fica literal aqui. */
+  /* o anel do pulso e variacao de alpha DECLARADA do --pos, montada a partir de --pos-rgb */
   .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos);animation:pulse 1.8s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,199,132,.6)}70%{box-shadow:0 0 0 9px rgba(22,199,132,0)}100%{box-shadow:0 0 0 0 rgba(22,199,132,0)}}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(var(--pos-rgb),.6)}70%{box-shadow:0 0 0 9px rgba(var(--pos-rgb),0)}100%{box-shadow:0 0 0 0 rgba(var(--pos-rgb),0)}}
   .btn-sec{background:var(--surface2);color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   .btn-danger{background:transparent;color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   @media(hover:hover){.btn-danger:hover{color:var(--neg);border-color:var(--neg-b);filter:none}}
@@ -301,7 +313,7 @@
   .skel.lg{height:40px;margin:12px 0}
   .skel.sm{height:11px}
   .skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
-    background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent);animation:shimmer 1.4s infinite}
+    background:linear-gradient(90deg,transparent,var(--shimmer),transparent);animation:shimmer 1.4s infinite}
   @keyframes shimmer{100%{transform:translateX(100%)}}
   @media (prefers-reduced-motion:reduce){.skel::after{animation:none}}
   .btn-close{background:var(--neg-bg);color:var(--neg);padding:5px 11px;font-size:var(--fs-75);border:1px solid var(--neg-b)}
@@ -457,35 +469,41 @@
   }
 
   /* modal */
-  /* O blur mora no OVERLAY, que e onde existe camada pra resolver. O modal em si e superficie
-     solida porque tem numero dentro -- vidro sob dado e a coisa que este projeto nao faz. */
-  .overlay{position:fixed;inset:0;background:rgba(6,10,22,.72);backdrop-filter:blur(5px);display:none;
+  /* Backdrop no --overlay-bg, que e o --c-color-overlay-bg do CMC. Era rgba(6,10,22,.72), navy
+     morto. O blur mora no OVERLAY, que e onde existe camada pra resolver; o modal em si e
+     superficie solida porque tem numero dentro -- vidro sob dado e o que este projeto nao faz.
+     E o unico backdrop-filter do arquivo. */
+  .overlay{position:fixed;inset:0;background:var(--overlay-bg);backdrop-filter:blur(5px);display:none;
     align-items:center;justify-content:center;z-index:50;padding:20px}
   .overlay.on{display:flex}
-  /* sombra E hairline branca quase invisivel: a hairline aqui e reflexo de borda, nao aresta.
-     Superficie de dado usa o contrario (aresta definida, zero sombra). */
+  /* Aqui a sombra e legitima porque o modal FLUTUA sobre outro conteudo -- e a unica excecao a
+     "sempre aresta" do DESIGN.md, e usa a sombra de overlay do CMC em vez de um preto inventado. */
   .modal{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-    padding:24px;width:420px;max-width:100%;box-shadow:0 30px 80px rgba(0,0,0,.55);
+    padding:24px;width:420px;max-width:100%;box-shadow:var(--shadow-overlay);
     animation:modalIn var(--dur2) var(--ease) both}
   /* transform-origin sai do botao que abriu (setado em abrirModal): o dialogo cresce de onde
      voce clicou, em vez de aparecer do nada no meio da tela. */
   @keyframes modalIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
-  .modal h3{font-size:18px;font-weight:700;margin-bottom:4px}
-  .modal .msub{font-size:12.5px;color:var(--txt3);margin-bottom:18px}
-  .field{margin-bottom:14px}.field label{display:block;font-size:12px;color:var(--txt3);font-weight:600;margin-bottom:6px}
-  .preview{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;font-size:13px;margin:4px 0 18px;font-variant-numeric:tabular-nums}
-  .preview .row{display:flex;justify-content:space-between;padding:3px 0}
+  .modal h3{font-size:var(--fs-300);font-weight:700;margin-bottom:4px;line-height:var(--lh-head)}
+  .modal .msub{font-size:var(--fs-75);color:var(--txt3);margin-bottom:18px}
+  .field{margin-bottom:14px}.field label{display:block;font-size:var(--fs-75);color:var(--txt3);font-weight:600;margin-bottom:6px}
+  .preview{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;font-size:var(--fs-100);margin:4px 0 18px}
+  .preview .row{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
   .warn{color:var(--warn)}.modal .mbtns{display:flex;gap:10px}
   /* primario por ranking, nao por significado: azul solido, texto branco (4.92:1) */
-  .btn-conf{flex:1;background:var(--accent);color:var(--txt);padding:13px;font-size:15px;font-weight:700}
-  .btn-cancel{background:var(--surface2);color:var(--txt2);padding:13px 18px;border:1px solid var(--line)}
+  .btn-conf{flex:1;background:var(--accent);color:var(--txt);padding:12px;font-size:var(--fs-200);font-weight:600}
+  @media(hover:hover){.btn-conf:hover{background:var(--accent-hover);filter:none}}
+  .btn-cancel{background:transparent;color:var(--txt2);padding:12px 18px;border:1px solid var(--line2)}
+  @media(hover:hover){.btn-cancel:hover{background:var(--surface2);filter:none}}
 
-  /* so transform e opacity animam, e nomeados: `transition:.3s` fazia o browser vigiar tudo */
-  /* --sb-h e medido em JS: a status bar quebra de linha e um valor fixo poria o toast por
-     cima dela ou solto no meio da tela. */
-  #toast{position:fixed;bottom:calc(var(--sb-h,24px) + 14px);left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);
-    border:1px solid var(--line2);border-radius:var(--r-sm);padding:13px 20px;font-weight:600;opacity:0;
-    box-shadow:var(--shadow-overlay);z-index:60;
+  /* So transform e opacity animam, e nomeados: `transition:.3s` vira `all` e poe o browser a
+     vigiar propriedade que causa layout.
+     --sb-h e medido em JS: a status bar quebra de linha e um valor fixo poria o toast por cima
+     dela ou solto no meio da tela. */
+  #toast{position:fixed;bottom:calc(var(--sb-h,24px) + 14px);left:50%;transform:translateX(-50%) translateY(80px);
+    background:var(--surface2);border:1px solid var(--line);border-radius:var(--r);
+    padding:12px 18px;font-size:var(--fs-100);font-weight:600;opacity:0;
+    box-shadow:var(--shadow-overlay);z-index:60;max-width:calc(100vw - 32px);
     transition:transform var(--dur2) var(--ease),opacity var(--dur2) var(--ease)}
   #toast.on{transform:translateX(-50%) translateY(0);opacity:1}
   /* ---------- gate de login ----------
@@ -547,7 +565,7 @@
     background:var(--accent);border-radius:var(--r-sm);
     display:flex;align-items:center;justify-content:center;gap:9px}
   @media(hover:hover){.gate-btn:hover{background:var(--accent-hover);filter:none}}
-  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.35);
+  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid var(--sobre-azul);
     border-top-color:var(--txt);animation:gateSpin .6s linear infinite;display:none}
   .gate-btn.loading .gate-spin{display:block}
   @keyframes gateSpin{to{transform:rotate(360deg)}}
@@ -922,10 +940,14 @@ const TEMA=(()=>{ const cs=getComputedStyle(document.documentElement);
   const t=n=>cs.getPropertyValue('--'+n).trim();
   return {pos:t('pos'),neg:t('neg'),warn:t('warn'),accent:t('accent'),accentTxt:t('accent-txt'),
           txt:t('txt'),txt2:t('txt2'),txt3:t('txt3'),line:t('line')}; })();
-// Variacoes de alpha DECLARADAS dos tokens, para as libs que so aceitam string de cor:
-// --accent (#3861FB) na area da curva de capital, --txt2 (#A1A7BB) nas bandas de Bollinger.
-const ACCENT_RGB='56,97,251';
-const BOLL='rgba(161,167,187,.5)', BOLL_MID='rgba(161,167,187,.25)';
+// Variacoes de alpha DECLARADAS dos tokens, para as libs de grafico, que so aceitam string de
+// cor. Derivadas do PROPRIO token em vez de hex repetido: assim trocar --accent ou --txt2 no
+// :root troca a area da curva e as bandas de Bollinger junto, que e o ponto de ter token.
+const rgbDe=hex=>{const h=(hex||'').replace('#','').trim();
+  const n=parseInt(h.length===3?h.split('').map(c=>c+c).join(''):h,16);
+  return isFinite(n)?[(n>>16)&255,(n>>8)&255,n&255].join(','):'56,97,251';};
+const ACCENT_RGB=rgbDe(TEMA.accent);
+const BOLL=`rgba(${rgbDe(TEMA.txt2)},.5)`, BOLL_MID=`rgba(${rgbDe(TEMA.txt2)},.25)`;
 
 // Sparkline generico: recebe a SERIE e o ALVO. Antes mirava o #spark do hero, que era o unico
 // que existia; com cinco tiles o mesmo desenho serve equity e banca e o alvo tem que vir de fora.

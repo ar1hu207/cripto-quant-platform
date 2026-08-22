@@ -328,6 +328,86 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 - Adapter: plain CSS custom properties no bloco `<style>` de `web/index.html`.
 
+## Auditoria do marco (P2-35, 2026-08-22)
+
+Rodada em Chromium headless contra um **backend falso local** que devolve o formato real do
+`/estado` (shapes lidos de `api.py`, `db.py`, `simulador.guarda_risco` e `dca.listar`): 30 sinais
+pendentes, 4 posicoes com sugestao de saida nos quatro niveis, 18 trades, 3 planos DCA, metricas
+com faixa de conviccao, e o `risco` nos dois estados. **Producao nao foi tocada** - ha posicao
+aberta la.
+
+### 1. Contraste - varredura, nao amostra
+
+Todo no de texto **visivel** da pagina renderizada, com o fundo compositado subindo a arvore
+(alpha incluso), como o navegador faz. Alvo 4.5:1, ou 3:1 para texto grande (>=24px, ou >=18.66px
+em peso 700).
+
+| cena | o que entra |
+|---|---|
+| 7 abas de conteudo | Sinais, Posicoes, Journal, Metricas, DCA, Mercado, Auto-trade |
+| vista Grafico | com indicadores ligados |
+| modal aberto | sobre a fila de sinais |
+| gate | limpo, com erro, com aviso, com info, e com o backend caido |
+
+**42 cenas x 3 larguras (1440 / 1000 / 390) = 9.216 nos de texto visiveis, zero reprovacao.**
+Repetido com trava diaria e teto de exposicao ativos: 5.138 nos, zero. Repetido em modo split:
+9.216 nos, zero.
+
+### 2. Contrato
+
+Medido no DOM vivo, nao no texto do arquivo: os **62 IDs de elemento** do M5 presentes (o 63o do
+grep cru era o id do gradiente da sparkline, que mora dentro de string de JS), **22 handlers
+globais** definidos, `.tab` sao exatamente as duas vistas com `data-v`, os **6 `data-tf`**
+intactos, `.modal` / `.tv-ind` / `.tv-expand` / `#tv-tfs button` ainda casando, e as 7 abas de
+conteudo em `.subtab` - classe diferente de proposito, para nao caírem no `querySelectorAll('.tab')`
+do `aba()`.
+
+### 3. Sem regressao funcional
+
+Bateria dirigida por **clique** (nao por chamada direta), 40 checagens: as 7 abas abrem uma por
+vez e **sem disparar requisicao**; Painel<->Grafico; timeframe, indicadores e expandir; a fila de
+sinais como tabela de 30 linhas; expansao de linha sobrevivendo a dois polls; Analisar levando ao
+grafico; cabecalho grudado medido no topo da viewport depois de rolar 700px; modal com foco no
+primeiro campo, Esc, e foco de volta ao gatilho **com o poll reescrevendo a lista**; o poll nao
+roubando foco nem sobrescrevendo input de config; escanear, panico, reset, fechar posicao, criar,
+aportar e remover plano DCA. Mais 19 checagens so do gate (as quatro mensagens distintas, o
+`/health` ao vivo, Caps Lock, olho, login que passa) e 15 de contrato e acabamento.
+
+### 4. Responsivo
+
+Nenhuma das 42 cenas rola a pagina na horizontal em 1440, 1000 ou 390. A vista Grafico cabe em
+1440x900 e em 1000x800 sem rolagem vertical (`scrollHeight == innerHeight`).
+
+### 5. Cor
+
+Fora do `:root` **nao existe cor literal**: o que resta no arquivo e `var(--token)`,
+`rgba(var(--pos-rgb), a)` no keyframe do pulso, e duas strings montadas a partir do proprio token
+para as libs de grafico, que so aceitam string (`rgbDe(TEMA.accent)`, `rgbDe(TEMA.txt2)`). As
+variacoes de alpha declaradas moram todas no `:root`: `--pos-b/--neg-b/--warn-b` (34%),
+`--shimmer`, `--sobre-azul`, `--focus-ring`, `--overlay-bg`, `--shadow-overlay`.
+Conferido tambem na pagina renderizada: nenhuma cor de texto computada cai fora da paleta.
+
+### 6. Anti-slop
+
+O risco aqui nao e o generico de IA, e clonar o CMC sem pensar. Os desvios continuam declarados e
+continuam valendo: `tabular-nums` em todo numero, Inter como face unica, as quatro correcoes de
+contraste, sparkline fechando a linha, prioridade de coluna no lugar de rolagem horizontal onde ha
+sub-linha, sparkline de linha em azul e nao verde/vermelho, topbar que nao gruda, curva de capital
+morando em Metricas, `max-width` nas tabelas de duas e quatro colunas, e funding **sem** sparkline
+porque nao existe serie. Cada um com o motivo escrito.
+
+### O que ficou medido, e nao arredondado
+
+- altura da pagina na aba Sinais com 30 pendentes: **8.087px -> 1.987px** (1440x900)
+- altura de linha da tabela de sinais: 52px (o alvo do documento e ~48px; a diferenca vem das
+  pilulas de lado e de status dentro da celula)
+- `prefers-reduced-motion`: zera animacao **e** shimmer (o `*` sozinho nao alcanca
+  pseudo-elemento, e o shimmer mora num `::after`)
+- os dois modos: monolito (`API_BASE` vazio) e split (front numa origem, backend noutra, com
+  preflight de CORS) - as quatro baterias passam nos dois
+
+---
+
 ## Slop audit
 
 - Date: 2026-08-22 | Escopo: o sistema, ainda nao a implementacao.
@@ -343,6 +423,14 @@ os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto
 
 ## Changelog
 
+- 2026-08-22 (P2-35): acabamento e auditoria, e o marco fecha. Modal com backdrop `--overlay-bg` (o
+  `rgba(6,10,22,.72)` era navy morto) e `--shadow-overlay` no lugar de um preto inventado; toast em
+  `--surface2` com raio 8, so `transform` e `opacity` animando. As ultimas cores literais foram
+  amarradas ao token: o keyframe do pulso passou a montar a cor de `--pos-rgb`, e as strings das
+  libs de grafico passam a ser DERIVADAS do proprio token, entao trocar `--accent` ou `--txt2` no
+  `:root` troca a area da curva e as bandas de Bollinger junto. `prefers-reduced-motion` ganhou os
+  pseudo-elementos no seletor, senao o shimmer do skeleton continuava girando. Auditoria completa
+  na secao acima.
 - 2026-08-22 (P2-34): gate de login plano. Sairam 52 regras de atmosfera do tema navy: malha
   tecnica mascarada em radial, varredura animada descendo a tela, entrada em cascata item por
   item, anel pulsante na marca, dois gradientes radiais de fundo, fio de luz no topo do card e a
