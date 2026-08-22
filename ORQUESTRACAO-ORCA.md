@@ -202,3 +202,55 @@ antes de aceitar e ir para a alternativa.
 - A série `P2-` é sequência compartilhada — **fluxo novo nasce com prefixo próprio** (a pesquisa
   quant virou `Q-1..6` depois de colidir duas vezes num dia).
 - **Chave canônica de um card é o shortLink do Trello**, nunca o `[P2-n]` do título.
+
+---
+
+## 11. Operar o Trello pela API (só a matriz)
+
+IDs estáveis do quadro **Trading Bot** (`https://trello.com/b/haBYRC0E`), para a matriz ler e
+escrever sem redescobrir:
+
+| Recurso | ID |
+|---|---|
+| Board | `6a865ec785598352bd1b2c7d` |
+| 📥 Triagem | `6a8660d73671baf5cca11716` |
+| 🎯 Priorizado | `6a8660d8486c073850e65919` |
+| 🔨 Fazendo | `6a8660d9c2ad0ba5601b89ec` |
+| 🔍 Validando em produção | `6a8660d9301d47a0ac35d532` |
+| ✅ Feito | `6a8660da98dbcdcc67ee0cf7` |
+| 🧊 Bloqueado | `6a8660daab864fc011e51ce8` |
+
+Labels de marco: `M1 sobreviver sozinho` (lime) · `M2 numeros verdadeiros` (pink) ·
+`M3 base AI-first` (sky_dark) · `M4 regua da pesquisa` (purple_dark) · `M5 front` (blue_dark) ·
+`M6 front CMC`. Labels de tipo: `P0-crítico`, `P1-bug`, `P2-operação`, `backend`, `front`,
+`infra-azure`, `pesquisa-quant`, `toca-risco`.
+
+**Credenciais: peça ao dono; o token NUNCA entra no repositório.** Existe um token permanente
+(expiration=never) que as sessões anteriores guardaram em `trello.py` no scratchpad — se a sua
+sessão não o tiver, peça. A URL de autorização usa a API key do dono
+(`trello.com/1/authorize?expiration=never&scope=read,write&response_type=token&key=<key>`).
+
+Regras (do `CLAUDE.md` §4 e da §9.6b do plano): chave canônica = **shortLink**; só a matriz
+cria/renumera/renomeia card; worker move apenas Triagem→Fazendo; todo fechamento leva commit +
+comando de aceite com a saída colada.
+
+## 12. Fallback sem Orca: `claude -p` em worktree manual
+
+Se o Orca estiver fora do ar, o método manual que fechou o M1 e o M6:
+
+```bash
+git -C C:/Users/aboni/Pesquisas/1 fetch origin main:main          # SEMPRE primeiro (§3)
+git -C C:/Users/aboni/Pesquisas/1 worktree add -b terr/<x> C:/Users/aboni/Pesquisas/wt/<x> main
+cd C:/Users/aboni/Pesquisas/wt/<x>
+nohup claude -p "$(cat brief.md)" --permission-mode bypassPermissions --session-id <uuid-fixo> > log 2>&1 &
+```
+
+- **Fixe o `--session-id`**: é o que permite retomar depois com `claude --resume <uuid>` de
+  dentro da worktree. As transcrições ficam em
+  `~/.claude/projects/C--Users-aboni-Pesquisas-wt-<x>/<uuid>.jsonl` e **não aparecem** no
+  `/resume` de outras pastas — o Claude Code indexa sessão por diretório.
+- `claude -p` só imprime **no fim**. O sinal de vida durante a execução é o git da worktree
+  (`git log`, `git status`), não o stdout. Não ponha `| tail` no lançamento: o log fica vazio
+  e o worker parece travado sem estar.
+- Lançar exige a regra `Bash(nohup claude -p *)` em `permissions.allow` do dono — sem ela o
+  classificador bloqueia, e agente não edita a própria permissão (`CLAUDE.md` §8).

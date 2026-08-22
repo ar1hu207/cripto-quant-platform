@@ -125,7 +125,8 @@ próprio alcance**. Uma sessão queimou seis tentativas nisso em 22/08; vá dire
 | Doc | Para quê |
 |---|---|
 | `PLANO-EXECUCAO-2026-08-20.md` | **o plano vivo**: marcos, territórios, ondas, portões (§9) |
-| `ORQUESTRACAO-ORCA.md` | despachar sessões pela CLI do Orca e colher resultado |
+| `ORQUESTRACAO-ORCA.md` | despachar sessões (Orca + fallback manual) e operar o Trello pela API |
+| `RUNBOOK-VM.md` | **operar a VM**: acesso, transferências, deploy, backup, diagnóstico — a versão completa do §5 |
 | `prova_m1.py` | prova funcional das guardas — rode antes de mergear backend |
 | `DESIGN.md` | direção visual do front (transposição CoinMarketCap night) |
 | `STATUS-SISTEMA-2026-08-19.md` + `INVESTIGACAO-*.md` | origem dos cards; registros datados |
