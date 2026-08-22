@@ -16,3 +16,6 @@ equity_curve.csv
 *.db-wal
 *.db-shm
 .vercel/
+
+# venv de producao: existe na VM, criado no provisionamento, nunca versionado
+venv/
