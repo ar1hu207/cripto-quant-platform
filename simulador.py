@@ -17,6 +17,11 @@ ex_fut = ccxt.binanceusdm({"enableRateLimit": True})   # funding (perp)
 LIQ_BUFFER = 0.9   # liquida quando a perda chega a ~90% da margem (buffer de manutenção)
 _abrir_lock = threading.Lock()   # serializa aberturas concorrentes (worker + API) — evita TOCTOU no teto
 
+# Saúde da marcação, no mesmo padrão do signal_engine.ultimo_scan: sem isto, uma posição
+# que deixou de ser marcada (rede caída) fica sem stop/trailing/liquidação em SILÊNCIO —
+# o painel segue mostrando o último preço bom como se fosse o de agora.
+ultima_marcacao = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
+
 
 def _funding_custo(ativo, aberto_em, fechado_em, direcao, nocional):
     """Funding pago (LONG) / recebido (SHORT) entre abertura e fechamento. Negativo = custo.
@@ -204,35 +209,52 @@ def atualizar():
     eventos = []
     with db.conectar() as con:
         abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
+    ultima_marcacao.update(ts=str(pd.Timestamp.now()), total=len(abertas), ok=0, falhas=0,
+                           ultimo_erro=None)     # zera a cada ciclo: erro velho não vira alarme eterno
     for pos in abertas:
-        preco = preco_ao_vivo(pos["ativo"])
-        d = 1 if pos["direcao"] == "LONG" else -1
-        # trailing: só sobe o stop (LONG) / só desce (SHORT), e só depois do preço passar +trail_d em lucro
-        if trail_on and pos["stop"] and pos["entrada"]:
-            if d == 1 and preco >= pos["entrada"] * (1 + trail_d):
-                novo = preco * (1 - trail_d)
-                if novo > pos["stop"]:
-                    pos["stop"] = round(novo, 8)
-            elif d == -1 and preco <= pos["entrada"] * (1 - trail_d):
-                novo = preco * (1 + trail_d)
-                if novo < pos["stop"]:
-                    pos["stop"] = round(novo, 8)
-        liq = _preco_liquidacao(pos["entrada"], d, pos["alavancagem"])
-        hit_liq = (d == 1 and preco <= liq) or (d == -1 and preco >= liq)
-        hit_stop = pos["stop"] and ((d == 1 and preco <= pos["stop"]) or (d == -1 and preco >= pos["stop"]))
-        if hit_liq and hit_stop:                                # empate: o mais perto da entrada bate 1o (= backtest)
-            if abs(pos["entrada"] - pos["stop"]) <= abs(pos["entrada"] - liq):
-                _fecha_stop(pos, eventos); continue
-            fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); continue
-        if hit_liq:
-            fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); continue
-        if hit_stop:
-            _fecha_stop(pos, eventos); continue
-        pnl, _, _ = _pnl(pos, preco)
-        with db.conectar() as con:                              # persiste o stop trailado (sobe entre ciclos)
-            con.execute("UPDATE posicoes SET preco_atual=?, pnl=?, stop=? WHERE id=? AND status='aberta'",
-                        (preco, pnl, pos["stop"], pos["id"]))
+        # try POR POSIÇÃO, não em volta do for: uma moeda que falha não pode tirar as OUTRAS
+        # posições da vigilância de stop/trailing/liquidação, nem derrubar o resto do ciclo.
+        try:
+            _marcar_uma(pos, trail_on, trail_d, eventos)
+            ultima_marcacao["ok"] += 1
+        except Exception as e:
+            ultima_marcacao["falhas"] += 1
+            ultima_marcacao["ultimo_erro"] = f"{pos['ativo']}: {type(e).__name__}: {str(e)[:140]}"
+            log(f"atualizar falhou {pos['ativo']}: {e}", "error")
+            continue
     return eventos
+
+
+def _marcar_uma(pos, trail_on, trail_d, eventos):
+    """Marca UMA posição no preço ao vivo. Extraído do for de atualizar() para que o
+    try/except tenha a granularidade de uma posição — os `continue` viram `return`."""
+    preco = preco_ao_vivo(pos["ativo"])
+    d = 1 if pos["direcao"] == "LONG" else -1
+    # trailing: só sobe o stop (LONG) / só desce (SHORT), e só depois do preço passar +trail_d em lucro
+    if trail_on and pos["stop"] and pos["entrada"]:
+        if d == 1 and preco >= pos["entrada"] * (1 + trail_d):
+            novo = preco * (1 - trail_d)
+            if novo > pos["stop"]:
+                pos["stop"] = round(novo, 8)
+        elif d == -1 and preco <= pos["entrada"] * (1 - trail_d):
+            novo = preco * (1 + trail_d)
+            if novo < pos["stop"]:
+                pos["stop"] = round(novo, 8)
+    liq = _preco_liquidacao(pos["entrada"], d, pos["alavancagem"])
+    hit_liq = (d == 1 and preco <= liq) or (d == -1 and preco >= liq)
+    hit_stop = pos["stop"] and ((d == 1 and preco <= pos["stop"]) or (d == -1 and preco >= pos["stop"]))
+    if hit_liq and hit_stop:                                # empate: o mais perto da entrada bate 1o (= backtest)
+        if abs(pos["entrada"] - pos["stop"]) <= abs(pos["entrada"] - liq):
+            return _fecha_stop(pos, eventos)
+        fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
+    if hit_liq:
+        fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
+    if hit_stop:
+        return _fecha_stop(pos, eventos)
+    pnl, _, _ = _pnl(pos, preco)
+    with db.conectar() as con:                              # persiste o stop trailado (sobe entre ciclos)
+        con.execute("UPDATE posicoes SET preco_atual=?, pnl=?, stop=? WHERE id=? AND status='aberta'",
+                    (preco, pnl, pos["stop"], pos["id"]))
 
 
 def _fecha_stop(pos, eventos):

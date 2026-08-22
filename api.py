@@ -251,11 +251,15 @@ def health():
 @app.get("/status")
 def status():
     sc = signal_engine.ultimo_scan
+    mk = simulador.ultima_marcacao
     # cego = o scan rodou e NENHUMA moeda respondeu (rede, geo-bloqueio, exchange fora).
     # Sem este sinal, o /status dizia "0 erros" com o bot sem enxergar o mercado.
     cego = sc["total"] > 0 and sc["ok"] == 0
-    return {**_health, "worker_on": _worker_on["v"], "scan": sc,
-            "saudavel": not cego,
+    # cego nas POSIÇÕES: o ciclo tentou marcar e nenhuma foi marcada. É mais grave que o
+    # scan cego — posição não marcada é posição sem stop, sem trailing e sem liquidação.
+    cego_pos = mk["total"] > 0 and mk["ok"] == 0
+    return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
+            "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
 
