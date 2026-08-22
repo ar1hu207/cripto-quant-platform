@@ -78,6 +78,36 @@ python backtest_plataforma.py  # backtest com paridade live<->histórico
 
 ---
 
+## Testes
+
+**Rode antes de todo deploy.** A suíte não faz rede e não toca no `trading.db`: cada teste
+usa um banco temporário e substitui `preco_ao_vivo`.
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest                       # tudo — 144 testes, de 45 s a ~2 min
+python -m pytest -m "not lento"        # laço rápido, sem a prova de 1 ano de equity
+```
+
+A suíte tem duas metades. Em `tests/` estão os testes das funções que doem se quebrarem —
+`guarda_risco()`, `_pnl()`, `_preco_liquidacao()`, `abrir()`, o sizing do auto-trader e
+`db.metricas()`. A outra metade **embrulha as provas que já estavam versionadas**: o pytest
+as executa por subprocesso, cada uma no processo isolado em que ela foi escrita para rodar,
+e confere o código de saída e a contagem de asserções.
+
+| Comando | O que prova |
+|---|---|
+| `python prova_m1.py` | guardas do M1 — `P1-6`, `P1-1`, `P1-7`, `P1-8`, `P2-12` |
+| `python test_sim.py` | caminho fim a fim: sinal → posição → fechamento, e liquidação |
+| `python simulador.py` | funding do `P2-10` — não medido grava `NULL`, não zero |
+| `python db.py prova` | índices, poda e curva de equity do `P2-11` |
+| `python api.py` | `_amostrar` (`P1-4`), saúde do scan (`P2-15`), commit no `/health` |
+| `python test_auth.py` | `P0-1` — nada é servido sem credencial (3 cenários) |
+
+Cada uma roda sozinha, e é assim que se lê a saída completa quando o pytest acusa falha.
+
+---
+
 ## Deploy
 
 VM Ubuntu na Azure + Caddy (TLS automático) + front estático no Vercel.
