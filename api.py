@@ -363,6 +363,7 @@ class DcaReq(BaseModel):
 
 class ResetReq(BaseModel):
     confirmar: str = ""
+    incluir_dca: bool = False       # ver o contrato do /reset
 
 
 # ---------- leitura ----------
@@ -408,16 +409,39 @@ def status():
 
 @app.post("/reset")
 def reset(req: ResetReq):
-    """Apaga sinais, posições, trades e a curva de equity, e devolve a banca ao inicial.
-    Irreversível e sem backup do trading.db: exige confirmação no corpo para que um POST
-    solto — curl, scanner, clique errado — não apague meses de histórico de pesquisa."""
+    """Devolve a simulação ao estado inicial. CONTRATO COMPLETO do que o reset toca:
+
+    APAGA     sinais, posições, trades e a curva de equity.
+    RESTAURA  a banca para o valor inicial.
+    LIMPA     `trava_dia_em` — a trava diária é sticky por design (não destrava no mesmo
+              dia), então sem isto o sistema "novo" nascia travado até a virada do dia,
+              com banca cheia e zero trades. Estado impossível de diagnosticar pelo painel.
+    PRESERVA  a configuração (risco, alavancagem, ativos, auto_trade) — reset é da
+              SIMULAÇÃO, não dos parâmetros do experimento.
+    PRESERVA  os planos de DCA e seu acumulado, salvo `{"incluir_dca": true}`. O DCA é
+              acumulação de longo prazo com banca conceitualmente separada: zerá-lo junto
+              com um reset de trade ativo apaga meses de aporte por um clique que a pessoa
+              acha que só limpa a mesa. Fica opt-in explícito.
+
+    Irreversível e sem backup do trading.db ([P2-2]): exige `{"confirmar": "RESET"}` para
+    que um POST solto — curl, scanner, clique errado — não apague o histórico de pesquisa."""
     if req.confirmar != "RESET":
         raise HTTPException(400, 'Reset apaga todo o histórico. Envie {"confirmar": "RESET"}.')
-    with db.conectar() as c:
-        for t in ("sinais", "posicoes", "trades", "equity"):
+    tabelas = ["sinais", "posicoes", "trades", "equity"]
+    if req.incluir_dca:
+        tabelas.append("dca")
+    with db.conectar() as c:                    # tudo numa transação só: reset pela metade
+        for t in tabelas:                       # é pior que reset nenhum
             c.execute(f"DELETE FROM {t}")
         c.execute("UPDATE banca SET atual=inicial WHERE id=1")
-    return {"ok": True}
+        c.execute("INSERT INTO config(chave,valor) VALUES('trava_dia_em','') "
+                  "ON CONFLICT(chave) DO UPDATE SET valor=''")
+    # estado derivado em memória: sem isto o painel exibe, até o próximo ciclo (15s),
+    # recomendações de saída e um contador de marcação de posições que não existem mais.
+    _saidas["v"] = []
+    _auto["v"] = {"ativo": False}
+    simulador.ultima_marcacao.update(ts=None, total=0, ok=0, falhas=0, ultimo_erro=None)
+    return {"ok": True, "trava_dia_limpa": True, "dca_apagado": req.incluir_dca}
 
 
 def _amostrar(seq, alvo=125):
