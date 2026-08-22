@@ -324,10 +324,22 @@ o anterior mergeou. A sobreposição de arquivo entre eles (`README.md` nos trê
    `pesquisa/`, o `py_compile` deixa de cobri-la: ou estende o glob no `atualizar.sh`, ou **declara
    no commit** que pesquisa não é código de produção e por isso não precisa do portão de compilação.
 
-**O `T-ESTRUTURA` não deleta nem move sem a decisão do dono registrada.** O card recomenda deletar o
-legado ("o git guarda tudo"); a alternativa é `legado/` com um README declarando que nada ali é
-importado pela plataforma. É a única escolha do marco que o agente não toma sozinho — vai no
-briefing já decidida.
+**Decisão do dono, registrada em 2026-08-22, antes do despacho da onda 2: o legado vai para
+`legado/`, não é deletado.** O card recomendava deletar ("o git guarda tudo"); a decisão foi mover,
+com um `legado/README.md` declarando que nada ali é importado pela plataforma viva. O que a escolha
+compra: a reorganização deixa de ser irreversível na árvore de trabalho — desfazer é um `mv` — e o
+M4, que é pesquisa, continua conseguindo olhar `backtest.py`, `monte_carlo.py` e `estrategias/` sem
+precisar de arqueologia no `git log`. O que ela custa: `legado/` fica no repositório até alguém
+decidir apagá-lo. A alternativa continua disponível a custo zero depois do M4, porque mover não
+destrói nada.
+
+**Segunda decisão do dono, mesma data: o M3 é deployado na VM depois do merge, com verificação.**
+A plataforma viva não sai da raiz (decisão 3 acima), então o `uvicorn api:app` do service não muda —
+mas o `git checkout` na VM vai mover ~30 arquivos, e isso é ato deliberado, não consequência. O
+deploy é `cripto-deploy` (backup, congelamento, `py_compile` no venv de produção, restart), a
+verificação é `/health` com o SHA novo mais `/status` e equity nova, e o rollback é
+`bash deploy/atualizar.sh <sha>` — testado no `P2-3`. **É trabalho da matriz, não do worker**
+(`CLAUDE.md` §6).
 
 **Um fato do `P2-17` que o card não sabia: o `CLAUDE.md` já existe.** Foi escrito pela matriz do M2
 (148 linhas, dentro do teto de ~150 do card). O `P2-17` deixa de ser "criar dois documentos" e passa
