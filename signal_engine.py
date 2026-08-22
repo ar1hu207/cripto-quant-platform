@@ -52,6 +52,13 @@ def analisa(ativo, tf):
     return out
 
 
+# [P2-9] Marca do sinal que passou SEM a checagem de fluxo. O portao so roda se `book()`
+# devolveu dados; quando nao devolve, a garantia deixa de existir e isso precisa ficar
+# ESCRITO no sinal — e a unica coisa que o auto-trader consegue ler depois (ele nao ve o
+# ciclo do scan). Constante em vez de literal solto porque `autotrader.py` a le.
+MOTIVO_FLUXO_ND = "fluxo n/d"
+
+
 def confirmado(s, ativo, cfg):
     """Portões de confirmação — DIFERENTES por estratégia.
     TENDÊNCIA: exige ADX alto + confluência + fluxo a favor.
@@ -89,6 +96,15 @@ def confirmado(s, ativo, cfg):
                 s["rejeitado_por"] = "fluxo"
                 return False, f"fluxo contra o SHORT ({fc:.0f}% comprador)"
             s["motivos"] += f", fluxo {fc:.0f}% taker"
+        else:
+            # [P2-9] book indisponivel (rede, exchange fora, book vazio) = portao PULADO.
+            # Decisao registrada na §4b do plano: opcao B — passa ANOTADO e medido, em vez de
+            # rejeitar (fail-closed secaria a fila inteira numa instabilidade prolongada).
+            # A degradacao vira dado em dois lugares: no sinal (motivos, que o auto-trader le)
+            # e no contador do ciclo (ultimo_scan, que o /status publica).
+            s["fluxo_indisponivel"] = True
+            s["motivos"] += f", {MOTIVO_FLUXO_ND}"
+            ultimo_scan["fluxo_indisponivel"] += 1
     return True, "confirmado"
 
 
@@ -186,7 +202,12 @@ def analise(ativo, tf="15m", limite=200):
 # do worker completa "com sucesso" (o except de cada moeda engolia tudo num print) e o
 # /status reporta 0 erros enquanto o bot está cego. Foi exatamente o que aconteceu quando
 # a Binance devolveu 451 para o IP da VM.
-ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
+ultimo_scan = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None,
+               # [P2-9] quantos sinais do ciclo passaram sem a checagem de fluxo
+               # (book indisponivel). Zero e a operacao normal; qualquer numero aqui
+               # e portao anunciado que nao rodou. Aparece sozinho no /status: o
+               # endpoint devolve este dicionario inteiro sob a chave "scan".
+               "fluxo_indisponivel": 0}
 
 
 REJEITADO_FLUXO = "rejeitado_fluxo"      # [Q-4] status fora da fila: nenhuma consulta de
@@ -195,19 +216,39 @@ HORIZONTE_H = 24                         # janela do desfecho hipotético
 HORIZONTE_MS = HORIZONTE_H * 3600 * 1000
 DESFECHOS_POR_SCAN = 6                   # teto de fetch extra por varredura (o scan já faz ~72)
 
+# [P1-9] Janela de vida de um sinal, em VELAS do proprio timeframe. Um sinal de 5m e um de 4h
+# nao envelhecem no mesmo relogio: fixar "60 min" trataria os dois igual. 4 velas e exatamente
+# o horizonte que o front ja chama de "expirou — sinal antigo, reavalie" (statusEntrada, em
+# web/index.html), entao o banco passa a concordar com o que o painel mostra em vez de
+# contradize-lo. Nao vira config: acrescentar chave exigiria `db.CONFIG_PADRAO` e o catalogo do
+# POST /config, que sao territorio de outro agente nesta onda.
+JANELA_VELAS = 4
+TF_MIN = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+          "1h": 60, "2h": 120, "4h": 240, "6h": 360, "12h": 720, "1d": 1440}
 
-def _repetido(con, s, ativo, tf, status):
-    """Dedupe por ativo+tf+tipo DENTRO da própria linhagem de status.
+
+def janela_min(tf):
+    """Janela do sinal em minutos. TF desconhecido cai no 15m (o `timeframe` padrao)."""
+    return JANELA_VELAS * TF_MIN.get((tf or "").strip(), 15)
+
+
+def _repetido(con, s, ativo, tf, status, ts):
+    """Dedupe por ativo+tf+tipo DENTRO da própria linhagem de status, e DENTRO da janela.
 
     A fila e o log de rejeição não se enxergam: cada um compara com o último da SUA espécie.
     Sem essa separação, uma rejeição gravada viraria o "último sinal" de ativo+tf+tipo e
     mudaria quando a fila aceita um sinal novo — efeito colateral proibido pelo card ([Q-4]
     exige zero impacto na fila) e colisão direta com o dedupe do [P1-9].
+
+    [P1-9] `ts >= corte` é o que separa "spam" de "condição que ainda está lá". O comparador é
+    string porque `ts` é `str(pd.Timestamp)` (naive, São Paulo — CLAUDE.md §1) e o formato
+    ISO ordena lexicograficamente; converter a coluna aqui só desligaria índice futuro.
     """
     lado = "= ?" if status == REJEITADO_FLUXO else "<> ?"
+    corte = str(pd.Timestamp(ts) - pd.Timedelta(minutes=janela_min(tf)))
     ult = con.execute("SELECT direcao,conviccao FROM sinais WHERE ativo=? AND tf=? AND tipo=? "
-                      f"AND IFNULL(status,'novo') {lado} ORDER BY id DESC LIMIT 1",
-                      (ativo, tf, s["tipo"], REJEITADO_FLUXO)).fetchone()
+                      f"AND IFNULL(status,'novo') {lado} AND ts >= ? ORDER BY id DESC LIMIT 1",
+                      (ativo, tf, s["tipo"], REJEITADO_FLUXO, corte)).fetchone()
     # mudou de direção, convicção variou >=10, ou é o primeiro -> não é repetido
     return not (ult is None or ult["direcao"] != s["direcao"]
                 or abs(s["conviccao"] - ult["conviccao"]) >= 10)
@@ -295,12 +336,45 @@ def marcar_desfechos(limite=DESFECHOS_POR_SCAN, agora_ms=None):
     return feitos
 
 
+def expirar_sinais(agora=None):
+    """[P1-9] Fecha a outra ponta da janela: sinal 'novo' mais velho que ela vira 'expirado'.
+
+    Sem isto, a janela do dedupe deixaria a fila DUPLICADA — o candidato novo entra, e o
+    pendente de ontem continua lá, com preço e stop de ontem, disputando o mesmo ativo. O
+    painel já desenhava "expirou — reavalie", mas só na tela: no banco o registro seguia
+    'novo' para sempre, e `/estado.pendentes` e o pool do auto-trader são consultas ao banco,
+    não à tela.
+
+    Roda por TF porque a janela é por TF. `status='novo'` é o único alvo: 'confirmado',
+    'pulado' e 'rejeitado_fluxo' são histórico, e reescrevê-los apagaria o que o [Q-4] mede.
+    """
+    agora = pd.Timestamp(agora) if agora is not None else pd.Timestamp.now()
+    n = 0
+    with db.conectar() as con:
+        tfs = [r[0] for r in con.execute(
+            "SELECT DISTINCT IFNULL(tf,'') FROM sinais WHERE status='novo'")]
+        for tf in tfs:
+            corte = str(agora - pd.Timedelta(minutes=janela_min(tf)))
+            n += con.execute("UPDATE sinais SET status='expirado' WHERE status='novo' "
+                             "AND IFNULL(tf,'')=? AND ts < ?", (tf, corte)).rowcount
+    return n
+
+
 def scan():
     cfg = db.get_config()
     ativos = [a.strip() for a in cfg["ativos"].split(",") if a.strip()]
     tfs = [t.strip() for t in cfg.get("timeframes", cfg.get("timeframe", "15m")).split(",") if t.strip()]
     ts = str(pd.Timestamp.now())
-    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0)    # zera a cada varredura
+    ultimo_scan.update(ts=ts, total=0, ok=0, falhas=0, fluxo_indisponivel=0)   # zera a cada varredura
+    try:
+        # [P1-9] limpeza ANTES da varredura: o que for gravado agora nasce dentro da janela, e
+        # o auto-trader (que roda logo depois, no mesmo ciclo do worker) já lê a fila limpa.
+        # Job local e barato, mas segue a regra do `marcar_desfechos`: nunca derruba o scan.
+        expirados = expirar_sinais(ts)
+        if expirados:
+            log(f"[P1-9] {expirados} sinal(is) 'novo' expirados (fora da janela)")
+    except Exception as e:
+        log(f"expirar_sinais falhou: {e}", "error")
     resultados, novos = [], 0
     for a in ativos:
         for tf in tfs:                                   # alargamento: varre cada timeframe
@@ -322,11 +396,11 @@ def scan():
                         # [Q-4] a rejeição por fluxo é o único dado que valida o portão, e ela
                         # só existe agora: não há book/taker histórico pra reconstruir depois.
                         with db.conectar() as con:
-                            if not _repetido(con, s, a, tf, REJEITADO_FLUXO):
+                            if not _repetido(con, s, a, tf, REJEITADO_FLUXO, ts):
                                 _gravar(con, ts, s, a, tf, REJEITADO_FLUXO, motivo_rej)
                     continue
                 with db.conectar() as con:
-                    if not _repetido(con, s, a, tf, "novo"):
+                    if not _repetido(con, s, a, tf, "novo", ts):
                         _gravar(con, ts, s, a, tf, "novo", None)
                         novos += 1
     try:

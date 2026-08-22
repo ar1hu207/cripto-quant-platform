@@ -18,10 +18,22 @@ import pandas as pd
 import db
 import simulador
 from logbot import log
+from signal_engine import MOTIVO_FLUXO_ND
 
 
 def _verdade(v):
     return str(v) in ("1", "true", "True")
+
+
+def _fluxo_checado(s):
+    """[P2-9] O sinal foi confirmado COM o portao de fluxo rodando?
+
+    O humano da fila manual ve o aviso "fluxo n/d" no card do sinal e decide; o bot nao le
+    aviso. Com `exigir_fluxo=1` o dono declarou que nao quer operar tendencia sem o fluxo a
+    favor — entao o bot tambem nao opera sobre fluxo NAO VERIFICADO. Com `exigir_fluxo=0` o
+    portao esta desligado e nada muda: nenhum sinal carrega a marca.
+    """
+    return MOTIVO_FLUXO_ND not in (s["motivos"] or "")
 
 
 def _alavancagem(cfg, conviccao):
@@ -132,12 +144,14 @@ def auto_executar(saidas=None):
         except Exception:
             return 0
 
+    exige_fluxo = _verdade(cfg.get("exigir_fluxo", "1"))
     novos = db.listar("sinais", 80, "WHERE status='novo'")
     cands = [s for s in novos
              if (s["conviccao"] or 0) >= conv_min
              and s["ativo"] not in ativos_abertos
              and s["ativo"] not in em_cooldown
-             and fresco(s)]
+             and fresco(s)
+             and not (exige_fluxo and not _fluxo_checado(s))]   # [P2-9] fluxo n/d: o bot nao opera
     cands.sort(key=lambda s: (-(s["conviccao"] or 0), -ts_val(s)))   # melhor convicção; empate -> mais fresco
 
     vistos = set()
