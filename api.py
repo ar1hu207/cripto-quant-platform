@@ -7,6 +7,7 @@ Rodar:  uvicorn api:app --port 8000      |  Docs: http://localhost:8000/docs
 """
 import base64
 import os
+import re
 import secrets
 import threading
 import time
@@ -201,6 +202,148 @@ async def auth_basica(request: Request, call_next):
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
+# ---------- catálogo de configuração ----------
+# Lista FECHADA do que pode ser gravado na config, com tipo e faixa. Sem isto, POST /config
+# aceitava qualquer chave com qualquer valor e o erro só aparecia lá no float() de
+# guarda_risco() — ou seja, longe da causa e no caminho de TODO /estado.
+#
+# Onde isto deveria morar: em db.py, ao lado do CONFIG_PADRAO, que é o registro natural das
+# chaves. Ficou aqui porque db.py é território de outro agente nesta onda (§3 do
+# PLANO-EXECUCAO-2026-08-20). Levar para lá é trabalho do [P2-11]/[P2-16].
+_TFS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
+
+CONFIG_CATALOGO = {
+    # risco — faixas apertadas de propósito: um dígito a mais aqui é dinheiro
+    "risco_por_trade":      ("float", 0.001, 0.2),
+    "limite_perda_dia":     ("float", 0.0, 0.5),      # 0 = trava no primeiro centavo de perda
+    "risco_aberto_max":     ("float", 0.0, 1.0),      # 0 = sem teto (semântica existente)
+    "exposicao_max":        ("float", 0.0, 1.0),      # 0 = sem teto (semântica existente)
+    "taxa_por_lado":        ("float", 0.0, 0.01),
+    "alavancagem_padrao":   ("float", 1.0, 50.0),
+    # scanner / sinais
+    "timeframe":            ("enum", _TFS),
+    "timeframes":           ("lista_tf",),
+    "ativos":               ("pares",),
+    "min_conviccao":        ("float", 0.0, 100.0),
+    "adx_min":              ("float", 0.0, 100.0),
+    "adx_max_rev":          ("float", 0.0, 100.0),
+    "min_fatores":          ("int", 0, 10),
+    "exigir_fluxo":         ("bool",),
+    "reversao_ativa":       ("bool",),
+    "alvo_roe":             ("float", 0.0, 1000.0),
+    # auto-trader
+    "auto_trade":           ("bool",),
+    "auto_conviccao_min":   ("float", 0.0, 100.0),
+    "auto_max_posicoes":    ("int", 1, 20),
+    "auto_max_valor_frac":  ("float", 0.001, 1.0),
+    "auto_fechar_saida":    ("bool",),
+    "auto_freshness_min":   ("float", 0.5, 1440.0),
+    "auto_cooldown_min":    ("float", 0.0, 1440.0),
+    "auto_lev_modo":        ("enum", ("conviccao", "fixo")),
+    "auto_lev_min":         ("float", 1.0, 50.0),
+    "auto_lev_max":         ("float", 1.0, 50.0),
+    "trailing_ativo":       ("bool",),
+    "trailing_dist":        ("float", 0.001, 0.5),
+    # estado / integrações
+    "trava_dia_em":         ("data",),
+    "telegram_token":       ("texto", 200),
+    "telegram_chat_id":     ("texto", 64),
+}
+
+_VERDADEIRO = {"1", "true", "sim", "on", "yes"}
+_FALSO = {"0", "false", "nao", "não", "off", "no"}
+_RE_PAR = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{2,6}$")
+_RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validar_config(chave, valor):
+    """Coage e valida UM par chave/valor. Devolve a string a gravar ou levanta ValueError
+    com o motivo — a mensagem é o produto: quem apanhou do 422 precisa saber o que corrigir."""
+    if chave not in CONFIG_CATALOGO:
+        raise ValueError(f"'{chave}': chave desconhecida")
+    spec = CONFIG_CATALOGO[chave]
+    tipo = spec[0]
+    bruto = str(valor).strip() if valor is not None else ""
+
+    if tipo in ("float", "int"):
+        _, lo, hi = spec
+        try:
+            n = float(bruto.replace(",", "."))
+        except ValueError:
+            raise ValueError(f"'{chave}': '{valor}' não é número")
+        if not (lo <= n <= hi):        # nan/inf caem aqui: nenhuma comparação com nan é True
+            raise ValueError(f"'{chave}': {bruto} fora da faixa permitida [{lo}, {hi}]")
+        if tipo == "int":
+            if n != int(n):
+                raise ValueError(f"'{chave}': {bruto} precisa ser inteiro")
+            return str(int(n))
+        return str(n)
+
+    if tipo == "bool":
+        v = bruto.lower()
+        if v in _VERDADEIRO:
+            return "1"
+        if v in _FALSO:
+            return "0"
+        raise ValueError(f"'{chave}': '{valor}' não é 0/1")
+
+    if tipo == "enum":
+        if bruto not in spec[1]:
+            raise ValueError(f"'{chave}': '{valor}' não é uma opção válida {list(spec[1])}")
+        return bruto
+
+    if tipo == "lista_tf":
+        itens = [t.strip() for t in bruto.split(",") if t.strip()]
+        if not 1 <= len(itens) <= 6:
+            raise ValueError(f"'{chave}': informe de 1 a 6 timeframes")
+        for t in itens:
+            if t not in _TFS:
+                raise ValueError(f"'{chave}': timeframe '{t}' inválido {list(_TFS)}")
+        return ",".join(itens)
+
+    if tipo == "pares":
+        # teto de 60 pares: o scan é ativos × timeframes chamadas de rede por ciclo — uma
+        # lista gigante não é erro de tipo, é o worker estourando o tempo do ciclo.
+        itens = [a.strip().upper() for a in bruto.split(",") if a.strip()]
+        if not 1 <= len(itens) <= 60:
+            raise ValueError(f"'{chave}': informe de 1 a 60 pares")
+        for a in itens:
+            if not _RE_PAR.match(a):
+                raise ValueError(f"'{chave}': par '{a}' fora do formato BASE/QUOTE")
+        return ",".join(itens)
+
+    if tipo == "data":
+        if bruto and not _RE_DATA.match(bruto):
+            raise ValueError(f"'{chave}': '{valor}' não é uma data AAAA-MM-DD (ou vazio)")
+        return bruto
+
+    if len(bruto) > spec[1]:                                 # texto
+        raise ValueError(f"'{chave}': passa de {spec[1]} caracteres")
+    return bruto
+
+
+def _validar_lote(body, permitidas=None):
+    """Valida o corpo INTEIRO antes de gravar qualquer coisa. Tudo-ou-nada de propósito:
+    meia configuração aplicada (parte nova, parte velha) é um estado que ninguém pediu e
+    que o operador não consegue nomear pra desfazer."""
+    if not isinstance(body, dict) or not body:
+        raise HTTPException(422, "corpo precisa ser um objeto {chave: valor} não vazio")
+    recusados, aceitos = [], {}
+    for k, v in body.items():
+        if permitidas is not None and k not in permitidas:
+            recusados.append(f"'{k}': não é ajustável por este endpoint")
+            continue
+        try:
+            aceitos[k] = _validar_config(k, v)
+        except ValueError as e:
+            recusados.append(str(e))
+    if recusados:
+        log(f"config recusada: {recusados}", "error")
+        raise HTTPException(422, {"erro": "configuração recusada — nada foi gravado",
+                                  "recusados": recusados})
+    return aceitos
+
+
 # ---------- modelos ----------
 class ConfirmarReq(BaseModel):
     sinal_id: int
@@ -220,6 +363,7 @@ class DcaReq(BaseModel):
 
 class ResetReq(BaseModel):
     confirmar: str = ""
+    incluir_dca: bool = False       # ver o contrato do /reset
 
 
 # ---------- leitura ----------
@@ -251,26 +395,53 @@ def health():
 @app.get("/status")
 def status():
     sc = signal_engine.ultimo_scan
+    mk = simulador.ultima_marcacao
     # cego = o scan rodou e NENHUMA moeda respondeu (rede, geo-bloqueio, exchange fora).
     # Sem este sinal, o /status dizia "0 erros" com o bot sem enxergar o mercado.
     cego = sc["total"] > 0 and sc["ok"] == 0
-    return {**_health, "worker_on": _worker_on["v"], "scan": sc,
-            "saudavel": not cego,
+    # cego nas POSIÇÕES: o ciclo tentou marcar e nenhuma foi marcada. É mais grave que o
+    # scan cego — posição não marcada é posição sem stop, sem trailing e sem liquidação.
+    cego_pos = mk["total"] > 0 and mk["ok"] == 0
+    return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
+            "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
 
 @app.post("/reset")
 def reset(req: ResetReq):
-    """Apaga sinais, posições, trades e a curva de equity, e devolve a banca ao inicial.
-    Irreversível e sem backup do trading.db: exige confirmação no corpo para que um POST
-    solto — curl, scanner, clique errado — não apague meses de histórico de pesquisa."""
+    """Devolve a simulação ao estado inicial. CONTRATO COMPLETO do que o reset toca:
+
+    APAGA     sinais, posições, trades e a curva de equity.
+    RESTAURA  a banca para o valor inicial.
+    LIMPA     `trava_dia_em` — a trava diária é sticky por design (não destrava no mesmo
+              dia), então sem isto o sistema "novo" nascia travado até a virada do dia,
+              com banca cheia e zero trades. Estado impossível de diagnosticar pelo painel.
+    PRESERVA  a configuração (risco, alavancagem, ativos, auto_trade) — reset é da
+              SIMULAÇÃO, não dos parâmetros do experimento.
+    PRESERVA  os planos de DCA e seu acumulado, salvo `{"incluir_dca": true}`. O DCA é
+              acumulação de longo prazo com banca conceitualmente separada: zerá-lo junto
+              com um reset de trade ativo apaga meses de aporte por um clique que a pessoa
+              acha que só limpa a mesa. Fica opt-in explícito.
+
+    Irreversível e sem backup do trading.db ([P2-2]): exige `{"confirmar": "RESET"}` para
+    que um POST solto — curl, scanner, clique errado — não apague o histórico de pesquisa."""
     if req.confirmar != "RESET":
         raise HTTPException(400, 'Reset apaga todo o histórico. Envie {"confirmar": "RESET"}.')
-    with db.conectar() as c:
-        for t in ("sinais", "posicoes", "trades", "equity"):
+    tabelas = ["sinais", "posicoes", "trades", "equity"]
+    if req.incluir_dca:
+        tabelas.append("dca")
+    with db.conectar() as c:                    # tudo numa transação só: reset pela metade
+        for t in tabelas:                       # é pior que reset nenhum
             c.execute(f"DELETE FROM {t}")
         c.execute("UPDATE banca SET atual=inicial WHERE id=1")
-    return {"ok": True}
+        c.execute("INSERT INTO config(chave,valor) VALUES('trava_dia_em','') "
+                  "ON CONFLICT(chave) DO UPDATE SET valor=''")
+    # estado derivado em memória: sem isto o painel exibe, até o próximo ciclo (15s),
+    # recomendações de saída e um contador de marcação de posições que não existem mais.
+    _saidas["v"] = []
+    _auto["v"] = {"ativo": False}
+    simulador.ultima_marcacao.update(ts=None, total=0, ok=0, falhas=0, ultimo_erro=None)
+    return {"ok": True, "trava_dia_limpa": True, "dca_apagado": req.incluir_dca}
 
 
 def _amostrar(seq, alvo=125):
@@ -398,8 +569,20 @@ def confirmar(req: ConfirmarReq):
 
 
 @app.post("/panico")
-def panico():
-    """Kill-switch: fecha TODAS as posições abertas no preço ao vivo."""
+def panico(pular_pendentes: bool = False):
+    """Kill-switch: DESLIGA o auto-trader e fecha TODAS as posições abertas no preço ao vivo.
+
+    Desligar vem PRIMEIRO de propósito: se fechar alguma posição falhar no meio, o bot já
+    está morto e não reabre. Quem aperta o botão quer parar o sistema, não redistribuir a
+    carteira — e religar passa a exigir ação explícita no painel.
+
+    `pular_pendentes=1` marca também os sinais 'novo' como pulados. Fica DESLIGADO por
+    padrão: é decisão de produto (a fila pendente é combustível para religar por engano,
+    mas o auto-trader já só opera sinal com até `auto_freshness_min` minutos, então ela
+    envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
+    db.set_config("auto_trade", "0")            # mata o bot ANTES de fechar
+    _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
+    log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
     n, total = 0, 0.0
     for p in abertas:
@@ -410,7 +593,12 @@ def panico():
                 n += 1
         except Exception as e:
             log(f"panico erro pos {p['id']}: {e}", "error")
-    return {"ok": True, "fechadas": n, "pnl": round(total, 2)}
+    pulados = 0
+    if pular_pendentes:
+        with db.conectar() as c:
+            pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
+    return {"ok": True, "fechadas": n, "pnl": round(total, 2),
+            "auto_desligado": True, "pendentes_pulados": pulados}
 
 
 @app.post("/pular")
@@ -434,23 +622,31 @@ def scan_now():
 
 @app.post("/config")
 def set_config(body: dict):
-    for k, v in body.items():
+    """Grava configuração VALIDADA. Chave fora do catálogo, tipo errado ou valor fora de
+    faixa -> 422 dizendo o que foi recusado, em vez de gravar lixo que só explode depois,
+    longe daqui, dentro de guarda_risco()."""
+    aceitos = _validar_lote(body)
+    for k, v in aceitos.items():
         db.set_config(k, v)
     return db.get_config()
 
 
+AUTO_PERMITIDAS = {"auto_trade", "auto_conviccao_min", "auto_max_posicoes", "auto_max_valor_frac",
+                   "auto_fechar_saida", "auto_freshness_min", "alavancagem_padrao", "risco_por_trade",
+                   "auto_lev_modo", "auto_lev_min", "auto_lev_max", "auto_cooldown_min", "exposicao_max",
+                   "trailing_ativo", "trailing_dist"}
+
+
 @app.post("/auto")
 def set_auto(body: dict):
-    """Liga/desliga e ajusta o auto-trader (experimento)."""
-    permitidas = {"auto_trade", "auto_conviccao_min", "auto_max_posicoes", "auto_max_valor_frac",
-                  "auto_fechar_saida", "auto_freshness_min", "alavancagem_padrao", "risco_por_trade",
-                  "auto_lev_modo", "auto_lev_min", "auto_lev_max", "auto_cooldown_min", "exposicao_max",
-                  "trailing_ativo", "trailing_dist"}
-    for k, v in body.items():
-        if k in permitidas:
-            db.set_config(k, v)
+    """Liga/desliga e ajusta o auto-trader (experimento). Whitelist de chaves E validação
+    de valores: a whitelist sozinha deixava passar auto_max_posicoes="banana"."""
+    aceitos = _validar_lote(body, AUTO_PERMITIDAS)
+    for k, v in aceitos.items():
+        db.set_config(k, v)
     cfg = db.get_config()
-    return {"ok": True, "config": {k: cfg[k] for k in permitidas if k in cfg}, "estado": _auto["v"]}
+    return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},
+            "estado": _auto["v"]}
 
 
 @app.post("/dca")
