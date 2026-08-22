@@ -370,6 +370,46 @@ falha em três itens: não tem mapa de módulos, não tem a seção de comandos,
 não menciona CDN no `web/` nem a franquia de banda. Vale a regra do §13 do `ORQUESTRACAO-ORCA.md`:
 card pode estar errado sobre um fato, e o fato manda.
 
+#### 4d. O que a onda 1 mudou para a onda 2 — escrito em 2026-08-22, depois do merge do `P2-6`
+
+O `T-TESTE` entregou, e a entrega **estreita o território do `T-ESTRUTURA`** em três pontos. Está
+aqui e não no briefing porque é o plano que o auditor lê (§9.2).
+
+**1. Três scripts da raiz deixaram de ser movíveis.** A linha "todo `*.py` da raiz" da tabela da
+§4c precisa desta exceção: `prova_m1.py`, `test_sim.py` e `test_auth.py` **ficam onde estão**. Eles
+não são scripts soltos — são três das seis provas que `tests/test_provas_existentes.py` executa por
+subprocesso, com `cwd` na raiz. Mover qualquer um quebra a suíte por caminho, não por lógica, e o
+`P2-16` tem `pytest` verde no critério de aceite. `test_sim.py` e `test_auth.py` **casam com
+`test_*.py`** e por isso parecem candidatos naturais a ir para `tests/` — é justamente a armadilha:
+o `pytest.ini` os mantém fora da coleta de propósito (`testpaths = tests`), porque são programas que
+se rodam por `python <arquivo>`, e coletá-los faria o pytest importá-los e executar duas provas
+dentro do próprio processo, fora do isolamento das fixtures.
+
+**2. A suíte precisa do repositório ser um checkout git, e isso é intencional.** A prova do `api.py`
+(escrita no M2 pelo `P2-3`) afirma que `/health` devolve o commit em produção, e para isso roda
+`git rev-parse HEAD`. Consequência para quem audita: **rodar a suíte numa cópia sem `.git` a
+reprova por um motivo que não é defeito.** A matriz descobriu isso do jeito caro, acusando o worker
+antes de conferir — a auditoria passou a usar `git worktree add --detach` em vez de `copytree`. Não
+é limitação a consertar: é o `P2-3` fazendo o que foi pedido.
+
+**3. `db.metricas()` tem um defeito latente registrado, e ele muda o que "pytest verde" significa.**
+O card `P2-36` (`oDireXwJ`) nasceu do achado: `metricas()` classifica os trades tolerando NULL
+(`db.py:259-260`) e **soma a coluna crua** duas linhas abaixo (`db.py:261-262`) — um `pnl_reais`
+NULL levanta `TypeError` e derruba o `/estado`. Latente hoje, porque `simulador.fechar()` é o único
+INSERT em `trades` e sempre passa float. O teste existe, marcado `xfail(strict=True)`: **no dia em
+que o `P2-36` fechar, o xfail vira XPASS e quebra a suíte**, obrigando a promover o teste. Quem
+mexer em `db.py` sem fechar o card não é pego; quem consertar sem promover o teste é. Era o efeito
+desejado.
+
+**4. Uma linha do `CLAUDE.md` ficou falsa, e o conserto é da onda 3.** O §6 diz "o `test_sim.py`
+**não roda** localmente — depende do banco da VM". Depois do `P2-6` ele roda: foi reescrito no
+padrão do `prova_m1.py`, com banco temporário, dados semeados por ele mesmo e sem rede. O
+`T-TESTE` viu e **não consertou**, corretamente — `CLAUDE.md` é território do `T-DOCS`. Entra na
+lista do `P2-17` como item obrigatório, e serve de exemplo do que a §13 do `ORQUESTRACAO-ORCA.md`
+chama de documentação que apodrece: o card mudou o mundo, o documento continuou descrevendo o
+mundo antigo, e só não passou despercebido porque o worker escreveu no relatório o que **não** pôde
+fazer.
+
 **Portão do M3:** sessão nova, prompt frio, faz um fix — e o teste pega uma regressão plantada de propósito.
 
 ---
