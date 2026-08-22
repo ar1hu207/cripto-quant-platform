@@ -1,0 +1,18 @@
+# Dependencias de DESENVOLVIMENTO. A VM de producao instala `requirements.txt`; este
+# arquivo e o que falta para rodar a suite:
+#
+#     pip install -r requirements-dev.txt
+#     python -m pytest
+#
+# Nao entra no deploy. O `deploy/atualizar.sh` roda `py_compile` no venv de producao, nao
+# pytest -- e a suite importa `api`, `db` e `simulador`, que ja vem do requirements.txt.
+
+-r requirements.txt
+
+pytest==9.1.1
+
+# `test_auth.py` monta um `fastapi.testclient.TestClient`, e o TestClient e um wrapper de
+# httpx. O httpx nao esta no requirements.txt porque producao nao precisa dele -- so que
+# tambem nao estava declarado em lugar nenhum, entao a prova do [P0-1] dependia de uma
+# biblioteca que so existia na maquina por acaso. Fica declarada aqui.
+httpx==0.28.1
