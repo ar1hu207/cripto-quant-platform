@@ -10,12 +10,32 @@
      display e sem mono -- a hierarquia sai de peso e tamanho. Stylesheet de fonte e a unica
      excecao a regra "nada de terceiro": ela nao executa JS, entao nao e vetor para roubar a
      credencial do localStorage, que e o motivo da regra. Ver DESIGN.md > Typography. -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- A folha entra como preload e vira stylesheet no onload: é a MESMA folha, na mesma URL, com
+     a mesma prioridade de rede — só deixa de BLOQUEAR a primeira pintura. Ela custava 294 ms de
+     render-blocking, e o que ela bloqueava não era a fonte (o &display=swap já manda pintar na
+     face de fallback e trocar depois): era a página inteira esperando um round-trip a
+     fonts.googleapis.com para mostrar o fallback que ela já ia mostrar de qualquer jeito.
+     Sem <noscript>: este painel é 100% JS e sem script não há tela nenhuma para envergonhar. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" onload="this.rel='stylesheet'">
 <!-- libs servidas por nós (chart.js 4.4.1, lightweight-charts 4.1.3): sem CDN de terceiro,
-     que seria um vetor de XSS capaz de roubar a credencial guardada no localStorage. -->
-<script src="vendor/chart.umd.min.js"></script>
-<script src="vendor/lightweight-charts.standalone.production.js"></script>
+     que seria um vetor de XSS capaz de roubar a credencial guardada no localStorage.
+     Elas SAÍRAM daqui e entram sob demanda (ver carregarLib(), no fim do <body>) -- continuam
+     vindo de web/vendor/, servidas por nós; sob demanda não é CDN de terceiro. O motivo é que
+     nenhuma das duas desenha a PRIMEIRA tela e as duas eram <script src> síncronos antes de
+     existir uma linha de markup: 124 KB bloqueando a renderização, dos quais o Lighthouse
+     mediu 92,3% e 88,9% nunca executados no carregamento. -->
 <script src="config.js"></script>
+<!-- Preconnect ao backend. A primeira tela deste painel NAO é markup: é a resposta do
+     backend que abre o gate de login, e o Lighthouse mede o gate como elemento de LCP. Sem
+     esta linha o browser só descobre o host quando o primeiro fetch sai, e paga DNS + TCP +
+     TLS ali, dentro do caminho crítico — a VM fica na África do Sul, então esse round-trip
+     não é barato. É o mesmo recurso já usado para as fontes (linhas 7-8), com uma diferença
+     que importa: a origem vem do window.API_BASE em vez de literal, porque a URL do backend
+     tem um dono só e é o config.js. Repetir a URL aqui criaria a segunda cópia que
+     dessincroniza no próximo deploy. anonymous porque o fetch é CORS sem credencial de
+     navegador (a senha vai no header Authorization, não em cookie). -->
+<script>if(window.API_BASE){var _pc=document.createElement('link');
+  _pc.rel='preconnect';_pc.href=window.API_BASE;_pc.crossOrigin='';document.head.appendChild(_pc);}</script>
 <style>
   /* Tokens medidos do CoinMarketCap, tema escuro, com as quatro correcoes de contraste.
      Fonte da verdade: DESIGN.md na raiz do repositorio -- se este bloco e o DESIGN.md
@@ -127,8 +147,12 @@
   .auto-log:empty{display:none}
   .auto-warn{font-size:var(--fs-75);color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-b);
     border-radius:var(--r-sm);padding:10px 12px;margin-top:16px;line-height:1.5}
-  .auto-badge{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
-  .auto-badge.on{background:var(--pos);animation:pulse 2s infinite}
+  .auto-badge{position:relative;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
+  /* mesmo anel do .dot, mesmo motivo (ver o bloco do .dot): quem pulsa e o ::after, com
+     opacity+transform, e nao o box-shadow do proprio circulo. Fora do .on o ::after existe
+     mas fica em opacity 0, exatamente como o box-shadow ausente de antes. */
+  .auto-badge.on{background:var(--pos)}
+  .auto-badge.on::after{animation:pulse 2s infinite}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   /* prefers-reduced-motion zera animacao E shimmer. O ::after/::before precisa estar no
      seletor: o `*` sozinho nao alcanca pseudo-elemento, e o shimmer do skeleton mora num. */
@@ -192,9 +216,19 @@
   .sb-cfg{color:var(--txt3)}
   .sb-hora{margin-left:auto;color:var(--txt3);flex:none}
   #risco-guard{display:contents}
-  /* o anel do pulso e variacao de alpha DECLARADA do --pos, montada a partir de --pos-rgb */
-  .dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos);animation:pulse 1.8s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(var(--pos-rgb),.6)}70%{box-shadow:0 0 0 9px rgba(var(--pos-rgb),0)}100%{box-shadow:0 0 0 0 rgba(var(--pos-rgb),0)}}
+  /* o anel do pulso e variacao de alpha DECLARADA do --pos, montada a partir de --pos-rgb.
+     O anel vive num ::after e anima opacity+transform, que o compositor sabe fazer sozinho.
+     Antes era box-shadow no proprio .dot, e box-shadow nao e composto: cada quadro do ponto
+     "ao vivo" repintava, 1,8s em loop infinito e para sempre (non-composited-animations).
+     A geometria e a MESMA: spread de 0 -> 9px num circulo de 8px leva o diametro de 8 a 26,
+     que e escala 3,25; a tinta e rgba(--pos-rgb,.6) com opacity indo de 1 a 0, os mesmos
+     .6 -> 0 de antes. No instante 0 o anel cobre o ponto com a propria cor do ponto a 60%,
+     e rgba(--pos,.6) sobre --pos solido devolve --pos: nao ha diferenca visivel. */
+  .dot{position:relative;width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos)}
+  .dot::after,.auto-badge::after{content:'';position:absolute;inset:0;border-radius:50%;
+    background:rgba(var(--pos-rgb),.6);opacity:0;pointer-events:none}
+  .dot::after{animation:pulse 1.8s infinite}
+  @keyframes pulse{0%{transform:scale(1);opacity:1}70%{transform:scale(3.25);opacity:0}100%{transform:scale(1);opacity:0}}
   .btn-sec{background:var(--surface2);color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   .btn-danger{background:transparent;color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
   @media(hover:hover){.btn-danger:hover{color:var(--neg);border-color:var(--neg-b);filter:none}}
@@ -544,9 +578,13 @@
   .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:18px auto 20px;
     width:fit-content;font-size:var(--fs-75);font-weight:600;padding:6px 12px;
     border-radius:var(--r-pill);border:1px solid var(--line);background:var(--surface2);color:var(--txt2)}
-  .gate-status .dot{background:var(--txt2);animation:none}
+  /* o pulso agora mora no ::after (ver o bloco do .dot): quem liga e desliga o anel e o
+     pseudo-elemento, nao mais o proprio circulo. */
+  .gate-status .dot{background:var(--txt2)}
+  .gate-status .dot::after{animation:none}
   .gate-status.up{color:var(--pos);background:var(--pos-bg);border-color:var(--pos-b)}
-  .gate-status.up .dot{background:var(--pos);animation:pulse 1.8s infinite}
+  .gate-status.up .dot{background:var(--pos)}
+  .gate-status.up .dot::after{animation:pulse 1.8s infinite}
   .gate-status.down{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
   .gate-status.down .dot{background:var(--neg)}
 
@@ -786,6 +824,29 @@ const brl=v=>'R$ '+(v??0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximu
 const pct=v=>(v>=0?'+':'')+(v??0).toFixed(2)+'%';
 const num=v=>(v??0).toLocaleString('pt-BR',{maximumFractionDigits:(v!=null&&Math.abs(v)<10)?5:2});
 let chart, _sig=null, _est=null, _saidas={}, _saidasVistas={}, _precos={}, _busy=false, _modalTrigger=null;
+
+// ---- vendor sob demanda -----------------------------------------------------
+// As duas libs de gráfico saíram do <head>. Elas continuam sendo servidas por NÓS, de
+// web/vendor/ — a regra "nada de CDN de terceiro" é sobre a ORIGEM do script, não sobre o
+// momento em que ele entra, e a origem não mudou. O que mudou é que agora entram quando
+// alguém vai desenhar um gráfico, em vez de antes de existir markup.
+// Memoizado por arquivo: chamar duas vezes devolve a MESMA promessa e injeta um <script> só.
+const _libs={};
+function carregarLib(arquivo,global){
+  if(window[global]) return Promise.resolve(true);
+  if(_libs[arquivo]) return _libs[arquivo];
+  return _libs[arquivo]=new Promise(res=>{
+    const s=document.createElement('script'); s.src='vendor/'+arquivo;
+    s.onload=()=>res(!!window[global]);
+    // Falha ao baixar a lib não pode derrubar o painel: o gráfico fica de fora e o resto do
+    // terminal (tiles, tabelas, status bar, risco) segue de pé. Quem chama testa o retorno.
+    s.onerror=()=>{ _libs[arquivo]=null; res(false); };
+    document.head.appendChild(s);
+  });
+}
+const libChart=()=>carregarLib('chart.umd.min.js','Chart');
+const libTV=()=>carregarLib('lightweight-charts.standalone.production.js','LightweightCharts');
+let _tvWarm=false;   // aquecimento ocioso da lib de velas já disparado? (ver fim do carregar())
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');
   setTimeout(()=>t.classList.remove('on'),2600);}
@@ -1117,6 +1178,23 @@ function tiles(e){
   }
 }
 
+// Curva de capital. Saiu de dentro do carregar() porque o Chart.js agora entra sob demanda:
+// o ciclo dispara e segue, e a curva aparece quando a lib chega — uma vez só por sessão.
+// Duas chamadas concorrentes não criam dois Chart: libChart() devolve a mesma promessa e os
+// .then entram na fila na ordem em que foram registrados, então o segundo já vê `chart` setado.
+function desenharEquity(h){
+  libChart().then(ok=>{
+    if(!ok) return;                       // lib não veio: o resto do painel continua inteiro
+    if(!chart){const ctx=document.getElementById('chart').getContext('2d');const g=ctx.createLinearGradient(0,0,0,230);
+      // area da curva de capital: rgba(56,97,251,.28), o valor que o DESIGN.md fixa
+      g.addColorStop(0,`rgba(${ACCENT_RGB},.28)`);g.addColorStop(1,`rgba(${ACCENT_RGB},0)`);
+      chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{data:[],borderColor:TEMA.accentTxt,borderWidth:2,fill:true,backgroundColor:g,tension:.3,pointRadius:0}]},
+        options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},
+          tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:TEMA.line},ticks:{color:TEMA.txt3,callback:v=>brl(v)}}}}});}
+    chart.data.labels=h.map(x=>x.ts); chart.data.datasets[0].data=h.map(x=>x.equity_total); chart.update('none');
+  });
+}
+
 async function carregar(){
   let e; try{ e=await api('/estado'); }catch{
     document.getElementById('cfg').textContent='⚠️ backend offline — reconectando…';
@@ -1137,13 +1215,8 @@ async function carregar(){
   if(e.config) document.getElementById('cfg').textContent=`${e.config.ativos.split(',').length} ativos · ${e.config.timeframe} · paper trading · preço real`;
 
   // chart
-  if(!chart){const ctx=document.getElementById('chart').getContext('2d');const g=ctx.createLinearGradient(0,0,0,230);
-    // area da curva de capital: rgba(56,97,251,.28), o valor que o DESIGN.md fixa
-    g.addColorStop(0,`rgba(${ACCENT_RGB},.28)`);g.addColorStop(1,`rgba(${ACCENT_RGB},0)`);
-    chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{data:[],borderColor:TEMA.accentTxt,borderWidth:2,fill:true,backgroundColor:g,tension:.3,pointRadius:0}]},
-      options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},
-        tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:TEMA.line},ticks:{color:TEMA.txt3,callback:v=>brl(v)}}}}});}
-  const h=e.equity_hist||[]; chart.data.labels=h.map(x=>x.ts); chart.data.datasets[0].data=h.map(x=>x.equity_total); chart.update('none');
+  const h=e.equity_hist||[];
+  desenharEquity(h);          // sem await: a lib entra sob demanda e não segura o resto do ciclo
   sparkline(h.map(x=>x.equity_total),'spark');
   sparkline(h.map(x=>x.banca),'spark-banca',{area:false});   // discreto: so a linha
 
@@ -1251,6 +1324,13 @@ async function carregar(){
 
   renderAuto(e);
   atualizarGrafico(e);
+
+  // Aquecimento ocioso da lib de velas: só AQUI, depois que o painel já tem dado, porque é
+  // daqui pra frente que a aba Gráfico passa a ser alcançável. Fazê-lo no boot devolveria os
+  // 52 KB ao caminho crítico justamente enquanto a página espera a resposta que abre o gate.
+  if(!_tvWarm){ _tvWarm=true;
+    if(window.requestIdleCallback) requestIdleCallback(()=>libTV(),{timeout:5000});
+    else setTimeout(libTV,3000); }
 }
 
 // ---- medidor de sentimento ----
@@ -1332,14 +1412,19 @@ function aba(v){
   document.querySelectorAll('.tab').forEach(b=>{const sel=b.dataset.v===v;b.classList.toggle('on',sel);b.setAttribute('aria-pressed',sel);});
   // a marca vive na sidebar; o titulo da topbar diz onde voce esta, entao segue a vista
   const vt=document.getElementById('view-titulo'); if(vt)vt.textContent=v==='painel'?'Painel':'Gráfico';
-  if(v==='grafico'&&window.LightweightCharts){
+  // A lib de velas entra sob demanda. Ela nunca desenhou nada na aba Painel, então esperar
+  // o clique aqui é onde ela realmente faz falta. Devolve promessa porque quem chama pode
+  // precisar do _tv já montado — ver analisarSinal().
+  if(v!=='grafico') return Promise.resolve();
+  return libTV().then(ok=>{
+    if(!ok) return;
     if(!_tv)initTV();
     if(_est)prepararSelector(_est);
     if(!_tvTf)_tvTf=tfAtual(); marcarTfBtn();
     const el=document.getElementById('tvchart'); _tv.applyOptions({width:el.clientWidth,height:el.clientHeight});
     if(_tvAtivo)recarregarGrafico(_tvAtivo);
     if(_est)sidebar(_est);
-  }
+  });
 }
 function initTV(){
   const el=document.getElementById('tvchart');
@@ -1386,9 +1471,9 @@ function recarregarGrafico(ativo){
     if(_tv)_tv.timeScale().fitContent();
   });
 }
-function analisarSinal(s){
+async function analisarSinal(s){
   _analiseSig=s; _indOn=true; _tvTf=s.tf;
-  aba('grafico');                                   // garante chart + selector
+  await aba('grafico');                             // garante chart + selector (a lib entra sob demanda)
   _tvAtivo=s.ativo;                                 // foca no ativo do sinal
   const sel=document.getElementById('tv-ativo'); if(sel)sel.value=s.ativo;
   marcarTfBtn();
@@ -1692,7 +1777,14 @@ function folgaStatusBar(){ const sb=document.querySelector('.statusbar'); if(!sb
   const h=sb.offsetHeight;
   document.body.style.paddingBottom=(h+8)+'px';
   document.documentElement.style.setProperty('--sb-h',h+'px'); }
-folgaStatusBar();
+// A PRIMEIRA medida vai em requestAnimationFrame; as outras (ResizeObserver) já chegam pelo
+// caminho do próprio browser. Ler offsetHeight aqui, direto no boot, forçava o layout do
+// documento inteiro no meio do script — 82 ms medidos em produção (forced-reflow-insight) —
+// e as duas linhas que vêm logo abaixo, que disparam as requisições, só saíam depois disso.
+// O layout tem que acontecer de qualquer jeito; o que muda é a ORDEM: agora a rede começa
+// primeiro e a medida ocorre no quadro seguinte. O callback de rAF roda ANTES da pintura
+// desse quadro, então a folga já está aplicada quando a tela aparece: nada salta.
+requestAnimationFrame(folgaStatusBar);
 if(window.ResizeObserver){ const sb=document.querySelector('.statusbar');
   if(sb)new ResizeObserver(folgaStatusBar).observe(sb); }
 else window.addEventListener('resize',folgaStatusBar);
