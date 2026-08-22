@@ -14,7 +14,7 @@ import time
 from contextlib import asynccontextmanager
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -495,13 +495,24 @@ def posicoes():
     return db.listar("posicoes", 50, "WHERE status='aberta'")
 
 
+# TETO DE ITENS POR REQUISIÇÃO. Quem escolhe quanto o servidor materializa é o servidor,
+# não o cliente. `limite` chegava como inteiro livre e ia direto para o LIMIT do SQLite:
+# ?limite=100000000 traz a tabela inteira para a RAM de um host de 1 GiB — e no SQLite
+# LIMIT NEGATIVO significa SEM LIMITE, então ?limite=-1 é o mesmo DoS com menos dígitos.
+#
+# Query(ge=, le=) e não min(): capar em silêncio faz o cliente acreditar que recebeu tudo.
+# O 422 nomeia o teto para quem pediu demais, na requisição em que ele pediu.
 @app.get("/trades")
-def trades(limite: int = 50):
+def trades(limite: int = Query(50, ge=1, le=500)):
     return db.listar("trades", limite)
 
 
 @app.get("/candles")
-def candles(ativo: str = "BTC/USDT", tf: str = "15m", limite: int = 200):
+def candles(ativo: str = "BTC/USDT", tf: str = "15m",
+            limite: int = Query(200, ge=1, le=1000)):
+    # 1000 é o teto do próprio fetch_ohlcv spot: acima disso o ccxt já corta com
+    # min(limit, 1000) (ccxt/binance.py) e devolve 200 sem dizer que truncou; abaixo de 1
+    # a Binance recusa e a exceção vira 500. Os dois casos deixam de existir aqui na borda.
     raw = simulador.ex.fetch_ohlcv(ativo, timeframe=tf, limit=limite)
     return [{"time": int(c[0] // 1000), "open": c[1], "high": c[2],
              "low": c[3], "close": c[4]} for c in raw]
