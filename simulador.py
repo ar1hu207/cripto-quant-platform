@@ -22,6 +22,12 @@ _abrir_lock = threading.Lock()   # serializa aberturas concorrentes (worker + AP
 # o painel segue mostrando o último preço bom como se fosse o de agora.
 ultima_marcacao = {"ts": None, "total": 0, "ok": 0, "falhas": 0, "ultimo_erro": None}
 
+# [P2-10] Saúde da MEDIÇÃO de funding. Cumulativo de propósito — ao contrário de
+# ultima_marcacao, que zera a cada ciclo: funding é medido uma vez por FECHAMENTO, não a
+# cada ciclo. Um contador que zerasse esconderia exatamente o caso que motivou o card (o
+# geo-bloqueio 451, em que TODO fechamento falha e o painel seguiria dizendo "0 erros").
+funding_medicao = {"medidos": 0, "falhas": 0, "ultimo_erro": None, "ultimo_erro_ts": None}
+
 
 _cfg_avisado = set()      # (chave, valor) já reclamados — evita um log por poll de 3s
 
@@ -47,7 +53,13 @@ def _cfg_float(cfg, chave, padrao):
 
 def _funding_custo(ativo, aberto_em, fechado_em, direcao, nocional):
     """Funding pago (LONG) / recebido (SHORT) entre abertura e fechamento. Negativo = custo.
-    LONG paga funding>0; SHORT recebe. Conta só os settlements no intervalo (8h)."""
+    LONG paga funding>0; SHORT recebe. Conta só os settlements no intervalo (8h).
+
+    [P2-10] Devolve **None quando não foi possível MEDIR** — que não é a mesma coisa que
+    medir zero. O `except: return 0.0` de antes fundia os dois casos e gravava a falha no
+    banco como se fosse número: com o 451 em produção, todo trade saía com funding=0 e
+    ninguém tinha como saber. Quem chama decide o que fazer com o None; o que não pode é
+    o não-medido virar zero silencioso."""
     try:
         # str(pd.Timestamp.now()) é naive LOCAL; converte p/ UTC ms (= base dos ts da Binance)
         ini = int(pd.Timestamp(aberto_em).to_pydatetime().astimezone().timestamp() * 1000)
@@ -55,9 +67,14 @@ def _funding_custo(ativo, aberto_em, fechado_em, direcao, nocional):
         hist = ex_fut.fetch_funding_rate_history(ativo, since=ini, limit=500)
         soma = sum(h["fundingRate"] for h in hist if ini <= h["timestamp"] <= fim)
         d = 1 if direcao == "LONG" else -1
+        funding_medicao["medidos"] += 1
         return -d * soma * nocional
-    except Exception:
-        return 0.0
+    except Exception as e:
+        funding_medicao["falhas"] += 1
+        funding_medicao["ultimo_erro"] = f"{ativo}: {type(e).__name__}: {str(e)[:140]}"
+        funding_medicao["ultimo_erro_ts"] = str(pd.Timestamp.now())
+        log(f"funding falhou {ativo}: {type(e).__name__}: {e}", "warning")
+        return None
 
 
 def preco_ao_vivo(ativo):
@@ -204,9 +221,13 @@ def fechar(pos_id, motivo, preco_saida=None):
     fechado_em = str(pd.Timestamp.now())
     nocional = pos["valor_reais"] * pos["alavancagem"]
     funding = _funding_custo(pos["ativo"], pos["aberto_em"], fechado_em, pos["direcao"], nocional)
-    pnl += funding                                             # funding entra no P&L realizado
-    if pnl < -pos["valor_reais"]:                              # re-cap: nunca perde mais que a margem
-        pnl = -pos["valor_reais"]
+    if funding is not None:
+        pnl += funding                                         # funding entra no P&L realizado
+        if pnl < -pos["valor_reais"]:                          # re-cap: nunca perde mais que a margem
+            pnl = -pos["valor_reais"]
+    # funding None = NÃO MEDIDO. O P&L segue sem ele (não dá pra cobrar o que não se mediu),
+    # mas a coluna grava NULL, não 0.0: o portão do M2 exige número medido ou AUSENTE
+    # declarado. Zero seria a pesquisa lendo "este trade não pagou carry" — que é falso.
     risco_ini = _risco_posicao(pos["valor_reais"], pos["alavancagem"], pos["entrada"], pos["stop"])
     with db.conectar() as con:                                 # transação de escrita curta
         cur = con.execute("UPDATE posicoes SET status='fechada', preco_atual=?, pnl=? "
@@ -220,11 +241,13 @@ def fechar(pos_id, motivo, preco_saida=None):
                     (pos["ativo"], pos["direcao"], pos["entrada"], preco_saida, pos["valor_reais"],
                      pos["alavancagem"], move * pos["alavancagem"] * 100, pnl, taxa, motivo,
                      pos["aberto_em"], fechado_em, pos["conviccao"], pos["sinal_id"],
-                     pos["stop"], round(risco_ini, 4), round(funding, 4)))
+                     pos["stop"], round(risco_ini, 4),
+                     round(funding, 4) if funding is not None else None))
         banca = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
         con.execute("UPDATE banca SET atual=? WHERE id=1", (banca + pnl,))
     emoji = "💥" if motivo == "liquidacao" else ("🔴" if pnl < 0 else "🟢")
-    log(f"FECHOU #{pos_id} {pos['direcao']} {pos['ativo']} | {motivo} | P&L R$ {pnl:+.2f} (funding {funding:+.2f})")
+    f_txt = f"{funding:+.2f}" if funding is not None else "n/d"    # n/d != 0.00, no log também
+    log(f"FECHOU #{pos_id} {pos['direcao']} {pos['ativo']} | {motivo} | P&L R$ {pnl:+.2f} (funding {f_txt})")
     alertas.enviar(f"{emoji} Fechou {pos['direcao']} {pos['ativo']} ({motivo})\nP&L: R$ {pnl:+.2f}")
     return pnl
 
@@ -294,3 +317,112 @@ def _fecha_stop(pos, eventos):
     motivo = "trailing" if em_lucro else "stop"
     fechar(pos["id"], motivo, pos["stop"])
     eventos.append((pos["id"], motivo))
+
+
+# ---------------------------------------------------------------------------
+def _prova_funding():
+    """Prova de regressão do [P2-10]: sinal do funding (LONG paga × SHORT recebe), janela
+    de settlements, e — o que o card existe para consertar — falha de medição que NÃO vira
+    zero. Sem rede e sem banco de produção.
+
+        python simulador.py
+
+    Mora dentro do módulo, e não num arquivo próprio, por uma razão de processo, não de
+    desenho: a onda 1 do M2 fechou o território T-EXEC em simulador.py + validacao.py, e
+    criar prova_funding.py reprovaria no portão de fronteira (§9.4/P2) mesmo com o código
+    certo. Quando o P2-6 (pytest) abrir, isto é o ponto de partida para migrar."""
+    global ex_fut
+    import os, tempfile
+    falhas = []
+
+    def check(nome, cond, detalhe=""):
+        print(("  PASSA  " if cond else "  FALHA  ") + nome + ("" if cond else f"  <- {detalhe}"))
+        if not cond:
+            falhas.append(nome)
+
+    def ms(txt):   # mesma conversão naive-local -> UTC ms que _funding_custo faz
+        return int(pd.Timestamp(txt).to_pydatetime().astimezone().timestamp() * 1000)
+
+    class ExFake:
+        def __init__(self, hist):
+            self.hist = hist
+
+        def fetch_funding_rate_history(self, ativo, since=None, limit=None):
+            return self.hist
+
+    class ExJanela:
+        """1 settlement logo depois do início da janela — independe da data de hoje."""
+        def fetch_funding_rate_history(self, ativo, since=None, limit=None):
+            return [{"timestamp": since + 1, "fundingRate": 0.0001}]
+
+    class ExQuebrado:
+        def fetch_funding_rate_history(self, *a, **k):
+            raise RuntimeError("HTTP 451 — servico indisponivel por restricao geografica")
+
+    original, db_original = ex_fut, db.DB
+    ab, fe, nocional = "2026-08-22 00:00:00", "2026-08-22 23:59:59", 1000.0
+    try:
+        # --- sinal e janela: 3 settlements DENTRO da janela + 1 fora (não pode contar)
+        ex_fut = ExFake([{"timestamp": ms("2026-08-22 04:00:00"), "fundingRate": 0.0001},
+                         {"timestamp": ms("2026-08-22 12:00:00"), "fundingRate": 0.0001},
+                         {"timestamp": ms("2026-08-22 20:00:00"), "fundingRate": 0.0001},
+                         {"timestamp": ms("2026-08-23 04:00:00"), "fundingRate": 0.0001}])
+        f_long = _funding_custo("BTC/USDT", ab, fe, "LONG", nocional)
+        f_short = _funding_custo("BTC/USDT", ab, fe, "SHORT", nocional)
+        check("LONG paga funding>0 (custo, negativo)", f_long is not None and f_long < 0, repr(f_long))
+        check("SHORT recebe funding>0 (crédito, positivo)", f_short is not None and f_short > 0, repr(f_short))
+        check("LONG e SHORT são simétricos", abs(f_long + f_short) < 1e-12, f"{f_long} vs {f_short}")
+        check("conta só os settlements DENTRO da janela", abs(f_long - (-0.30)) < 1e-9,
+              f"{f_long} — com o 4o settlement (fora da janela) daria -0.40")
+
+        # --- medir zero continua sendo zero: history vazio é MEDIÇÃO, não falha
+        ex_fut = ExFake([])
+        antes = dict(funding_medicao)
+        z = _funding_custo("BTC/USDT", ab, fe, "LONG", nocional)
+        check("history vazio = medição de zero, devolve 0.0", z == 0.0, repr(z))
+        check("medição de zero não conta como falha", funding_medicao["falhas"] == antes["falhas"])
+
+        # --- o card: falha de rede NÃO É ZERO
+        ex_fut = ExQuebrado()
+        antes = dict(funding_medicao)
+        r = _funding_custo("BTC/USDT", ab, fe, "LONG", nocional)
+        check("falha de medição devolve None, não 0.0", r is None, repr(r))
+        check("falha incrementa o contador de falhas",
+              funding_medicao["falhas"] == antes["falhas"] + 1, str(funding_medicao))
+        check("falha registra o motivo (não só o fato)",
+              "451" in (funding_medicao["ultimo_erro"] or ""), repr(funding_medicao["ultimo_erro"]))
+
+        # --- persistência: é aqui que o zero falso entrava no histórico de pesquisa
+        db.DB = os.path.join(tempfile.mkdtemp(), "prova_funding.db")   # nunca o banco real
+        db.init_db()
+
+        def _fecha_com(ex, direcao="LONG"):
+            global ex_fut
+            with db.conectar() as c:
+                c.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,stop,"
+                          "preco_atual,pnl,aberto_em,status) VALUES('BTC/USDT',?,100,50,2,95,100,0,?,'aberta')",
+                          (direcao, str(pd.Timestamp.now() - pd.Timedelta(hours=9))))
+                pid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            ex_fut = ex
+            fechar(pid, "prova", 101.0)                                # preço explícito: sem rede
+            with db.conectar() as c:
+                return c.execute("SELECT funding FROM trades WHERE id=(SELECT MAX(id) FROM trades)").fetchone()[0]
+
+        nao_medido = _fecha_com(ExQuebrado())
+        check("funding não medido grava NULL (ausente, não zero)", nao_medido is None, repr(nao_medido))
+        medido = _fecha_com(ExJanela())      # 1 settlement × 0,0001 × (50×2) = 0,01 pago
+        check("funding medido grava o valor com o sinal certo (LONG paga)",
+              medido is not None and abs(medido - (-0.01)) < 1e-9, repr(medido))
+    finally:
+        ex_fut, db.DB = original, db_original      # nada do teste sobrevive à função
+    print(f"\n  {len(falhas)} falharam")
+    return 1 if falhas else 0
+
+
+if __name__ == "__main__":
+    import sys
+    try:                                   # console do Windows em cp1252 mutila o acento
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    sys.exit(_prova_funding())
