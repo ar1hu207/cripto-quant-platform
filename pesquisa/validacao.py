@@ -24,7 +24,10 @@ para BAIXO (DSR sobre ~900 observacoes diarias em vez de 370 trades pseudo-indep
 por blocos em vez de iid, n_trials 30 -> 100). Se o numero piorar, e o instrumento
 funcionando.
 
-Rodar (da RAIZ do repo):  python -m pesquisa.validacao
+Rodar (da RAIZ do repo):
+
+    python -m pesquisa.validacao              # a politica A + o contraste de funding [P2-10]
+    python -m pesquisa.validacao politicas    # A x B x C na mesma regua [P1-10]
 
 ---
 De onde vem cada decisao. `ITEM1-VALIDACAO-RIGOROSA.md` (a proposta, jul/2026) e
@@ -1151,43 +1154,73 @@ def _chave(g):
     return (g["min_conv"], g["adx_min"])
 
 
-def gerador_tendencia(dfs, estrategia, funding_8h):
+def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
     """Fabrica um `gerar_trades(cfg)` causal para a estrategia da plataforma.
 
     Causal por construcao: `backtest_ativo` pontua no candle FECHADO i e executa no open de
     i+1, e os canais usam `.shift(1)` -- nada olha para a frente. E o que autoriza gerar a
     timeline inteira uma vez e fatiar depois.
+
+    `saida_kw` [P1-10] escolhe a POLITICA DE SAIDA (`saida`, `trailing_dist`,
+    `trailing_k_atr`). Ele nao toca em nada da entrada: os portoes de conviccao, ADX e
+    n_fatores continuam os mesmos nas tres politicas, que e o que mantem a comparacao com um
+    fator so.
     """
+    kw = dict(saida_kw or {})
+
     def gerar(cfg):
         mc, ax = cfg
         tr = []
         for c in COINS:
             try:
                 tr += backtest_ativo(c, mc, VALOR, LEV, estrategia=estrategia, df=dfs[c],
-                                     adx_min=ax, funding_8h=funding_8h)
+                                     adx_min=ax, funding_8h=funding_8h, **kw)
             except Exception:
                 pass
         return tr
     return gerar
 
 
-def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_contraste=True):
+# [P1-10] As politicas que o card manda comparar, na mesma regua e nas mesmas janelas.
+#
+# A e a do backtest e NUNCA rodou ao vivo. B e o que gerou o historico local
+# (`auto_fechar_saida=1` com `trailing_ativo=0`). C e o default de HOJE (`db.py:95-96`), e a
+# quarta linha e o item 3 do card: a mesma politica C com a distancia em unidade de ATR, para
+# que a saida deixe de ser cega a volatilidade do ativo e a alavancagem.
+POLITICAS_M4 = (
+    ("A stop+flip de regime", {"saida": "regime"}),
+    ("B auto-saida", {"saida": "auto"}),
+    ("C trailing 2% fixo", {"saida": "trailing", "trailing_dist": 0.02}),
+    ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0}),
+)
+
+
+def baixar_paineis():
+    """As 12 moedas, preparadas uma vez. Separado porque a comparacao de politicas roda quatro
+    walk-forwards sobre EXATAMENTE os mesmos dados -- baixar de novo por politica nao seria so
+    lento, seria outra janela se a rodada virasse o dia."""
+    print(f"baixando {len(COINS)} moedas ({TF}, {DIAS}d)...", flush=True)
+    return {c: scoring.preparar(dados.baixar_ohlcv(c, TF, dias=DIAS)) for c in COINS}
+
+
+def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_contraste=True,
+                           saida_kw=None, dfs=None, rotulo_extra=""):
     """Roda a regua na estrategia da plataforma e imprime. Mantem `python -m pesquisa.validacao`
     fazendo o que fazia -- so que sob o instrumento novo."""
-    print(f"baixando {len(COINS)} moedas ({TF}, {DIAS}d)...", flush=True)
-    dfs = {c: scoring.preparar(dados.baixar_ohlcv(c, TF, dias=DIAS)) for c in COINS}
+    dfs = dfs if dfs is not None else baixar_paineis()
     grid = [_chave(g) for g in GRID]
+    rot = f"{estrategia} | {TF} {DIAS}d | {LEV}x{rotulo_extra}"
 
     print(f"rodando {len(grid)} configs x {len(COINS)} moedas...", flush=True)
-    res = walk_forward(gerador_tendencia(dfs, estrategia, funding_8h), grid,
-                       n_trials=N_TRIALS, rotulo=f"{estrategia} | {TF} {DIAS}d | {LEV}x")
+    res = walk_forward(gerador_tendencia(dfs, estrategia, funding_8h, saida_kw), grid,
+                       n_trials=N_TRIALS, rotulo=rot)
     relatorio(res)
 
     if com_contraste and funding_8h:
         # [P2-10] MESMO walk-forward com funding zerado -- que e o que este script media antes,
         # por usar o default do backtest_ativo. A diferenca e o carry que a pesquisa nao pagava.
         print("\nrodando o contraste sem funding...", flush=True)
-        r0 = walk_forward(gerador_tendencia(dfs, estrategia, 0.0), grid,
+        r0 = walk_forward(gerador_tendencia(dfs, estrategia, 0.0, saida_kw), grid,
                           n_trials=N_TRIALS, rotulo="funding 0")
         p1 = sum(t["pnl"] for t in res["oos"])
         p0 = sum(t["pnl"] for t in r0["oos"])
@@ -1197,6 +1230,63 @@ def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_co
               f"{funding_8h * 100:.4f}%/8h  x  R${p0:+.0f} com funding 0")
         print(f"  -> efeito do carry no P&L OOS: R${p1 - p0:+.0f} -- {lado}.")
     return res
+
+
+def comparar_politicas(politicas=POLITICAS_M4, funding_8h=FUNDING_8H, dfs=None):
+    """[P1-10] A x B x C na MESMA regua, nas MESMAS janelas, sobre os MESMOS dados.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao politicas
+
+    O contraste de funding do [P2-10] fica FORA daqui de proposito: ele dobra o tempo de cada
+    politica e mede outra coisa (o carry), que ja esta registrado para a politica A. Aqui o
+    unico fator que varia e a saida.
+
+    A tabela final e comparativa; o veredito de cada politica sai do relatorio dela, sob o
+    `PADRAO` travado. Nao existe "a melhor politica pelo P&L": P&L nao e criterio nesta casa
+    ([F3]) e a coluna esta na tabela como diagnostico, ao lado do que decide.
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+    fora = []
+    for nome, kw in politicas:
+        print(f"\n{'=' * 78}\nPOLITICA: {nome}   {kw}\n{'=' * 78}", flush=True)
+        r = walk_forward_tendencia(funding_8h=funding_8h, com_contraste=False,
+                                   saida_kw=kw, dfs=dfs, rotulo_extra=f" | saida: {nome}")
+        fora.append((nome, kw, r))
+    relatorio_politicas(fora)
+    return fora
+
+
+def relatorio_politicas(resultados):
+    """A tabela que o `VEREDITO-M4.md` cola. Uma linha por politica, o veredito na ultima
+    coluna -- porque tabela sem veredito nao e resposta ([P1-10], criterio de aceite 4)."""
+    print(f"\n{'=' * 110}")
+    print("COMPARACAO DE POLITICAS DE SAIDA -- mesma regua, mesmas janelas, mesmos dados "
+          "[P1-10]")
+    print("=" * 110)
+    print(f"{'politica':<24}{'trades':>7}{'win%':>7}{'PnL OOS':>10}{'Sharpe an.':>11}"
+          f"{'IC95% Sharpe':>22}{'DSR':>8}{'MDS':>7}  veredito")
+    for nome, _kw, r in resultados:
+        if "erro" in r:
+            print(f"{nome:<24}{'--':>7}  {r['erro']}")
+            continue
+        b, a = r["bloco_b"], r["bloco_a"]
+        so = stats([t["pnl"] for t in r["oos"]])
+        piso = " (piso)" if b.get("mds_piso") else ""
+        print(f"{nome:<24}{so['n']:>7}{so['win']:>7.1f}{so['pnl']:>+10.0f}"
+              f"{str(b['sharpe_anualizado']):>11}{str(b['ic_sharpe_anualizado']):>22}"
+              f"{a['dsr_melhor_is']['dsr']:>8}{b['mds']:>7}{piso}  {r['veredito']['classe']}")
+    print("\nmotivos de saida por politica (o que de fato fechou os trades):")
+    for nome, _kw, r in resultados:
+        if "erro" in r:
+            continue
+        conta = {}
+        for t in r["oos"]:
+            conta[t["motivo"]] = conta.get(t["motivo"], 0) + 1
+        linha = " | ".join(f"{k}: {v}" for k, v in sorted(conta.items(), key=lambda x: -x[1]))
+        print(f"   {nome:<24} {linha}")
+    print("\nO P&L esta na tabela como DIAGNOSTICO. O que decide e o veredito da ultima "
+          "coluna,\nemitido sob o PADRAO travado -- soma bruta de P&L favorece quem mais "
+          "opera [F3].")
 
 
 # ============================ relatorio ============================
@@ -1309,7 +1399,9 @@ def relatorio(res):
         ne = v.get("nao_exclui")
         if ne and ne[1] is not None:
             print(f"   IC95% do Sharpe anualizado: [{ne[0]} ; {ne[1]}].")
-            print(f"   O teste NAO exclui edges de Sharpe ate {ne[1]} -- MDS = {v['mds']}. "
+            piso = v.get("mds_piso")
+            print(f"   O teste NAO exclui edges de Sharpe ate {ne[1]} -- MDS = {v['mds']}"
+                  f"{f' (PISO; com o alfa efetivo medido, {piso})' if piso else ''}. "
                   f"Ausencia de evidencia nao e evidencia de ausencia. [F7]")
 
 
@@ -1366,6 +1458,9 @@ def relatorio_sensibilidade(sens):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "politicas":
+        comparar_politicas()                          # [P1-10] A x B x C, mesma regua
+        sys.exit(0)
     r = walk_forward_tendencia("tendencia")
     if "erro" not in r:
         relatorio_sensibilidade(sensibilidade(r))

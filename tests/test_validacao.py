@@ -928,3 +928,230 @@ def test_m_calibracao_menor_alarga_a_banda_em_vez_de_desligar_a_guarda():
     assinatura = inspect.signature(V.walk_forward).parameters
     assert "m_calibracao" in assinatura
     assert not any(n.startswith("sem_") or n == "calibrar" for n in assinatura)
+
+
+# ================= as politicas de saida A x B x C [P1-10] =================
+# O veredito central do projeto mediu a politica A -- stop 3xATR ou flip de regime -- e o
+# sistema ao vivo NUNCA operou A. Estas provas fixam, com trajetoria conhecida, o que cada
+# politica fecha e quando. Rodam offline pelo `sinal_fn`.
+def df_com_indicadores(closes, highs=None, lows=None, rsi=None, ema_r=None, ema_l=None,
+                       atr=None, tf_ms=TF_MS):
+    """`df_sintetico` mais as colunas que a politica B (gestor de saida) e o trailing em ATR
+    consomem. Sem valor passado, os indicadores ficam neutros: nao disparam nada."""
+    df = df_sintetico(closes, highs=highs, lows=lows, tf_ms=tf_ms)
+    n = len(closes)
+    df["rsi"] = list(rsi) if rsi is not None else [50.0] * n
+    df["ema_r"] = list(ema_r) if ema_r is not None else list(closes)
+    df["ema_l"] = list(ema_l) if ema_l is not None else list(closes)
+    df["atr"] = list(atr) if atr is not None else [1.0] * n
+    return df
+
+
+def _um_trade(df, saida, **kw):
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                          saida=saida, **kw)
+    assert len(tr) == 1, (saida, tr)
+    return tr[0]
+
+
+def test_politica_invalida_recusa_em_vez_de_cair_no_default():
+    """Errar o nome da politica nao pode virar 'rodou a A e ninguem viu' -- num card cujo
+    produto e a COMPARACAO entre as tres, isso e o pior modo de falha possivel."""
+    with pytest.raises(ValueError, match="saida deve ser"):
+        B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores([100.0] * 70),
+                         sinal_fn=sinal_em([60]), saida="trailling")
+
+
+def test_A_fecha_no_flip_de_regime_e_B_e_C_nao_herdam_esse_flip():
+    """O flip de regime NAO existe no sistema vivo: nada em `simulador.atualizar()` nem em
+    `autotrader.auto_executar()` fecha por inversao do scoring. Herda-lo em B e C faria as
+    tres politicas compartilharem uma saida que so a A tem, e a comparacao mediria menos
+    diferenca do que existe."""
+    df = df_com_indicadores([100.0] * 70)
+
+    def fn(_df, i):
+        if i in (60, 64):
+            return {"direcao": 1 if i == 60 else -1, "conviccao": 99.0, "adx": 40.0,
+                    "n_fatores": 3, "stop_dist": 0.03, "tipo": "tendencia"}
+        return None
+
+    a = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="regime")
+    assert [t["motivo"] for t in a] == ["regime"]
+    for pol in ("auto", "trailing"):
+        assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida=pol) == []
+
+
+def test_C_trailing_sobe_o_stop_atras_do_preco_e_fecha_EM_LUCRO():
+    """A trajetoria: sobe 6% e volta. Com A o stop fixo de 3% nunca e tocado e a posicao
+    segue aberta; com C o stop subiu para 4% acima da entrada (pico 6% menos 2%) e a queda o
+    encontra -- fechando com LUCRO, e com o motivo `trailing`, que e o mesmo nome que
+    `simulador._fecha_stop` grava no banco vivo."""
+    precos = [100.0] * 62 + [106.0] * 3 + [100.5] * 5
+    highs = list(precos)
+    lows = list(precos)
+    lows[65] = 100.5                                    # a volta acontece no candle 65
+    df = df_com_indicadores(precos, highs=highs, lows=lows)
+
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                            saida="regime") == []       # A: stop fixo de 3% nao e tocado
+    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    assert t["motivo"] == "trailing"
+    assert t["pnl"] > 0
+    assert t["ts_saida"] == T0 + 65 * TF_MS + TF_MS
+
+
+def test_C_so_arma_o_trailing_depois_do_lucro_passar_da_distancia():
+    """Paridade com `simulador._marcar_uma`: o stop so comeca a subir depois de o preco passar
+    de `entrada*(1+trailing_dist)`. Subida de 1% com trailing de 2% nao arma nada, e o stop
+    continua sendo o de 3xATR da entrada -- ou seja, o trade fecha em PERDA, nao em lucro."""
+    precos = [100.0] * 62 + [101.0] * 3 + [96.0] * 5
+    lows = list(precos)
+    lows[65] = 96.0
+    df = df_com_indicadores(precos, lows=lows)
+    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    assert t["motivo"] == "stop"                        # nunca armou: e o stop de entrada
+    assert t["pnl"] < 0
+
+
+def test_C_o_stop_do_trailing_so_se_move_para_o_candle_SEGUINTE():
+    """A ordem dentro do candle e decisao, nao detalhe. Subir o stop com o topo do candle e so
+    entao perguntar se o fundo do MESMO candle o furou supoe que o topo veio antes -- o OHLC
+    nao diz isso. Aqui topo e fundo estao no mesmo candle: o trailing NAO fecha nele.
+
+    O efeito e conservador: C trava menos lucro do que o vivo, que faz poll a cada 15 s."""
+    precos = [100.0] * 63 + [106.0] * 7
+    highs = list(precos)
+    lows = list(precos)
+    highs[63] = 108.0                                   # topo e fundo no MESMO candle
+    lows[63] = 100.0                                    # o fundo furaria o stop pos-trailing
+    df = df_com_indicadores(precos, highs=highs, lows=lows)
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                          saida="trailing", trailing_dist=0.02)
+    assert tr == []                                     # nao fechou dentro do candle do pico
+    # ...mas o stop ficou armado em 108*0,98 = 105,84, e o candle SEGUINTE o encontra
+    lows2 = list(lows)
+    lows2[64] = 100.0
+    df2 = df_com_indicadores(precos, highs=highs, lows=lows2)
+    t = _um_trade(df2, "trailing", trailing_dist=0.02)
+    assert t["motivo"] == "trailing" and t["pnl"] > 0
+    assert t["ts_saida"] == T0 + 64 * TF_MS + TF_MS
+
+
+def test_C_em_k_ATR_e_o_item_3_do_card_distancia_em_unidade_do_ATR():
+    """`trailing_dist=2%` e fixo em espaco-preco: cego ao ATR (a entrada usa stop 3xATR e a
+    saida ignora a volatilidade do ativo) e cego a alavancagem (2% de preco = 4% de ROE a 2x,
+    40% a 20x). Com `trailing_k_atr=k` a distancia vira k*ATR/preco, medida NA ENTRADA.
+
+    Aqui o ATR e 5 no candle da entrada: k=1 da 5% de distancia, mais larga que os 2% fixos --
+    entao o mesmo repique que fechava a de 2% NAO fecha a de k*ATR."""
+    precos = [100.0] * 62 + [106.0] * 3 + [102.5] * 5
+    lows = list(precos)
+    lows[65] = 102.5
+    df = df_com_indicadores(precos, lows=lows, atr=[5.0] * len(precos))
+    t2 = _um_trade(df, "trailing", trailing_dist=0.02)
+    assert t2["motivo"] == "trailing"                   # 2%: stop em 106*0,98 = 103,88 -> bate
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                            saida="trailing", trailing_k_atr=1.0) == []   # 5%: 100,7 -> nao bate
+
+
+def test_B_fecha_em_reversao_COM_lucro_e_nao_fecha_sem_lucro():
+    """Paridade com `autotrader.auto_executar` passo 1: fecha quando o gestor de saida devolve
+    nivel 'forte' ou 'lucro', que e reversao COM ROE acima de 1%. Sem lucro o nivel vira
+    'risco' e o bot ao vivo NAO fecha -- so avisa."""
+    n = 70
+    rsi = [50.0] * n
+    rsi[63], rsi[64] = 70.0, 65.0                       # RSI revertendo do topo no candle 64
+
+    com_lucro = [100.0] * 62 + [101.0] * 8              # +1% de preco = +10% de ROE a 10x
+    t = _um_trade(df_com_indicadores(com_lucro, rsi=rsi), "auto")
+    assert t["motivo"] == "auto-saida" and t["pnl"] > 0
+    assert t["ts_saida"] == T0 + 64 * TF_MS + TF_MS
+
+    sem_lucro = [100.0] * 62 + [99.9] * 8               # ROE negativo: nivel 'risco', nao fecha
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores(sem_lucro, rsi=rsi),
+                            sinal_fn=sinal_em([60]), saida="auto") == []
+
+
+def test_B_reconhece_os_tres_gatilhos_do_gestor_de_saida_ao_vivo():
+    """Os mesmos tres de `signal_engine.py:133-146`, um a um. O quarto -- fluxo do book -- nao
+    existe em historico OHLCV; ele so ACRESCENTA motivos, entao B aqui fecha MENOS que a viva
+    e fica mais perto de A do que a de verdade. O vies e contra a diferenca entre politicas,
+    que e contra o proprio achado deste card."""
+    n = 70
+    base = [100.0] * 62 + [101.0] * 2 + [100.9] * 6      # +0,9% no fim = ROE ~ +8% a 10x
+    neutro = df_com_indicadores(base)
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=neutro, sinal_fn=sinal_em([60]),
+                            saida="auto") == []          # nenhum gatilho: nao fecha
+
+    rsi = [50.0] * n
+    rsi[63], rsi[64] = 70.0, 65.0
+    assert _um_trade(df_com_indicadores(base, rsi=rsi), "auto")["motivo"] == "auto-saida"
+
+    ema_r = list(base)
+    ema_r[64] = 100.95                                   # close cruza a EMA20 para BAIXO
+    assert _um_trade(df_com_indicadores(base, ema_r=ema_r), "auto")["motivo"] == "auto-saida"
+
+    ema_l = list(base)
+    ema_l[64] = 110.0                                    # ema_r < ema_l: tendencia virou
+    assert _um_trade(df_com_indicadores(base, ema_l=ema_l), "auto")["motivo"] == "auto-saida"
+
+
+def test_B_no_warmup_do_indicador_nao_fecha_igual_ao_vivo():
+    """`avaliar_saida` devolve None quando RSI/EMA sao NaN, e o auto-trader nao fecha nada.
+    Aqui o mesmo: NaN nao pode virar 'sem sinal de reversao' por acidente nem gatilho por
+    comparacao com NaN."""
+    n = 70
+    base = [100.0] * 62 + [101.0] * 8
+    rsi = [float("nan")] * n
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores(base, rsi=rsi),
+                            sinal_fn=sinal_em([60]), saida="auto") == []
+
+
+def test_as_tres_politicas_dao_saidas_DIFERENTES_na_mesma_trajetoria():
+    """O que a comparacao A x B x C precisa que seja verdade para significar alguma coisa: na
+    MESMA trajetoria e com o MESMO sinal de entrada, as tres fecham em candles diferentes, por
+    motivos diferentes e com P&L diferente."""
+    n = 74
+    precos = [100.0] * 62 + [106.0] * 3 + [101.0] * 9
+    lows = list(precos)
+    lows[65] = 101.0
+    rsi = [50.0] * n
+    rsi[63], rsi[64] = 70.0, 65.0                       # reversao do topo no 64 -> B fecha ali
+
+    def fn(_df, i):
+        if i in (60, 68):
+            return {"direcao": 1 if i == 60 else -1, "conviccao": 99.0, "adx": 40.0,
+                    "n_fatores": 3, "stop_dist": 0.03, "tipo": "tendencia"}
+        return None
+
+    df = df_com_indicadores(precos, lows=lows, rsi=rsi)
+    saidas = {}
+    for pol in B.POLITICAS:
+        tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida=pol)
+        assert len(tr) == 1, (pol, tr)
+        saidas[pol] = (tr[0]["motivo"], tr[0]["ts_saida"], round(tr[0]["pnl"], 4))
+    assert saidas["auto"][1] < saidas["trailing"][1] < saidas["regime"][1]
+    assert len({m for m, _, _ in saidas.values()}) == 3
+    assert len({p for _, _, p in saidas.values()}) == 3
+
+
+def test_o_ROE_da_politica_B_e_a_conta_do_simulador_inclusive_o_teto_na_margem():
+    """`_roe` tem de ser a MESMA conta de `simulador._pnl` -- alavancada, com as duas pernas de
+    taxa sobre o nocional de entrada e a perda travada na margem. Se divergisse, B fecharia em
+    ROE que o vivo nao reconheceria."""
+    pos = {"d": 1, "e": 100.0}
+    assert B._roe(pos, 101.0, 100, 10, 0.0) == pytest.approx(10.0)
+    assert B._roe(pos, 101.0, 100, 10, 0.0005) == pytest.approx(10.0 - 1.0)
+    assert B._roe(pos, 50.0, 100, 10, 0.0) == pytest.approx(-100.0)      # teto na margem
+    assert B._roe({"d": -1, "e": 100.0}, 99.0, 100, 10, 0.0) == pytest.approx(10.0)
+
+
+def test_a_politica_nao_muda_a_paridade_de_entrada():
+    """Os portoes de entrada sao os mesmos nas tres: conviccao, ADX e n_fatores. A politica
+    escolhe COMO se sai, nunca QUANDO se entra -- se mudasse, a comparacao teria dois fatores
+    e nenhum deles ficaria isolado."""
+    df = df_com_indicadores([100.0] * 70)
+    fraco = lambda _df, i: (sinal_em([60], adx=10.0)(_df, i))
+    for pol in B.POLITICAS:
+        assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fraco,
+                                saida=pol, adx_min=25) == []
