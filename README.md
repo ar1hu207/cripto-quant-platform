@@ -52,7 +52,7 @@ depende de qual destas você está tocando:
 | Onde | O que é | Regra |
 |---|---|---|
 | **raiz** (`*.py`) | **plataforma viva** — os 11 módulos que o `api.py` alcança, mais as provas que se rodam por `python <arquivo>` | é o que roda na VM; o `deploy/cripto-bot.service` sobe `uvicorn api:app` daqui, e por isso a plataforma **não** sai da raiz |
-| **`pesquisa/`** | **pesquisa viva** — a régua que mede estratégia (`validacao`, `backtest_plataforma`, `tune`, `dados`, `validar_*`) | pacote Python; roda por `python -m pesquisa.<modulo>` **da raiz**. Não é código de produção |
+| **`pesquisa/`** | **pesquisa viva** — a régua que mede estratégia (`validacao`, `backtest_plataforma`, `dados`) | pacote Python; roda por `python -m pesquisa.<modulo>` **da raiz**. Não é código de produção. `tune` e os `validar_*` saíram daqui no `[Q-2]` — emitiam veredito de edge por metodologia superada |
 | **`legado/`** | fases 1-2 — motor próprio, `estrategias/`, `config.py`, scripts de varredura | **nada ali é importado pela plataforma, e nada ali roda mais onde está.** Leia o [`legado/README.md`](legado/README.md) antes de mexer |
 | **`tests/`** | a suíte do `pytest` | ver *Testes*, abaixo |
 | **`web/`** | front estático (Vercel) | merge na `main` **é** a publicação |

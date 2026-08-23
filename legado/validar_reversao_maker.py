@@ -1,10 +1,37 @@
 """
+LEGADO -- metodologia superada. O "<- ROBUSTO" abaixo e falso. [Q-2]
+
+Split-por-moedas no MESMO periodo, agora com matriz maker/taker x 15m/1h -- o vicio nao
+muda com o custo: cripto e correlacionada e o corte era escolhido olhando o OOS.
+"Positivo nos dois conjuntos" mede sorte correlacionada, nao edge. O caminho honesto e
+`python -m pesquisa.validacao`. Nada aqui roda onde esta -- ver `legado/README.md`.
+
+---
+Docstring original, preservado:
+
 Teste decisivo da reversão: ela perde com taker 0,05%/lado no 15m. Será que MAKER
 (ordem limite, ~0,02%/lado) e/ou TIMEFRAME maior (1h, movimentos maiores diluem a
 taxa) salvam? Matriz 15m/1h × maker/taker, in-sample vs OUT-OF-SAMPLE.
 
 Rodar (da RAIZ do repo):  python -m pesquisa.validar_reversao_maker
 """
+
+# [Q-2] A recusa abaixo e DECLARADA, nao acidental -- e por isso ela existe.
+# Os outros modulos de `legado/` nao rodam porque o [P2-16] quebrou `import dados` /
+# `import config` ao mover a pesquisa: e efeito colateral, nao garantia. Estes cinco
+# continuavam executaveis por `python -m legado.<modulo>` da raiz, porque `legado/` vira
+# namespace package e a raiz esta no sys.path, entao `import pesquisa` resolve. Um script
+# que ainda imprime veredito de edge nao passa a nao imprimir so por mudar de pasta.
+# Apagar o codigo abaixo tambem resolveria, e perderia o que ele ensina: o `n_trials`
+# da regua nova conta estas varreduras como tentativas gastas.
+raise SystemExit(
+    """LEGADO [Q-2]: aposentado. Este script imprime '<- ROBUSTO' a partir de split-por-moedas
+    no MESMO periodo,
+    e isso nao separa edge de sorte -- a config e escolhida no mesmo dado em que e medida.
+    O veredito honesto do projeto sai de:  python -m pesquisa.validacao
+    A versao que rodava esta no git:       git show 0fcf127:pesquisa/validar_reversao_maker.py"""
+)
+
 import sys
 try:
     sys.stdout.reconfigure(encoding="utf-8")

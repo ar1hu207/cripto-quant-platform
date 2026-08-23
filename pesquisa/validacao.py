@@ -2,7 +2,8 @@
 Validação RIGOROSA (Onda 3): WALK-FORWARD (treina no passado, testa no FUTURO não-visto)
 + Deflated Sharpe Ratio (corrige data-snooping/multiple-testing) + bootstrap CI.
 
-Por que: o split-por-moedas no MESMO período (validar_reversao*.py) não é honesto —
+Por que: o split-por-moedas no MESMO período (`legado/validar_reversao*.py`, aposentados
+pelo [Q-2] justamente por isto) não é honesto —
 cripto é correlacionada e o corte era escolhido olhando o OOS. Aqui os parâmetros são
 escolhidos SÓ no treino (passado) e avaliados no teste (futuro), nunca peeking. Separa
 'tem edge' de 'teve sorte / overfit'.

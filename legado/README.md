@@ -24,6 +24,48 @@ significaria dar manutenção a um trilho que o projeto já concluiu que não te
 git show 5383394:monte_carlo.py > /tmp/monte_carlo.py   # a versão que rodava, na raiz antiga
 ```
 
+⚠️ **Mas essa segunda declaração é acidente, não garantia — e o `[Q-2]` descobriu isso na
+prática.** Os módulos do `[P2-16]` não rodam porque um `import` quebrou, não porque estejam
+neste diretório. `legado/` não tem `__init__.py`, então ele vira *namespace package* e
+`python -m legado.<modulo>` **da raiz** funciona: a raiz está no `sys.path`, `import pesquisa`
+resolve, e o módulo executa. Foi exatamente o que aconteceu com os cinco do `[Q-2]` logo
+depois do `git mv` — `python -m legado.tune` imprimiu a varredura inteira. Por isso os cinco
+levaram uma recusa **escrita** (`raise SystemExit` com o motivo e o `git show` da versão que
+rodava), em vez de depender de um import quebrar por sorte.
+
+## Os cinco do `[Q-2]` — vereditos de edge por metodologia superada
+
+Chegaram em 2026-08-23, vindos de `pesquisa/`. O que eles têm em comum não é a idade: é que os
+cinco **imprimiam veredito de edge** (`POSITIVO`, `ROBUSTO`, `edge ROBUSTO ✅`) por uma
+metodologia que o próprio `pesquisa/validacao.py` já declarava desonesta no docstring dele.
+
+| Arquivo | O veredito que imprimia | O vício |
+|---|---|---|
+| `tune.py` | `<<< POSITIVO`, `MELHORES CONFIGS (positivas)` | varre TF × lev × corte no período **inteiro** caçando P&L positivo — escolher a config no mesmo dado em que ela é medida |
+| `validar_oos.py` | `>>> POSITIVO → edge ROBUSTO (não foi só sorte) ✅` | "moedas novas" no **mesmo período**: cripto é correlacionada, então as novas andam com as antigas |
+| `validar_reversao.py` | `<- ROBUSTO` | split-por-moedas no mesmo período, corte escolhido olhando o OOS |
+| `validar_reversao_maker.py` | `<- ROBUSTO` | idem, com matriz maker/taker × 15m/1h — o custo muda, o vício não |
+| `validar_swing.py` | `ROBUSTO ✅` | idem; o docstring dele já dizia *"acha o melhor corte ROBUSTO (positivo nos dois) pra virar o default"*, que é escolher parâmetro olhando o resultado |
+
+**Por que aposentar e não consertar.** Não há o que consertar: o veredito honesto exige
+walk-forward (parâmetro escolhido só no passado) e desconto de multiple-testing, e isso já
+existe em `pesquisa/validacao.py`. Reescrever os cinco como wrappers da régua nova (a
+preferência 2 do card) seria manter cinco portas de entrada para uma pergunta que tem uma
+resposta só.
+
+**Por que isso é mais grave do que parece.** O projeto é AI-first: o desenvolvimento é feito
+por sessões de agente sem memória. Uma sessão futura roda `tune.py`, acha uma config
+"positiva", lê o `✅ edge ROBUSTO` do `validar_oos.py` e calibra a plataforma com ruído —
+desfazendo em silêncio a disciplina estatística que é o principal ativo do projeto. A
+armadilha estava armada **e tinha aparência de ferramenta oficial**, dentro do pacote de
+pesquisa viva.
+
+**O que eles ainda valem, e é por isso que não foram apagados.** São tentativas gastas: cada
+varredura daquelas é `n_trials` que a régua nova precisa descontar. A revisão do Item 1 conta
+`tune.py` = 18 configs, `sweep.py` = 9, `experimentos.py` = 18, e é dali que sai o
+`n_trials = 100` como **piso contado** em `pesquisa/validacao.py`. Apagar o código apagaria a
+contagem.
+
 ## `config.py` é o caso que deu nome ao card
 
 `legado/config.py` se declarava *a fonte única da verdade dos parâmetros do sistema* — e era
@@ -42,6 +84,7 @@ um humano com memória do projeto desvia e uma sessão de agente sem contexto n�
 | Consumidores de `estrategias/` | `live_engine.py`, `monte_carlo.py`, `otimizar_risco.py`, `run_backtest.py`, `run_portfolio.py`, `run_portfolio_periodos.py`, `validar.py`, `validar_fase2.py`, `validar_periodos_fase2.py` |
 | Backtests e estudos avulsos | `backtest.py`, `backtest_funding.py`, `scalp_backtest.py`, `dca_backtest.py`, `experimentos.py`, `funding_estudo.py`, `sweep.py`, `multi_ativo.py`, `scanner.py`, `dashboard.py`, `projecao.py`, `projecao_meta.py`, `teste_dados_gratis.py` |
 | Config do trilho legado | `config.py` |
+| Vereditos de edge aposentados (`[Q-2]`, 2026-08-23) | `tune.py`, `validar_oos.py`, `validar_reversao.py`, `validar_reversao_maker.py`, `validar_swing.py` — **recusam-se a rodar**, ver a seção acima |
 | Deploys mortos | `Procfile` (Railway), `DEPLOY-RAILWAY.md`, `DEPLOY-ORACLE.md` |
 
 ## Por que mover e não apagar
