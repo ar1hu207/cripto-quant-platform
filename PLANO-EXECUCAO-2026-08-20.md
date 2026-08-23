@@ -754,6 +754,85 @@ Um número da onda 1 que o `Q-3` precisa ter na mão e não estava no card: a ap
 
 ---
 
+#### 4h. Onda 3 do M4 — `T-EDGE`, releitura depois de colher a onda 2 (2026-08-23)
+
+A onda 2 fechou e mergeou (`81440bd`, `b1e09fc`), e as ondas 1-2 foram **deployadas** (`90ef52c` em
+produção). Esta é a releitura que o `ORQUESTRACAO-ORCA.md` §14.3 exige antes do despacho.
+
+| Onda | Território | Cards | Arquivos que pode escrever |
+|---|---|---|---|
+| 3 | **`T-EDGE`** | `Q-7` (`W5GPISAV`) **→** `P1-10` (`lz5wVY9l`) | `pesquisa/backtest_plataforma.py` · `pesquisa/validacao.py` · `tests/test_validacao.py` · `VEREDITO-M4.md` (novo) |
+
+**Serial, e a ordem não é preferência.** O `Q-7` mexe no que alimenta o MDS; o MDS é **portão de
+emissão de veredito** (`validacao.py:740`); e o `P1-10` é quem emite o veredito do marco. Rodar o
+`P1-10` antes seria decidir a pergunta central do projeto com o instrumento que o `Q-7` diz estar
+descalibrado.
+
+##### A restrição que muda o despacho: a régua não cabe numa sessão de worker
+
+`python -m pesquisa.validacao` leva **~30 min** (medido pela matriz em 2026-08-23, cache quente,
+`DIAS=1095`). O `P1-10` pede walk-forward de **três políticas** — A (stop 3×ATR ou flip), B
+(auto-saída) e C (trailing) — nas mesmas janelas. São ~90 min de relógio, e o §14.2 já registrou
+que trabalho longo em sessão de segundo plano é **cortado por tempo**: aconteceu duas vezes com o
+`T-REGUA` na onda 1.
+
+**Divisão declarada aqui, antes do despacho:**
+
+- **O worker** implementa as políticas, escreve os testes, e roda **um smoke curto** (poucas moedas,
+  poucos dias) que prove que as três executam e produzem trades diferentes. Commita.
+- **A matriz** roda o A×B×C completo em primeiro plano e cola a saída no `VEREDITO-M4.md`.
+
+Não é fronteira de território — é fronteira de **relógio**, e ignorá-la produz worker cortado com
+trabalho staged, que foi exatamente o que custou dois resumes na onda 1.
+
+##### O que a onda 1 deixou como dívida DENTRO deste território
+
+**`pesquisa/backtest_plataforma.py:82` não grava `ts_saida`**, e por isso a purga de borda de fold
+que o `Q-1` implementou **desliga sozinha**: o resultado carrega `purga_ativa=False` e o relatório
+imprime `purga: INATIVA`. O vazamento da §2/P2 continua presente e **não medido** — e ele empurra o
+resultado para **cima**, contra a conclusão negativa, então não serve de desculpa.
+
+O arquivo é deste território. **É a primeira coisa que o `T-EDGE` conserta**, antes das políticas:
+sem `ts_saida` o `P1-10` compara três políticas com a purga desligada nas três, e o vazamento entra
+igual em todas — o que não invalida a comparação relativa, mas invalida o número absoluto que o
+portão do marco vai usar.
+
+##### O que a onda 2 mudou e NÃO afeta este território
+
+Conferido, não suposto: `pesquisa/backtest_portfolio.py` (do `Q-5`) **não importa**
+`backtest_plataforma` — as duas menções no arquivo são comentário. O `T-EDGE` pode reescrever
+`backtest_ativo` sem quebrar o backtest de portfólio. Os consumidores reais de `backtest_ativo` são
+`validacao.py` e o próprio `backtest_plataforma.py`, **os dois dentro deste território**.
+
+**Consequência para o `Q-5`, declarada e adiada:** o item 3 do card dele diz *"saídas conforme o
+vencedor do `[P1-10]`"*. Aplicar a política vencedora ao backtest de portfólio **não é deste
+território** — `backtest_portfolio.py` é leitura para o `T-EDGE`. Vira card novo, criado pela matriz
+depois que o veredito existir. Antes do veredito não há vencedor a aplicar.
+
+##### O `Q-4` não fecha nesta onda, e o motivo é o relógio
+
+O bloco do M4 na §4 diz que o `P1-10` *"conclui o `Q-4`"*. Medição da matriz em 2026-08-23, no banco
+da VM: **21 rejeições com desfecho, 327 sem**, e o critério de aceite pede ≥100. O job marca cada
+sinal exatamente +24h depois de ele nascer, então a amostra chega **em 2026-08-24**, sozinha.
+
+**O `T-EDGE` não espera por isso.** O `Q-4` fica em 🔍 Validando e o relatório comparativo dele é
+trabalho da matriz quando a amostra fechar. O `P1-10` não depende do `Q-4` para emitir veredito —
+depende dele para saber **quanto** o portão de fluxo distorce o que foi medido, que é ressalva, não
+insumo.
+
+##### O portão do M4 e o que este território tem de produzir
+
+*"Rodar a validação corrigida sobre a política que está viva e ter um veredito de edge em que se
+aposta."* É o único marco cujo resultado pode ser **"o projeto muda de direção"**, e a §9.4 já
+avisou que o portão dele **não é mecânico**: é revisão humana declarada.
+
+O entregável é o **`VEREDITO-M4.md`**, com as três políticas medidas pela mesma régua, a saída
+literal colada, e — isto é o que o card pede e o que mais importa — **uma recomendação de default
+para o vivo, ou a declaração explícita de que o experimento roda política não-validada por decisão
+consciente**. As duas são respostas; o que não é resposta é a tabela sem veredito.
+
+---
+
 #### 4e. `T-FRONT-PERF` — território do `P2-37`, declarado em 2026-08-22
 
 O M5/M6 fechou o front, e a primeira medição externa dele — Lighthouse 13.4.0 no domínio de
