@@ -46,9 +46,13 @@ def test_o_cap_por_trade_vence_o_sizing_por_risco(banco):
     assert autotrader._tamanho(1000.0, 0.03, 10, 100.0, 99.9, 0.25) == pytest.approx(250.0)
 
 
-def test_o_piso_levanta_o_trade_pequeno_demais(banco):
-    """Risco minusculo pediria centavos; a Binance nao aceita e o trade nao mede nada."""
-    assert autotrader._tamanho(1000.0, 0.0001, 10, 100.0, 98.0, 0.25) == pytest.approx(10.0)
+def test_o_piso_nao_levanta_o_trade_pequeno_demais_ele_pula(banco):
+    """Risco minusculo pediria centavos; a Binance nao aceita e o trade nao mede nada.
+
+    [P2-8] Ate 2026-08-23 a resposta era INFLAR ate R$10 -- que e furar o `risco_por_trade`.
+    Agora a resposta e 0 (pular o sinal): risco pedido abaixo do piso da corretora significa
+    MENOS trade, nunca mais risco."""
+    assert autotrader._tamanho(1000.0, 0.0001, 10, 100.0, 98.0, 0.25) == 0.0
 
 
 def test_banca_morta_nao_opera(banco):
@@ -64,8 +68,65 @@ def test_quando_o_cap_nao_alcanca_o_piso_a_resposta_e_pular(banco):
 
 
 def test_no_limite_o_cap_igual_ao_piso_ainda_opera(banco):
-    """Banca R$40, cap 25% = R$10 = piso exato. `cap < min_valor` e estrito, entao passa."""
-    assert autotrader._tamanho(40.0, 0.03, 10, 100.0, 98.0, 0.25) == pytest.approx(10.0)
+    """Banca R$40, cap 25% = R$10 = piso exato. `cap < min_valor` e estrito, entao passa --
+    desde que o RISCO pedido tambem alcance o piso: 5% de R$40 = R$2, que com stop de 2% a
+    10x pede exatamente R$10 de margem.
+
+    [P2-8] mudou a segunda linha. Com 3% o valor pedido e R$6, e R$6 nao vira R$10: a mesma
+    banca de R$40 que operava agora pula. As duas guardas sao diferentes e ambas necessarias
+    -- `cap < min_valor` protege o CAP (banca <R$40), o filtro do piso protege o RISCO."""
+    assert autotrader._tamanho(40.0, 0.05, 10, 100.0, 98.0, 0.25) == pytest.approx(10.0)
+    assert autotrader._tamanho(40.0, 0.03, 10, 100.0, 98.0, 0.25) == 0.0
+
+
+# ---------------------------------------------------------------- [P2-8] o piso como filtro
+
+def test_p2_8_banca_pequena_com_liquidacao_antes_do_stop_pula_o_sinal(banco):
+    """O caso literal do card: banca R$100, `risco_por_trade` 3% = R$3 pretendidos. Stop a
+    10% com 10x poe a liquidacao antes do stop (`denom=1`), entao o sizing por risco pede
+    exatamente os R$3 -- e o piso os transformava em R$10, ou 10% da banca, 3,3x o
+    configurado, sem log nem aviso.
+
+    A guarda que ja existia nao pegava este caso, e o assert do meio e o que prova isso:
+    o cap de 25% da R$25, que e MAIOR que o piso, entao `cap < min_valor` e falso."""
+    assert 100.0 * 0.25 > 10.0                                          # a guarda antiga nao dispara
+    assert autotrader._tamanho(100.0, 0.03, 10, 100.0, 90.0, 0.25) == 0.0
+    assert autotrader._tamanho(100.0, 0.03, 10, 100.0, 90.0, 0.25, min_valor=1.0) == pytest.approx(3.0)
+
+
+@pytest.mark.parametrize("lev,stop,esperado", [
+    (2, 99.9, 250.0), (2, 99.0, 250.0), (2, 98.0, 250.0), (2, 97.0, 250.0), (2, 95.0, 250.0), (2, 90.0, 150.0),
+    (3, 99.9, 250.0), (3, 99.0, 250.0), (3, 98.0, 250.0), (3, 97.0, 250.0), (3, 95.0, 200.0), (3, 90.0, 100.0),
+    (5, 99.9, 250.0), (5, 99.0, 250.0), (5, 98.0, 250.0), (5, 97.0, 200.0), (5, 95.0, 120.0), (5, 90.0, 60.0),
+    (10, 99.9, 250.0), (10, 99.0, 250.0), (10, 98.0, 150.0), (10, 97.0, 100.0), (10, 95.0, 60.0), (10, 90.0, 30.0),
+    (20, 99.9, 250.0), (20, 99.0, 150.0), (20, 98.0, 75.0), (20, 97.0, 50.0), (20, 95.0, 30.0), (20, 90.0, 30.0),
+    (50, 99.9, 250.0), (50, 99.0, 60.0), (50, 98.0, 30.0), (50, 97.0, 30.0), (50, 95.0, 30.0), (50, 90.0, 30.0),
+])
+def test_p2_8_a_banca_padrao_de_mil_a_3pct_nao_muda_em_nenhum_ponto(lev, stop, esperado):
+    """Item 2 do aceite, e a parte que segura a mao: a correcao so pode agir na faixa onde o
+    piso vencia o risco. Estes 36 valores foram MEDIDOS rodando a versao anterior de
+    `_tamanho` sobre a grade, e sao literais aqui de proposito -- se o diff mudar o caso
+    comum (banca R$1.000, `risco_por_trade` 3%, que e o que esta vivo), isto acusa.
+
+    Na banca de R$1.000 o piso so vencia com `risco_por_trade` <= 0,5%; a 3% ele nunca
+    vence, e por isso a grade inteira e imune."""
+    assert autotrader._tamanho(1000.0, 0.03, lev, 100.0, stop, 0.25) == pytest.approx(esperado)
+
+
+@pytest.mark.parametrize("banca", [40.0, 60.0, 100.0, 150.0, 250.0, 330.0, 1000.0])
+@pytest.mark.parametrize("risco_frac", [0.005, 0.01, 0.03, 0.05])
+@pytest.mark.parametrize("lev,stop", [(2, 90.0), (5, 97.0), (10, 98.0), (20, 95.0), (50, 99.0)])
+def test_p2_8_o_risco_ate_o_stop_nunca_passa_do_configurado(banca, risco_frac, lev, stop):
+    """Item 3 do aceite, escrito como invariante e nao como caso: `valor x min(lev x sd, 1)`
+    e a perda-ate-o-stop (a mesma conta do `simulador._risco_posicao`), e ela nunca pode
+    passar de `banca x risco_por_trade`. A tolerancia de 1 centavo e o `round(valor, 2)`.
+
+    A faixa de banca cobre exatamente onde o card diz que o buraco estava (~R$40-330)."""
+    valor = autotrader._tamanho(banca, risco_frac, lev, 100.0, stop, 0.25)
+    if valor == 0.0:
+        return                                                          # sinal pulado: sem risco
+    perda_no_stop = valor * min(lev * (100.0 - stop) / 100.0, 1.0)
+    assert perda_no_stop <= banca * risco_frac + 0.01
 
 
 def test_liquidacao_antes_do_stop_faz_o_risco_ser_a_margem_inteira(banco):

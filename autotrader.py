@@ -55,8 +55,14 @@ def _alavancagem(cfg, conviccao):
 
 def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0):
     """Sizing por risco: valor tal que a perda-até-o-stop ~= banca*risco_frac.
-    Capa em banca*max_frac. Retorna 0 (=pular o sinal) se a banca não comporta nem o piso —
-    nunca infla pro piso furando o cap, nem opera banca morta (<=0)."""
+    Capa em banca*max_frac. Retorna 0 (=pular o sinal) quando a banca não comporta o piso,
+    quando o risco pedido não paga o piso, ou com banca morta (<=0).
+
+    [P2-8] O piso é FILTRO, nunca inflador. `risco_por_trade` é TETO: subir o valor até o
+    piso furava esse teto em silêncio (banca R$100 a 3% pede R$3 e abria R$10 = 10% da
+    banca, 3,3x o configurado). Banca pequena passa a dar MENOS trades, nunca mais risco.
+    A guarda `cap < min_valor` acima NÃO cobre isso: ela só pega banca tão pequena que o
+    cap fica abaixo do piso (<R$40 com max_frac=0,25); o buraco estava na faixa do meio."""
     cap = banca * max_frac
     if banca <= 0 or cap < min_valor:           # banca morta ou pequena demais: não opera
         return 0.0
@@ -67,7 +73,8 @@ def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0):
     else:
         denom = 1.0
     valor = risco_rs / denom if denom > 0 else risco_rs
-    valor = max(valor, min_valor)               # piso
+    if valor < min_valor:                       # [P2-8] piso: FILTRA o sinal, não infla o risco
+        return 0.0
     valor = min(valor, cap)                     # cap (>= min_valor, garantido acima)
     return round(valor, 2)
 
