@@ -492,8 +492,24 @@ def status():
     # `saudavel` NÃO mudou: continua `not (cego or cego_pos)`. Falha de funding não cega o
     # bot (ele segue marcando e fechando posição), e transformá-la em critério de saúde
     # seria mexer no detector de cegueira, que é decisão do dono (CLAUDE.md §2).
+    #
+    # [P1-11] O cap geométrico da alavancagem (`autotrader._cap_geometrico`) só existia no
+    # log e no resumo de UM ciclo — e o resumo de um ciclo é descartado pelo seguinte, então
+    # ninguém conseguia responder "quantas vezes isso já agiu?". `CAPS_GEOMETRIA` é estado de
+    # módulo, cumulativo na vida do processo, e sai aqui inteiro (`total` + `ultimo`), do
+    # mesmo jeito que `scan`, `marcacao` e `funding`.
+    #
+    # Sai no `/status` e NÃO no `/estado` de propósito: o painel faz poll do `/estado` a cada
+    # 3s e a franquia de saída da Azure é 15 GB/mês (CLAUDE.md §2) — o `/status` o front só
+    # busca no portão de login (`web/index.html:909,951`). Contagem de guarda é diagnóstico,
+    # não telemetria de tempo real.
+    #
+    # `saudavel` também não olha isto: o cap agindo é a guarda FUNCIONANDO. Um bot que capa
+    # 100% dos trades está saudável e mal configurado, que são coisas diferentes — quem lê
+    # `total` alto contra `ciclos` decide, e a decisão é do dono.
     return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
             "funding": simulador.funding_medicao,
+            "caps_geometria": autotrader.CAPS_GEOMETRIA,
             "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
