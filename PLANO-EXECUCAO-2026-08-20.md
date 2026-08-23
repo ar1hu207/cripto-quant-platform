@@ -573,6 +573,25 @@ publica no Vercel (§9.9), e front é território do M5/M6 desde o dia 1 (§9.2)
 pela matriz. **Dois commits num card, autorizados aqui e agora** — é o que separa isso de worker
 atravessando fronteira.
 
+> ⚠️ **Corrigido em 2026-08-23, no mesmo dia, e o erro era desta seção.** A linha acima dizia que o
+> item do fluxo manual é `web/index.html` e só isso. **É falso, e um aviso no front não é guarda.**
+> O worker do `T-SIZING` conferiu em vez de acreditar no briefing e mediu: `_alavancagem` tem **uma
+> única** chamada em todo o repositório (`autotrader.py:163`), e `POST /confirmar` recebe
+> `alavancagem` **do cliente** e a repassa direto para `simulador.abrir` (`api.py:681`). O cap
+> geométrico do `P1-11` protege o auto-trader e **não alcança o fluxo manual**; quem tiver a
+> credencial do painel abre 20x com stop de 9,5% por `curl`, sem carregar o navegador — a mesma
+> forma da bandeira `PERMITIR_SEM_SENHA` que o `CLAUDE.md` §2 registra.
+>
+> A recusa virou o card **`P1-12`** (`xD9xBfoe`, `toca-risco`), com duas opções e uma recomendada: a
+> rota (`api.py`) protege uma porta, o ponto de estrangulamento (`simulador.abrir`) protege a casa.
+> O território dele é declarado quando a onda 2 for desenhada, depois de colher a onda 1 — não agora
+> (§14.3 do `ORQUESTRACAO-ORCA.md`). O aviso visual no painel continua sendo card de front separado.
+>
+> **A lição, que é a mesma da §14.4 e agora tem um segundo caso:** a §4f foi escrita por quem ia
+> auditar, e um território errado escrito pela matriz é invisível para o portão de fronteira — ele
+> compara o diff com a lista, e a lista é que estava errada. O que pegou foi o briefing **pedir** que
+> o worker conferisse os fatos do briefing.
+
 O `Q-3` tem a mesma forma: o item *"o painel mostra qual perfil está ativo"* é front e sai junto, no
 mesmo card novo. O que o `T-DECLARACAO` entrega do `Q-3` é o mecanismo (`db.py`), o catálogo
 (`api.py`) e o racional escrito.
