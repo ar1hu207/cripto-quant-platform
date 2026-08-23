@@ -6,7 +6,7 @@
 `scoring.py` e `indicadores.py` ficaram na RAIZ (decisao 3 da §4c do PLANO-EXECUCAO: a
 plataforma viva nao sai da raiz, porque o `deploy/cripto-bot.service` roda `uvicorn api:app`
 com `WorkingDirectory` na raiz). Mas eles sao compartilhados: `scoring` e importado por
-`signal_engine` (vivo) E por `backtest_plataforma`/`validacao`/`validar_reversao*` (aqui).
+`signal_engine` (vivo) E por `backtest_plataforma`/`validacao` (aqui).
 Esse compartilhamento **e** a paridade backtest<->live, e por isso nao se duplica.
 
 Consequencia: `python pesquisa/validacao.py` NAO funciona -- rodar um arquivo por caminho poe
@@ -29,4 +29,13 @@ um.
 **O que NAO passa pelo portao de compilacao do deploy.** O `deploy/atualizar.sh` compila
 `./*.py` (glob de raiz, nao recursivo) e continua assim de proposito -- ver o comentario no
 passo 4 daquele script. Pesquisa nao e importada por `api.py` e nao sobe com o servico.
+
+**O que este pacote NAO guarda mais, e por que.** O `[Q-2]` mandou `tune`, `validar_oos`,
+`validar_reversao`, `validar_reversao_maker` e `validar_swing` para `legado/`. Os cinco
+emitiam veredito de edge ("POSITIVO", "ROBUSTO") por metodologia que este mesmo pacote ja
+declarava desonesta -- cacar config no periodo inteiro, ou trocar de moeda sem trocar de
+periodo. Numa arvore onde o trabalho e feito por sessoes de agente sem memoria, script
+executavel com aparencia de ferramenta oficial e armadilha, nao historico. O historico fica
+no git. Restam aqui os dois modulos que a plataforma de pesquisa usa de verdade
+(`validacao`, `backtest_plataforma`) mais o `dados`.
 """
