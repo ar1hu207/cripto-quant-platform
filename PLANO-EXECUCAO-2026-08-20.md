@@ -669,7 +669,7 @@ cards**, e os três novos nasceram da auditoria da onda 1, não do planejamento.
 |---|---|---|---|
 | 2 | **`T-PORTFOLIO`** | `Q-5` (`fPL6lccf`) | `pesquisa/backtest_portfolio.py` (novo) · `tests/test_portfolio.py` (novo) |
 | 2 ‖ | **`T-DECLARACAO`** | `Q-3` (`CA6ezdNV`) · `P2-36` (`oDireXwJ`) · `P1-11` (a metade do `/status`) | `db.py` · `api.py` · `tests/test_metricas.py` · `tests/test_config.py` (novo) |
-| 2 ‖ | **`T-GUARDA`** | `P1-12` (`xD9xBfoe`) · `P2-38` (`JS5YAkvV`) | `simulador.py` · `autotrader.py` · `ARQUITETURA.md` · `tests/test_guarda_risco.py` · `tests/test_sizing.py` |
+| 2 ‖ | **`T-GUARDA`** | `P1-12` (`xD9xBfoe`) · `P2-38` (`JS5YAkvV`) | `simulador.py` · `autotrader.py` · `ARQUITETURA.md` · `tests/test_guarda_risco.py` · `tests/test_sizing.py` · **`tests/test_abrir.py`** (acrescentado em 2026-08-23 — ver abaixo) |
 | 3 ▸ | **`T-EDGE`** | `Q-7` (`W5GPISAV`) **→** `P1-10` (`lz5wVY9l`) · conclui `Q-4` (`Fe0UpFaF`) | `pesquisa/backtest_plataforma.py` · `pesquisa/validacao.py` · `tests/test_validacao.py` · `VEREDITO-M4.md` (novo) |
 
 ##### As três decisões de fronteira que este desenho toma, e o porquê de cada uma
@@ -693,6 +693,28 @@ de config do `P1-8`** (campo "racional" por parâmetro, em `api.py`) e nos comen
 é **portão** de emissão de veredito, e o `P1-10` é quem emite o veredito do marco. Rodar o `P1-10`
 com o MDS subestimado é decidir a pergunta central do projeto com o instrumento que o `Q-7` diz estar
 descalibrado. **Serial, `Q-7` primeiro.**
+
+##### Correção da própria §4g, no mesmo dia: `tests/test_abrir.py` é do `T-GUARDA`
+
+O `P1-12` põe uma recusa nova em `simulador.abrir()`. **Um card que adiciona recusa ao ponto de
+estrangulamento inevitavelmente encosta nos testes que chamam esse ponto** — e a lista original
+não trazia `tests/test_abrir.py`, que é justamente o arquivo de quem exercita `abrir()`.
+
+O worker fez o certo: rodou a suíte, viu
+`tests/test_abrir.py::test_teto_de_risco_desligado_deixa_passar` falhar, **não editou o arquivo**
+(§9.4/P2 reprova arquivo fora da lista mesmo com o código certo), e subiu para a matriz com o
+conserto descrito. A suíte na branch ficou em `1 failed, 490 passed, 1 xfailed`.
+
+O teste faz `simulador.abrir(sid, 100.0, 20)` com preço 100 e stop 95 — `stop_dist` de 5% a 20x, que
+é **exatamente a geometria degenerada** que o `P1-12` passou a recusar. A alavancagem alta ali existe
+só para inflar o risco e provar que o teto desligado deixa passar; a geometria não é o assunto do
+teste. Conserto que preserva a intenção: baixar a lev (a 10x a liquidação fica a 9% contra stop de
+5%, geometria sadia) mantendo o risco grande.
+
+**A leitura certa disto é a da §9.4: não é o agente extrapolando, é a onda que estava mal
+desenhada** — e correção de plano é da matriz. É a mesma classe de erro da §4f de hoje de manhã, em
+que a lista nomeava a origem do `git mv` e não o destino: **território que autoriza mudar um
+comportamento autoriza os testes desse comportamento.** O portão não infere.
 
 ##### O que a onda 1 deixou pronto e muda o trabalho da onda 2
 
