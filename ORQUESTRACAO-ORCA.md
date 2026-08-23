@@ -327,3 +327,106 @@ nohup claude -p "$(cat brief.md)" --permission-mode bypassPermissions --session-
   e o worker parece travado sem estar.
 - Lançar exige a regra `Bash(nohup claude -p *)` em `permissions.allow` do dono — sem ela o
   classificador bloqueia, e agente não edita a própria permissão (`CLAUDE.md` §8).
+
+---
+
+## 14. O que o M3 ensinou sobre DESPACHAR (2026-08-22, quatro workers)
+
+O §13 conta o que a onda 1 do M2 ensinou sobre **colher**. Este conta o que quatro workers seriais
+mais um paralelo ensinaram sobre **lançar** — e três das quatro lições são falhas silenciosas, que
+é a categoria que custa caro porque não avisa.
+
+### 14.1 `claude -p --session-id` exige UUID válido, e falha com **exit code 0**
+
+O primeiro worker desta sessão foi lançado com `--session-id 3a1e...-00000000t001`. O `t` não é
+hex. O CLI imprimiu `Error: Invalid session ID. Must be a valid UUID.` e **saiu com código 0** — o
+harness reportou "completed", e sem olhar a saída o despacho pareceria bem-sucedido.
+
+**Confira o lançamento pelo sinal de vida, nunca pelo código de saída:** a transcrição em
+`~/.claude/projects/C--Users-aboni-orca-workspaces-1-<nome>/<uuid>.jsonl` só existe se o agente
+subiu, e ela cresce. Vinte segundos depois do lançamento, `ls -l` naquele diretório responde.
+
+### 14.2 Processo em segundo plano é **morto por tempo**, e a colheita é o git
+
+O harness corta tarefas de segundo plano em poucos minutos. Nesta sessão isso matou uma auditoria
+de mutação três vezes e um worker no meio do trabalho. **Não é perda:** o worker commita conforme
+avança, e o que ele já fez está na branch.
+
+Duas saídas, nesta ordem:
+
+- **Trabalho longo do auditor** (rodar suíte N vezes, medir): use o **primeiro plano** com timeout
+  grande. Aguenta bem mais que o segundo plano.
+- **Worker cortado no meio**: `claude -p "<o que falta>" --resume <uuid>` **do diretório da
+  worktree**. Ele volta com o contexto inteiro e fecha o card. Foi assim que o `P2-37` terminou —
+  cinco commits antes do corte, o sexto e o relatório depois do resume. Por isso o §6 manda fixar o
+  `--session-id`: não é só para o dono conversar, é o que torna um worker cortado recuperável.
+
+### 14.3 Marco serial não é marco lento — é marco em que cada onda **estreita** a seguinte
+
+O M3 são três cards em série, e a série tem conteúdo: cada onda mudou o território da próxima, e a
+mudança **teve que ser escrita no plano antes do despacho**, não descoberta pelo worker.
+
+- A onda 1 (`P2-6`) transformou três scripts da raiz em provas que o pytest executa por subprocesso.
+  Isso **removeu** esses três da linha "todo `*.py` da raiz" que a onda 2 tinha no território — e a
+  armadilha estava na forma do nome, porque dois deles casam com `test_*.py` e pareciam candidatos
+  óbvios a ir para `tests/`.
+- A onda 2 (`P2-16`) tornou falsa uma linha do `CLAUDE.md`, que virou item obrigatório da onda 3.
+
+**Regra: depois de colher uma onda de marco serial, releia o território da próxima antes de
+despachá-la.** O portão de fronteira não pega isto — ele compara o diff com a lista, e a lista é que
+tinha envelhecido.
+
+### 14.4 O briefing do auditor também erra, e a medição é quem decide
+
+Três vezes nesta sessão o worker corrigiu a matriz, e nas três a matriz é que tinha **suposto**:
+
+- o briefing dizia "30 rotas em `api.py`" — são **29**;
+- a §4e afirmava que o preflight CORS viraria card — o `Access-Control-Max-Age: 600` **já existia**;
+- a mesma §4e atribuía 334 ms a "latência do uvicorn" — é **round-trip até a África do Sul**, e o
+  servidor pensa ~5 ms.
+
+**Peça no briefing que o worker confira os fatos do card E do briefing**, e trate correção como
+entrega. O §13 já dizia que card pode estar errado sobre um fato; falta dizer que o briefing
+também, e que ele é escrito por quem vai auditar — o que torna o erro mais difícil de pegar depois.
+
+### 14.5 A auditoria por mutação pode acusar o inocente — e isso tem duas causas
+
+A auditoria de regressão plantada é o portão mais forte que esta operação tem. Ela errou duas vezes
+no `P2-6`, e cada erro ensina uma coisa diferente:
+
+1. **Ambiente.** Rodar a suíte numa cópia sem `.git` a reprovou por um motivo que não era defeito: a
+   prova do `api.py` confere `/health` contra `git rev-parse HEAD`. Use
+   `git worktree add --detach` em vez de copiar a árvore — mais barato e mais fiel.
+2. **A mutação em si.** Trocar a ordem de piso e cap no `_tamanho()` **não** foi pega, e conferindo,
+   a suíte estava certa: uma guarda acima garante `cap >= min_valor`, então as duas ordens são
+   equivalentes. **Antes de acusar, prove que a mutação realmente quebra alguma coisa.**
+
+E registre o erro no veredito. Auditoria que erra e diz que acertou é pior que auditoria nenhuma.
+
+### 14.6 O portão de marco pode ter mais de uma metade — conte antes
+
+O portão do M3 é *"sessão nova, prompt frio, faz um fix — e o teste pega uma regressão plantada"*.
+São **duas** afirmações, e cada uma se roda diferente:
+
+- **o teste pega regressão** → mutação, e **de novo depois do merge**, que é o único momento em que
+  a reorganização e a rede de segurança existem juntas;
+- **a sessão fria acerta** → diretório **vazio** com só o `CLAUDE.md` dentro, e um `claude -p` com
+  perguntas cujo erro seria caro (onde vive a config; o que não pode mudar; trocar `vendor/` por
+  CDN; converter timestamp para UTC). É executável, custa dois minutos, e é o único teste que mede
+  o que o documento existe para fazer.
+
+**Leia a frase do portão contando as afirmações antes de declarar o marco fechado.**
+
+### 14.7 Medição em máquina ocupada é medição inválida — e a frota é a máquina
+
+O dono mediu o front com Lighthouse **enquanto os workers do M3 rodavam nesta máquina**. Deu 0,86,
+com Speed Index de 7,2 s e `observedFirstPaint` em 11,5 s. Cinco medições posteriores com a máquina
+quieta deram Speed Index entre 0,8 s e 1,3 s: **os 10 pontos que ele "perdia" não existiam.**
+
+O relatório denunciava a si mesmo — `benchmarkIndex` baixo, `clearBrowserCaches` levando 4 s. Quem
+lê relatório de performance tem que olhar esses campos antes das métricas.
+
+**Regra para a matriz: benchmark de performance não se roda com frota em campo.** E quando chegar um
+número medido em circunstância desconhecida, o primeiro passo do card é **remedir**, não consertar —
+"o número era ruído", provado, é entrega tão legítima quanto um patch. Neste caso a remedição achou
+o defeito **real**, que estava em outra métrica e valia mais pontos do que o falso.
