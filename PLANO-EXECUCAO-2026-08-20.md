@@ -513,6 +513,104 @@ de edge em que se aposta. É o único marco cujo resultado pode ser *"o projeto 
 
 ---
 
+#### 4f. Territórios do M4 — reescritos em 2026-08-23, depois do merge do M3
+
+**A tabela do M4 acima ficou falsa, e não por descuido.** Ela nomeia `validacao.py`, `tune.py`,
+`validar_oos.py` e `backtest*.py` **na raiz** — e o `P2-16` (M3) mudou todos de lugar. Hoje eles
+são `pesquisa/validacao.py`, `pesquisa/tune.py`, `pesquisa/validar_oos.py` e
+`pesquisa/backtest_plataforma.py`. Um portão P2 rodado contra a tabela antiga reprovaria trabalho
+correto por caminho, e um briefing transcrito dela mandaria o worker editar arquivo que não existe.
+
+É o caso que a §14.3 do `ORQUESTRACAO-ORCA.md` descreve: **marco serial estreita o marco seguinte, e
+a mudança tem de ser escrita antes do despacho, não descoberta pelo worker.** Esta seção é essa
+escrita. **É esta tabela que o portão P2 cruza** — não a do M4 acima, não o briefing.
+
+| Onda | Território | Cards | Arquivos que pode escrever |
+|---|---|---|---|
+| 1 | **`T-REGUA`** | `Q-1` (`xqtBId7v`) · `Q-2` (`4ba2vwNp`) | `pesquisa/validacao.py` · `pesquisa/tune.py` · `pesquisa/validar_oos.py` · `pesquisa/validar_reversao.py` · `pesquisa/validar_reversao_maker.py` · `pesquisa/validar_swing.py` · `pesquisa/__init__.py` · `legado/README.md` · `README.md` · `ITEM1-VALIDACAO-RIGOROSA.md` · `tests/test_validacao.py` (novo) |
+| 1 ‖ | **`T-EXEC-REAL`** | `P2-18` (`T4hQp3XN`) · `Q-6` (`l3trY9PM`) | `simulador.py` · `pesquisa/dados.py` · `ARQUITETURA.md` · `tests/test_pnl.py` · `tests/test_execucao_real.py` (novo) |
+| 1 ‖ | **`T-SIZING`** | `P2-8` (`TjtftLyj`) · `P1-11` (`e8elDr7G`, metade) | `autotrader.py` · `tests/test_sizing.py` |
+| 2 ▸ | **`T-PORTFOLIO`** | `Q-5` (`fPL6lccf`) | `pesquisa/backtest_portfolio.py` (novo) · `tests/test_portfolio.py` (novo) |
+| 2 ▸ ‖ | **`T-DECLARACAO`** | `Q-3` (`CA6ezdNV`) · `P2-36` (`oDireXwJ`) · `P1-11` (a outra metade) | `db.py` · `api.py` · `ARQUITETURA.md` · `tests/test_metricas.py` · `tests/test_config_perfis.py` (novo) |
+| 3 ▸ | **`T-EDGE`** | `P1-10` (`lz5wVY9l`) · conclui `Q-4` (`Fe0UpFaF`) | `pesquisa/backtest_plataforma.py` · `pesquisa/validacao.py` · `VEREDITO-M4.md` (novo) |
+
+`ARQUITETURA.md` aparece em dois territórios e isso é legal **só porque as ondas são seriais** —
+a onda 2 nasce quando a 1 mergeou, como o `README.md` do M3 (§4c). Dentro de uma onda, nenhuma
+sobreposição.
+
+**`pesquisa/backtest_plataforma.py` é o eixo do pacote** — `validacao`, `tune`, `validar_oos`,
+`validar_reversao*` e `validar_swing` todos o importam. Ele **não** é território de ninguém nas
+ondas 1 e 2, de propósito: quem o reescreve é o `T-EDGE`, e reescrevê-lo é metade do `P1-10`
+(implementar as políticas B e C no `backtest_ativo`). Worker das ondas 1-2 que precisar dele **lê e
+para**.
+
+##### O que já se sabe que os cards erram — conferir é entrega, não desvio (§14.4)
+
+1. **O critério de aceite do `Q-2` está escrito para o layout antigo.** Ele manda rodar
+   `grep -rn "ROBUSTO\|POSITIVO" *.py`, glob de raiz que hoje não acha nada. O comando válido é
+   `grep -rn "ROBUSTO\|POSITIVO" --include=*.py .`.
+2. **O `Q-2` não nomeia todos os culpados.** Ele lista `tune.py`, `validar_oos.py`,
+   `validar_reversao.py` e `validar_reversao_maker.py`. O comando acima acha **um quinto**:
+   `pesquisa/validar_swing.py:40` imprime `"  ROBUSTO ✅"` pela mesma metodologia de split-por-moedas,
+   e o docstring dele diz `"Acha o melhor corte ROBUSTO (positivo nos dois) pra virar o default"` —
+   é a armadilha exata que o card descreve. Ele está no território do `T-REGUA` por isso.
+3. **`legado/` já está limpo:** `grep` nos `legado/*.py` não acha nenhum veredito. A preferência 1
+   do card (mover para `legado/`) é coerente com o que o `P2-16` fez, e é a que a matriz recomenda.
+
+##### O `P1-11` fecha em duas ondas, e isso está declarado ANTES (§13)
+
+O card pede quatro coisas, e elas moram em três territórios:
+
+| Item do aceite | Onde | Onda |
+|---|---|---|
+| cap geométrico da lev + teste unitário (`stop_dist=5%`, lev 20 → ≤14) | `autotrader.py` — `T-SIZING` | 1 |
+| log do cap quando ele agir | `autotrader.py` — `T-SIZING` | 1 |
+| contagem exposta em `/status` | `api.py` — `T-DECLARACAO` | 2 |
+| fluxo manual avisa/recusa geometria degenerada | `web/index.html` — **nenhum território do M4** | — |
+
+O último item é front, e **nenhum território deste marco escreve em `web/`**: o merge na `main`
+publica no Vercel (§9.9), e front é território do M5/M6 desde o dia 1 (§9.2). Vira card novo, criado
+pela matriz. **Dois commits num card, autorizados aqui e agora** — é o que separa isso de worker
+atravessando fronteira.
+
+O `Q-3` tem a mesma forma: o item *"o painel mostra qual perfil está ativo"* é front e sai junto, no
+mesmo card novo. O que o `T-DECLARACAO` entrega do `Q-3` é o mecanismo (`db.py`), o catálogo
+(`api.py`) e o racional escrito.
+
+##### O que o território não isola aqui (§9.2b)
+
+- **`db.CONFIG_PADRAO` é esquema-de-configuração**, e o `Q-3` mexe nele. Nenhum outro card do M4
+  toca — mas `db.py` também é o `P2-36`. Por isso os dois estão no **mesmo** território, não em
+  paralelo: o portão de fronteira aprovaria os dois e o merge é que quebraria.
+- **`P2-36` quebra a suíte de propósito ao fechar.** `tests/test_metricas.py` está
+  `xfail(strict=True)`; consertar `db.metricas()` vira XPASS e reprova o `pytest` até o teste ser
+  promovido (§4d, ponto 3, e `CLAUDE.md` §6). Quem pegar o `T-DECLARACAO` precisa saber disso antes
+  de abrir o arquivo.
+- **`CLAUDE.md` é da matriz, não de worker** (`ORQUESTRACAO-ORCA.md` §8). O `Q-3` pede que ele
+  declare *"mudar defaults de risco = decisão humana"*, e o `Q-2` pode invalidar a linha do
+  `README.md:55` que lista `tune` e `validar_*` como pesquisa viva. As duas escritas ficam com a
+  matriz, na integração.
+
+##### Quatro dos dez cards são `toca-risco` — o auditor roda os portões e PARA (§9.8)
+
+`P2-8`, `P2-18`, `P1-11` e `Q-3`. Os três primeiros **apertam** guarda, e apertar pode
+(`CLAUDE.md` §2); ainda assim o veredito final é do dono. O `Q-3` é o oposto e o mais delicado: ele
+propõe mexer no `risco_por_trade` (3%), na `alavancagem_padrao` (10x) e no `auto_lev_max` (20x) que
+estão **vivos em produção com posição aberta**. A instrução da matriz para o `T-DECLARACAO` é a
+metade reversível do "alinhar **ou** declarar" do card: **construir os dois perfis e escrever o
+racional; não trocar o default vivo.** Trocar é assinatura do dono.
+
+##### Por que a onda 1 tem esta forma
+
+Os quatro cards do `T-REGUA` da tabela antiga viraram dois. `P2-8` e `P1-11` saíram para o
+`T-SIZING` porque **os dois editam `autotrader._tamanho`/`_alavancagem`** e nenhum dos dois toca
+`pesquisa/validacao.py` — juntá-los ao `Q-1` era herança de quando `scoring.py` e `autotrader.py`
+apareciam na mesma linha da §4. `P1-11` inclusive **precisa** que `_alavancagem` passe a receber
+`stop_dist`, que é assinatura que o `_tamanho` do `P2-8` também mexe: são o mesmo diff, e separá-los
+em agentes paralelos é o erro que a §3 descreve.
+
+---
+
 ### 🎨 M5 — Front · 2 cards · **paralelo a tudo, desde o dia 1**
 
 Sessão separada. Território exclusivo: **`web/index.html`**. Zero mudança de backend, endpoint ou
