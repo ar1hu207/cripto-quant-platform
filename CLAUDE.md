@@ -28,7 +28,7 @@ de propósito — não conserte esses imports (`legado/README.md`).
 
 | Módulo | Papel |
 |---|---|
-| `api.py` | FastAPI (29 rotas) + worker em thread no `lifespan` + auth por middleware + catálogo do `POST /config` |
+| `api.py` | FastAPI (31 rotas) + worker em thread no `lifespan` + auth por middleware + catálogo do `POST /config` |
 | `db.py` | SQLite: 7 tabelas, `CONFIG_PADRAO`, índices, retenção da equity, `metricas()` |
 | `simulador.py` | abrir/fechar, P&L com taxa e funding, liquidação, trailing e **`guarda_risco()`** |
 | `signal_engine.py` | varredura, portões de confirmação, dedupe/expiração, gestor de saída |
@@ -44,7 +44,7 @@ de propósito — não conserte esses imports (`legado/README.md`).
 ```bash
 pip install -r requirements.txt && uvicorn api:app --port 8000  # local; painel em :8000
 pip install -r requirements-dev.txt
-python -m pytest                    # 143 passed, 1 xfailed (~35 s) — rode antes de mergear
+python -m pytest                    # 532 passed (~3 min) — rode antes de mergear
 python -m pytest -m "not lento"     # laço rápido, sem a prova de 1 ano de curva de equity
 python -m pesquisa.validacao        # a régua (da RAIZ; `python pesquisa/validacao.py` NÃO roda)
 python -c "import api"              # smoke da plataforma

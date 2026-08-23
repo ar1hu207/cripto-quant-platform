@@ -237,7 +237,7 @@ o resultado é sempre igual ou pior que o de antes do card. **Aperta a guarda, e
 
 ## 6. A API
 
-29 rotas (18 `GET`, 11 `POST`) em `api.py`, mais o mount estático `/vendor` (`api.py:425`).
+31 rotas (19 `GET`, 12 `POST`) em `api.py`, mais o mount estático `/vendor` (`api.py:425`).
 
 **`/estado` é a rota que sustenta o painel**: devolve tudo num request só (`api.py:556-577`) —
 banca, equity total, config, pendentes, posições, trades, curva de equity, métricas, risco, DCA e o
@@ -340,7 +340,7 @@ nunca inventa fuso**.
   │ (vercel.json:5           │        │    ▼                                      │
   │  outputDirectory: web)   │        │  uvicorn 127.0.0.1:8000                   │
   └──────────────────────────┘        │  (cripto-bot.service:13, --host 127.0.0.1)│
-        merge na main = publicar      │    ├── FastAPI  (29 rotas)                │
+        merge na main = publicar      │    ├── FastAPI  (31 rotas)                │
                                       │    └── worker thread (15 s)               │
                                       │  trading.db (SQLite WAL) ── cron 03:17 ──►│ Azure Blob
                                       └──────────────────────────────────────────┘
@@ -590,11 +590,23 @@ painel acusaria sozinho.
 
 ---
 
-## 11. A suíte, e o `xfail` que é decisão de processo
+## 11. A suíte
 
-`python -m pytest` → **175 passed, 1 xfailed** (medido no `T-EXEC-REAL`, `0fcf127` + `P2-18` +
-`Q-6`, 56 s; eram 143 em `3498ca4`). Sem rede, banco
-temporário por teste, `preco_ao_vivo` substituído.
+`python -m pytest` → **532 passed** (medido na `main` com as ondas 1 e 2 do M4 mescladas, ~3 min;
+eram 143 em `3498ca4` e 445 antes da onda 2). Sem rede, banco temporário por teste,
+`preco_ao_vivo` substituído.
+
+> **O `xfail` que esta seção descrevia não existe mais, e o mecanismo continua valendo.** Havia um
+> `xfail(strict=True)` em `tests/test_metricas.py`, plantado pelo `P2-6` (M3) por um worker que
+> **achou** o defeito de `db.metricas()` e **não podia consertá-lo** — `db.py` estava fora do
+> território dele. Ele virou o card `P2-36`, e o `strict=True` era a armadilha: no dia em que o card
+> fechasse, o teste passaria a XPASS e **quebraria a suíte**, obrigando quem consertou a promovê-lo.
+>
+> Foi exatamente o que aconteceu em 2026-08-23, na onda 2 do M4. O card fechou, a suíte reprovou, e
+> o teste foi promovido a teste normal. **A conta hoje não tem `xfailed` nenhum** — e isso é o
+> mecanismo tendo funcionado até o fim, não o mecanismo tendo sido removido. Se um worker futuro
+> plantar outro `xfail(strict=True)` porque achou um defeito fora do território dele, a regra do
+> `CLAUDE.md` §6 continua sendo a mesma: **não o "limpe" — vá ao card.**
 
 A suíte tem duas metades. Em `tests/` estão os testes das funções que doem se quebrarem; a outra
 metade **embrulha as seis provas já versionadas** (`tests/test_provas_existentes.py`), executando
