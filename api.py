@@ -297,6 +297,83 @@ CONFIG_CATALOGO = {
     "telegram_chat_id":     ("texto", 64),
 }
 
+# ---------- [Q-3] o racional por parâmetro de risco ----------
+# O catálogo acima diz o que é ACEITÁVEL (tipo e faixa). Isto diz o que foi ESCOLHIDO, e por
+# quê — que é a metade que faltava e a razão de o [Q-3] existir.
+#
+# O card nasceu de uma contradição: a `BASE-CONHECIMENTO-TRADING.md`, escrita com as nossas
+# próprias medições, conclui 0,5-1% de risco e alavancagem ≤2x, e o que está vivo é 3% e
+# 10x/20x. A contradição não é o defeito — o auto-trader é um experimento declarado para ver
+# o "no edge" acontecer (`autotrader.py:8-13`), e agressividade acelera esse experimento. O
+# defeito era não estar escrito em lugar nenhum que a escolha foi deliberada, qual seria o
+# perfil conservador equivalente, e o que muda quando isto encostar em dinheiro real.
+#
+# Formato: texto por chave, servido pelo `GET /catalogo`. Chave sem racional aqui é chave sem
+# decisão registrada — e o `None` no catálogo diz isso em vez de inventar uma justificativa.
+CONFIG_RACIONAL = {
+    "risco_por_trade": (
+        "VIVO 3%. A base (§5, linhas 178-182) põe 0,5-1% como conservador, 1-2% moderado e "
+        "chama >3% de território de ruína em sequência de perdas. MANTIDO AGRESSIVO de "
+        "propósito: o auto-trader existe para tornar visível a deriva por taxa+funding de uma "
+        "estratégia sem edge, e a 0,5% por trade essa deriva leva meses para aparecer no "
+        "equity — o experimento demoraria mais que a paciência de quem o observa. O que "
+        "torna isso aceitável não é o número, são as três guardas em volta: trava diária "
+        "sticky, teto de risco aberto e dinheiro fictício. Tire qualquer uma e 3% deixa de "
+        "ser defensável. No perfil `conservador`: 1%."),
+    "alavancagem_padrao": (
+        "VIVO 10x. A base (§5.4, linha 281) mede o imposto da volatilidade: a mesma "
+        "estratégia de +0,1%/dia com vol 2% rende +0,08%/dia a 1x e −1,9%/dia a 10x — "
+        "'a 10x a mesma estratégia vira ruína', e o nosso próprio backtest registrou que "
+        "'2x sempre pior que 1x'. MANTIDO pelo mesmo motivo do risco_por_trade, e com a "
+        "mesma condição: é o dial que acelera o experimento, não uma aposta em edge. Vale "
+        "para o fluxo manual e para o modo `auto_lev_modo=fixo`. No `conservador`: 2x."),
+    "auto_lev_min": (
+        "VIVO 2x — o piso da escala por convicção, aplicado na convicção mínima. Não é "
+        "garantia de risco e nunca foi: o cap geométrico do [P1-11] desce ABAIXO dele quando "
+        "a geometria stop/liquidação exige. No `conservador`: 1x, que é o único perfil que a "
+        "base diz ter sobrevivido (§6.1, linha 313: 'trend-following SEM alavancagem')."),
+    "auto_lev_max": (
+        "VIVO 20x, e é o parâmetro mais delicado dos quatro. A base (§6.4, linha 336) põe o "
+        "teto em '1/4 a 1/2 Kelly, nunca acima'. Há um segundo argumento, que o card não "
+        "tinha e a onda 1 mediu: a aproximação de liquidação do simulador (`0,9/lev`) é "
+        "CONSERVADORA até ~20x e vira OTIMISTA acima — o cruzamento é 20x com mmr 0,5% e 25x "
+        "com mmr 0,4% (ARQUITETURA.md §10a). O teto vivo está exatamente em cima da fronteira "
+        "em que o paper deixa de ser pessimista, então SUBIR daqui não é só mais risco: é "
+        "risco medido por um modelo que passa a errar a favor. Argumento para não subir, "
+        "independente do perfil. No `conservador`: 2x."),
+    "risco_aberto_max": (
+        "VIVO 10% do equity do início do dia, somando o risco-até-o-stop das posições "
+        "abertas. É ELE quem manda sobre `auto_max_posicoes` — `simulador.abrir` recusa "
+        "quando `risco_ab + r_novo > teto` (simulador.py:185). Com 3% por trade isso significa "
+        "que a quarta posição é recusada, e os 5 slots configurados nunca são alcançados. A "
+        "tensão '5 × 3% = 15% contra um teto de 10%' se resolve assim: o teto vence, e o "
+        "excedente vira config morta em vez de risco. No `conservador` o teto cai para 5% e "
+        "passa a caber exatamente 5 × 1%."),
+    "auto_max_posicoes": (
+        "VIVO 5 slots. Sob o perfil `experimento` este número é INALCANÇÁVEL — o teto de "
+        "risco aberto barra na quarta posição (ver `risco_aberto_max`). Fica registrado como "
+        "config morta em vez de silenciosamente ajustado: mudá-lo para 3 daria a impressão de "
+        "que o slot é a guarda, quando a guarda é o teto agregado. Sob o `conservador` ele "
+        "volta a valer, e os dois números concordam por construção."),
+    "limite_perda_dia": (
+        "VIVO 5% do equity do início do dia, sticky (não solta no mesmo dia). Não é um dos "
+        "parâmetros que a base contradiz, mas ele é quem decide quanto tempo um perfil "
+        "agressivo sobrevive: a 3% por trade, menos de dois stops cheios trancam o dia; a 1%, "
+        "cinco. O mesmo 5% significa coisas diferentes em cada perfil, e por isso ele fica "
+        "FORA dos perfis — mexer nele é mexer no freio de emergência, não no acelerador."),
+    "exposicao_max": (
+        "VIVO 50% da banca em margem somada. Teto de MARGEM, não de risco: limita quanto "
+        "capital fica preso, não quanto se pode perder. A base não fala dele, mas ele muda de "
+        "papel entre os perfis, e isso foi MEDIDO: sob `experimento` quem barra primeiro é "
+        "sempre o `risco_aberto_max`; sob `conservador`, alavancagem baixa exige mais margem "
+        "para o mesmo risco (1% com stop de 2% a 2x pede 25% da banca por posição) e a "
+        "margem passa a barrar na TERCEIRA — antes do teto de risco e antes dos slots. O "
+        "perfil conservador só entrega os 5 slots com stops largos. Subir este teto no perfil "
+        "resolveria a aritmética AFROUXANDO uma guarda, o que é decisão do dono; fica medido "
+        "em `tests/test_config.py` em vez de resolvido por conta própria."),
+}
+
+
 _VERDADEIRO = {"1", "true", "sim", "on", "yes"}
 _FALSO = {"0", "false", "nao", "não", "off", "no"}
 _RE_PAR = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{2,6}$")
@@ -572,10 +649,18 @@ def _amostrar(seq, alvo=125):
 @app.get("/estado")
 def estado():
     """Tudo que a UI precisa num request só."""
+    cfg = db.get_config()
     return {
         "banca": db.get_banca(),
         "equity_total": round(equity_total(), 2),
-        "config": db.get_config(),
+        "config": cfg,
+        # [Q-3] o nome do perfil de risco vigente ('experimento'|'conservador'|
+        # 'personalizado'), DERIVADO da config acima — não é chave no banco (db.perfil_ativo).
+        # Vem no /estado, e não no /status, apesar do poll de 3s: é uma string curta (~25 B),
+        # e o painel repinta a config a cada poll, então no /status ela congelaria no valor do
+        # login e um badge de risco desatualizado é pior que badge nenhum. O `cfg` acima é
+        # reusado de propósito: zero consulta a mais.
+        "perfil_risco": db.perfil_ativo(cfg),
         "pendentes": db.listar("sinais", 30, "WHERE status='novo'"),
         "posicoes": db.listar("posicoes", 50, "WHERE status='aberta'"),
         "trades": db.listar("trades", 30),
@@ -600,6 +685,61 @@ def metricas():
 @app.get("/config")
 def get_config():
     return db.get_config()
+
+
+@app.get("/catalogo")
+def catalogo():
+    """[Q-3] O contrato da config, legível por quem opera: o que cada parâmetro aceita, o que
+    é o padrão, POR QUE ele é o que é, e quais perfis de risco existem.
+
+    Rota própria, e não campo no `/estado`, porque isto é texto estático de alguns KB e o
+    painel faz poll do `/estado` a cada 3s com franquia de 15 GB/mês (CLAUDE.md §2). Uma tela
+    de configuração busca isto uma vez; um mostrador não busca nunca.
+
+    NÃO devolve valores vigentes — para isso existe o `GET /config`. Duplicar o valor aqui
+    duplicaria também o `telegram_token` em mais uma resposta, sem ganho."""
+    params = {}
+    for chave, spec in CONFIG_CATALOGO.items():
+        tipo = spec[0]
+        d = {"tipo": tipo, "padrao": db.CONFIG_PADRAO.get(chave),
+             "racional": CONFIG_RACIONAL.get(chave)}       # None = decisão não registrada
+        if tipo in ("float", "int"):
+            d["min"], d["max"] = spec[1], spec[2]
+        elif tipo == "enum":
+            d["opcoes"] = list(spec[1])
+        elif tipo == "texto":
+            d["max_chars"] = spec[1]
+        params[chave] = d
+    return {"parametros": params, "perfis": db.PERFIS_RISCO,
+            "perfil_ativo": db.perfil_ativo()}
+
+
+class PerfilReq(BaseModel):
+    perfil: str
+
+
+@app.post("/perfil")
+def set_perfil(req: PerfilReq):
+    """[Q-3] Aplica um perfil de risco INTEIRO — o "trocável por um comando" do card.
+
+    Os valores do perfil passam pelo `_validar_lote`, o MESMO caminho do `POST /config`. Não é
+    cerimônia: gravar direto com `db.set_config` daria ao perfil uma via expressa para o
+    banco, e um perfil editado no código passaria por cima das faixas do catálogo sem que
+    nada acusasse — exatamente a classe de coisa que o [P1-8] fechou.
+
+    Trocar o perfil ativo é decisão do DONO, não de agente (plano §9.8, `toca-risco`): esta
+    rota é o mecanismo, e ela é simétrica — dá para voltar pelo mesmo comando. Fica logada
+    como mudança de risco, porque é o que ela é."""
+    if req.perfil not in db.PERFIS_RISCO:
+        raise HTTPException(422, f"perfil desconhecido: escolha um de {list(db.PERFIS_RISCO)}")
+    antes = db.perfil_ativo()
+    aceitos = _validar_lote(db.PERFIS_RISCO[req.perfil])
+    for k, v in aceitos.items():
+        db.set_config(k, v)
+    cfg = db.get_config()
+    log(f"perfil de risco: {antes} -> {req.perfil} ({aceitos})")
+    return {"ok": True, "perfil_ativo": db.perfil_ativo(cfg), "perfil_anterior": antes,
+            "config": {k: cfg[k] for k in db.PERFIS_RISCO[req.perfil] if k in cfg}}
 
 
 @app.get("/pendentes")
