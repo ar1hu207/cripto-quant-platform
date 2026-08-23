@@ -15,12 +15,31 @@ só no passado, avaliados no futuro não-visto), **Deflated Sharpe Ratio** e boo
 
 | Estratégia | Veredito | Evidência |
 |---|---|---|
-| Tendência (EMA/ADX/Donchian/RSI) | ❌ sem edge | 370 trades OOS, win 25,4%, PnL −R$807, IC95% [−7,4; +3,5] inclui 0, **DSR = 0,004** |
+| Tendência (EMA/ADX/Donchian/RSI) | ❌ sem evidência de edge | 3 anos, 2.574 trades OOS, 908 dias de série diária. Reality Check **p = 0,49** · IC95% da média/dia (bloco) `[−13,1; +15,9]` inclui 0 · PSR 0,57 · **DSR = 0,0095** · Sharpe anualizado 0,11, IC95% `[−1,69; +1,34]` |
 | Reversão à média (RSI + Bollinger) | ❌ breakeven | Melhor caso +R$73 in-sample / −R$76 OOS em ~1100 trades |
 | Funding arb (cash & carry) | ❌ não-deployável | +1,9%/ano líquido; versão *gated* fica negativa (4 pernas de taxa comem o funding) |
 
 **Não existe edge deployável.** Isso não é fracasso — é o resultado com maior valor econômico
-do projeto, obtido sem torrar banca real. Duas lições que se sustentaram em todos os testes:
+do projeto, obtido sem torrar banca real.
+
+> ⚠️ **A linha "Tendência" mudou de números no `[Q-1]`, e o número velho não era comparável.**
+> O registro anterior — *370 trades, PnL −R$807, DSR = 0,004* — saiu de uma régua com
+> `DIAS = 180`, DSR sobre a **lista de trades** e `n_trials = 30`. Ela media outra coisa, e
+> media inflado: com 180 dias o Sharpe anualizado **mínimo detectável era ~3,5**, ou seja aquele
+> "sem edge" foi emitido por um instrumento que **não tinha poder para emiti-lo**. A rodada
+> retroativa com o instrumento novo está na §6 do
+> [`ITEM1-VALIDACAO-RIGOROSA.md`](ITEM1-VALIDACAO-RIGOROSA.md), com a saída literal.
+>
+> **O P&L OOS de 3 anos deu POSITIVO (+R$993) e o veredito continua negativo** — é o instrumento
+> funcionando, não uma contradição: 3 folds positivos de 5, e o fold 2 sozinho vale **5,86× o
+> total**. Dispersão enorme em torno de zero é a assinatura de ruído.
+>
+> **E o que o teste NÃO exclui:** o IC95% do Sharpe anualizado vai até **+1,34**. Os dados não
+> refutam edge — falham em demonstrá-lo. *Ausência de evidência não é evidência de ausência*, e
+> a régua nova imprime essa distinção em vez de arredondar "não consegui medir" para "não
+> existe". Quando nem isso ela consegue, responde `INCONCLUSIVO`. Ver *Critério de aceite*.
+
+Duas lições que se sustentaram em todos os testes:
 
 1. **A taxa decide.** O mesmo sinal rendeu −R$589 (taker) e +R$73 (maker). Toda estratégia
    entra com ordem limite.
@@ -99,9 +118,16 @@ local** — requisição externa ou via proxy recebe 503.
 `pesquisa/` é um pacote e roda com `-m`, **a partir da raiz do repositório**:
 
 ```bash
-python -m pesquisa.validacao             # walk-forward + DSR + bootstrap
+python -m pesquisa.validacao             # a régua completa (~30 min na 1a vez)
 python -m pesquisa.backtest_plataforma   # backtest com paridade live<->histórico
+python -m pytest tests/test_validacao.py # as provas da régua (7 s, sem rede)
 ```
+
+⚠️ **`python -m pesquisa.validacao` leva dezenas de minutos, e não está travado.** Na primeira
+execução do dia ele baixa 12 moedas × 3 anos de candles de 1h (~315 mil candles, paginado com
+rate-limit) e cacheia em `pesquisa/dados_cache/`; o nome do arquivo de cache **inclui a data**,
+então o cache de ontem não é reaproveitado. Depois disso são 6 configs × 12 moedas de backtest,
+duas vezes (a passada com funding e o contraste sem, do `[P2-10]`) — ~13 min cada.
 
 `python pesquisa/validacao.py` **não** funciona, e isso é por construção: rodar por caminho
 põe `pesquisa/` no `sys.path` em vez da raiz, e o `import scoring` falha. `scoring.py` e
@@ -168,18 +194,32 @@ bash deploy/provisionar-azure.sh
 
 ## Critério de aceite para qualquer estratégia nova
 
-Uma estratégia só é considerada com edge se **todas** as condições valerem:
+**Antes de qualquer condição, o portão de poder.** A régua calcula o Sharpe anualizado
+**mínimo detectável** (MDS, 80% de poder a α = 0,05) para o T que ela tem. Se o MDS passar de
+2,0, ela **não emite veredito**: emite `INCONCLUSIVO — instrumento sem poder`. Um instrumento
+sem poder responde "não tem edge" tanto quando não tem quanto quando não dá para saber, e as
+duas frases são a mesma no relatório — foi o `[Q-1]` que separou as duas. *Ausência de
+evidência não é evidência de ausência.*
+
+Passado o portão, uma estratégia só é considerada com edge se **todas** valerem:
 
 1. Validada por walk-forward (nunca split por moeda no mesmo período)
-2. Bootstrap de bloco IC95% da média/trade **não inclui 0**
-3. **DSR > 0,95** com `n_trials` contando as tentativas honestamente
-4. White's Reality Check **p ≤ 0,05**
-5. Ao menos uma config sobrevive ao **FDR** (Benjamini-Hochberg, q = 0,10)
-6. Custo **maker** modelado, com o número correto de pernas
-7. Sem look-ahead: sinal em candle fechado, execução no open seguinte + slippage
-8. Alavancagem **1x** na validação
+2. Bootstrap **de bloco** IC95% da média/**dia** — série diária agregada, não lista de
+   trades — **não inclui 0**
+3. **PSR > 0,95** sobre a série OOS (sem deflação: o processo walk-forward não foi escolhido
+   como máximo de `n_trials`, e deflacionar ali descontaria duas vezes)
+4. White's Reality Check **p ≤ 0,05** sobre a família de configs in-sample
+5. Custo **maker** modelado, com o número correto de pernas
+6. Sem look-ahead: sinal em candle fechado, execução no open seguinte + slippage
+7. Alavancagem **1x** na validação
 
 Falhou em qualquer uma → não tem edge. Documentar e seguir.
+
+Fora do conjunto, e de propósito: o **DSR** (deflacionado por `n_trials`) mede a família de
+configs *in-sample* — é diagnóstico de quanto do resultado é artefato de max-de-N, não
+decisão; e o **FDR** (Benjamini-Hochberg, q = 0,10) é reportado mas não gateia, porque com 6
+configs correlacionadas a ~0,9 ele passa todas ou nenhuma. Uma condição que não pode falhar
+independentemente do Reality Check não é uma condição.
 
 ---
 
