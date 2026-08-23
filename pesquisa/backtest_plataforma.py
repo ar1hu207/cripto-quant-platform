@@ -34,7 +34,15 @@ def _horas_por_barra(df, tf_horas, tf):
     (`"15m"`) que quem passa um `df` pronto não precisa passar. `validacao.gerador_tendencia`
     passava `df=dfs[c]` com candles de **1h** e não passava `tf` — então a barra valia 0,25 h
     para um `df` de 1 h, e o funding do `[P2-10]` era cobrado por **um quarto** do tempo de
-    hold real. Erro a favor do resultado: carry menor = P&L maior, contra a conclusão negativa.
+    hold real.
+
+    **A direção do viés depende do sinal do funding líquido do período, e não é universal.**
+    Cobrar um quarto do carry significa pagar 1/4 quando o livro é net-LONG (P&L superestimado)
+    e RECEBER 1/4 quando é net-SHORT (P&L subestimado). No período de 1.095 dias registrado na
+    §6 do `ITEM1-VALIDACAO-RIGOROSA.md` o livro foi net-SHORT — a saída literal diz
+    `COM x SEM funding: R$+993 x R$+948 -> efeito do carry: R$+45, net-SHORT no período` —,
+    então ali o erro foi PARA MENOS. Quem reportar esta correção tem de dizer sobre qual
+    período fala; a magnitude é sempre 4x, o sinal não.
 
     O conserto de sintoma seria acrescentar `tf=TF` na chamada da `validacao`. Ele funciona
     hoje e quebra de novo no próximo `df` com outra granularidade, em silêncio, porque a
@@ -289,11 +297,58 @@ def relatorio(trades, valor, lev):
             print(f"  {nome:<12}{len(g):>8}{w:>10.1f}%{sum(t['pnl'] for t in g):>+11,.0f}")
 
 
+def relatorio_politicas(por_politica, valor, lev):
+    """[P1-10] O SMOKE: prova, em poucas moedas e poucos dias, que as tres politicas de saida
+    executam e produzem trades DIFERENTES entre si.
+
+    Nao e a regua e nao emite veredito -- para isso e
+    `python -m pesquisa.validacao politicas`, que leva ~1h. Este aqui existe para o caso em
+    que alguem mexe no motor de saida e precisa saber em um minuto se as tres ainda divergem:
+    se as colunas de motivo colapsarem numa so, a comparacao do marco perdeu o objeto e nao ha
+    por que gastar a hora."""
+    print(f"\n{'politica':<22}{'trades':>8}{'win%':>8}{'P&L':>11}   motivos de saida")
+    print("  " + "-" * 92)
+    for nome, trades in por_politica:
+        if not trades:
+            print(f"{nome:<22}{0:>8}   nenhum trade")
+            continue
+        n = len(trades)
+        w = sum(1 for t in trades if t["pnl"] > 0) / n * 100
+        conta = {}
+        for t in trades:
+            conta[t["motivo"]] = conta.get(t["motivo"], 0) + 1
+        mot = " | ".join(f"{k}: {v}" for k, v in sorted(conta.items(), key=lambda x: -x[1]))
+        print(f"{nome:<22}{n:>8}{w:>8.1f}{sum(t['pnl'] for t in trades):>+11,.0f}   {mot}")
+    assinaturas = {nome: tuple(sorted((t["ts_saida"], round(t["pnl"], 4)) for t in tr))
+                   for nome, tr in por_politica}
+    iguais = [(a, b) for i, a in enumerate(assinaturas) for b in list(assinaturas)[i + 1:]
+              if assinaturas[a] == assinaturas[b]]
+    if iguais:
+        print("\n  ATENCAO: politicas com saidas IDENTICAS -- " +
+              "; ".join(f"{a} == {b}" for a, b in iguais))
+    else:
+        print("\n  as politicas produzem saidas distintas duas a duas (ts_saida, pnl)")
+
+
 if __name__ == "__main__":
     MIN_CONV, VALOR, LEV = 25, 100, 10
+    POLITICAS_SMOKE = [("A stop+flip de regime", {"saida": "regime"}),
+                       ("B auto-saida", {"saida": "auto"}),
+                       ("C trailing 2% fixo", {"saida": "trailing", "trailing_dist": 0.02}),
+                       ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0})]
     print(f"BACKTEST INTEGRADO (paridade c/ a plataforma) | {len(ATIVOS)} ativos | {TF} | {DIAS}d | "
           f"corte>={MIN_CONV} | R${VALOR} @ {LEV}x")
+    dfs = {a: preparar(baixar_ohlcv(a, TF, dias=DIAS)) for a in ATIVOS}
+
     todos = []
     for a in ATIVOS:
-        todos += backtest_ativo(a, MIN_CONV, VALOR, LEV)
+        todos += backtest_ativo(a, MIN_CONV, VALOR, LEV, df=dfs[a])
     relatorio(todos, VALOR, LEV)
+
+    por_politica = []
+    for nome, kw in POLITICAS_SMOKE:
+        tr = []
+        for a in ATIVOS:
+            tr += backtest_ativo(a, MIN_CONV, VALOR, LEV, df=dfs[a], **kw)
+        por_politica.append((nome, tr))
+    relatorio_politicas(por_politica, VALOR, LEV)

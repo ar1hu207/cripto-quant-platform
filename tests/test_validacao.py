@@ -676,7 +676,9 @@ def test_duracao_da_barra_sai_do_df_e_nao_do_default_de_tf():
     """A causa: `tfh` vinha de `TF_MAPA[tf]`, e `tf` tem default (`"15m"`). Quem passa um `df`
     pronto nao precisa passar `tf` -- e `validacao.gerador_tendencia` nao passava, com candles
     de 1h. A barra valia 0,25h para um df de 1h, entao o funding do `[P2-10]` era cobrado por
-    UM QUARTO do hold real: carry menor, P&L maior, contra a conclusao negativa.
+    UM QUARTO do hold real. A DIRECAO do erro segue o sinal do funding liquido do periodo --
+    net-LONG paga 1/4 e o P&L sai alto, net-SHORT recebe 1/4 e o P&L sai baixo --, entao o que
+    o teste fixa e a MAGNITUDE (4x), que essa sim nao depende do periodo.
 
     Aqui o df tem passo de 1h e `tf` fica no default errado de proposito. Se a duracao voltar
     a sair do default, `ts_saida` anda 15 min por barra e o funding volta a ser 1/4."""
