@@ -708,3 +708,223 @@ def test_tf_horas_explicito_vence_a_medicao():
     assert B._horas_por_barra(df, 4.0, "15m") == 4.0
     assert B._horas_por_barra(df, None, "15m") == pytest.approx(1.0)
     assert B._horas_por_barra(df.iloc[:1], None, "15m") == 0.25      # sem passo: cai no mapa
+
+
+# ============================ calibracao [Q-7] ============================
+def matriz_correlacionada(T=900, K=6, rho=0.95, seed=9, sd=10.0):
+    """Painel com a forma do `matriz_is` real: K configs muito correlacionadas, T dias."""
+    rng = np.random.default_rng(seed)
+    F = rng.standard_normal(T)
+    return {("c", k): (sd * (np.sqrt(rho) * F + np.sqrt(1 - rho) * rng.standard_normal(T))).tolist()
+            for k in range(K)}
+
+
+def test_banda_binomial_e_calculada_e_o_literal_antigo_estava_errado():
+    """[Q-7] item 1. A banda era uma STRING no print. A rodada do [Q-1] imprimiu
+    "taxa de rejeicao a 5% = 0.01 (banda binomial [0,02 ; 0,09])": o valor medido ja estava
+    fora da banda que a propria linha anunciava, e nada no codigo comparou os dois. Aqui ela
+    e conta -- e a conta mostra que o literal errava tambem o limite de cima."""
+    b = V.banda_binomial(200, 0.05)
+    assert (b["k_lo"], b["k_hi"]) == (4, 16)
+    assert (b["taxa_lo"], b["taxa_hi"]) == (0.02, 0.08)      # o literal dizia 0,09
+    assert V._binom_cdf(3, 200, 0.05) <= 0.025 < V._binom_cdf(4, 200, 0.05)
+    assert V.banda_binomial(0, 0.05)["k_lo"] == 0            # borda: M=0 nao explode
+
+
+def test_classificacao_da_banda_nos_tres_casos():
+    """O criterio de aceite do card: os TRES casos, em codigo, mais as duas bordas."""
+    assert V.classificar_calibracao(2, 200)["classe"] == "FORA DA BANDA (abaixo)"
+    assert V.classificar_calibracao(4, 200)["classe"] == "CALIBRADO"      # borda inferior
+    assert V.classificar_calibracao(10, 200)["classe"] == "CALIBRADO"
+    assert V.classificar_calibracao(16, 200)["classe"] == "CALIBRADO"     # borda superior
+    assert V.classificar_calibracao(30, 200)["classe"] == "FORA DA BANDA (acima)"
+    # o IC exato da taxa medida e largo: M=200 nao separa alfa 0,001 de alfa 0,035, e essa
+    # imprecisao faz parte do diagnostico -- e ela que impede o alfa medido de virar aritmetica
+    lo, hi = V.classificar_calibracao(2, 200)["ic_taxa"]
+    assert lo < 0.002 and 0.03 < hi < 0.05
+
+
+def test_a_causa_da_sub_rejeicao_e_a_MARGINAL_nao_as_suspeitas_do_card():
+    """[Q-7] item 3 -- a INVESTIGACAO, e ela desmente duas das tres suspeitas do card.
+
+    O controle DIRETO gera paineis de um DGP conhecido e troca SO a forma da marginal. Tudo o
+    mais fica igual: o mesmo `reality_check`, o mesmo `p = (1+#)/(B+1)`, o mesmo `block=5`, o
+    mesmo M. Se a sub-rejeicao viesse do `+1` ou do `block`, a linha "normal" cairia junto --
+    e ela nao cai: fica DENTRO da banda. A de cauda pesada cai uma ordem de grandeza.
+
+    Quem derruba o tamanho e a marginal de P&L diario -- maioria dos dias zerada, truncada em
+    `-valor` a esquerda, cauda longa a direita. O mecanismo ja estava escrito em `spa_hansen`
+    [F15]: o RC toma o maximo de medias BRUTAS, e cauda pesada infla o quantil nulo.
+    """
+    m = matriz_correlacionada()
+    normal = V.controle_nulo_direto(m, M=200, seed=101, dgp="normal")
+    pesada = V.controle_nulo_direto(m, M=200, seed=101, dgp="pesada")
+    banda = V.banda_binomial(200, 0.05)
+    assert normal["classe"] == "CALIBRADO", normal["taxa"]
+    assert pesada["classe"] == "FORA DA BANDA (abaixo)", pesada["taxa"]
+    assert pesada["taxa"] < banda["taxa_lo"] <= normal["taxa"], (pesada["taxa"], normal["taxa"])
+    assert pesada["taxa"] * 3 < normal["taxa"], (pesada["taxa"], normal["taxa"])
+
+
+def test_a_estudentizacao_do_SPA_nao_conserta_e_registrar_isso_poupa_o_proximo_card():
+    """A saida obvia seria "troque o RC pelo SPA, que e estudentizado". Medido: na mesma
+    marginal de cauda pesada o SPA rejeita MENOS que o RC, porque o denominador dele tambem e
+    inflado pela cauda."""
+    m = matriz_correlacionada(T=600, K=6, seed=11)
+    par = V._params_do_painel(m)
+    rng = np.random.default_rng(31)
+    rc, spa = [], []
+    for _ in range(200):
+        X = V._painel_nulo(rng, par, "pesada")
+        painel = {k: X[k].tolist() for k in range(par["K"])}
+        sd = int(rng.integers(1, 10 ** 9))
+        rc.append(V.reality_check(painel, n_boot=200, block=5, seed=sd)["p_valor"])
+        spa.append(V.spa_hansen(painel, n_boot=200, block=5, seed=sd)["p_valor"])
+    t_rc = float((np.asarray(rc) <= 0.05).mean())
+    t_spa = float((np.asarray(spa) <= 0.05).mean())
+    assert t_spa <= t_rc, (t_spa, t_rc)
+    assert t_rc < V.banda_binomial(200, 0.05)["taxa_lo"], t_rc
+
+
+def test_controle_nulo_e_cego_para_a_propria_falha():
+    """O degrau que muda como o 0,01 do dado real deve ser lido.
+
+    Sobre um painel sorteado do DGP de cauda pesada, o controle DIRETO da 0,0025 e este aqui
+    da ~0,04 -- perto do nominal. Os dois discordam por razao estrutural: no aninhado os dois
+    niveis usam a MESMA distribuicao empirica, entao o erro do bootstrap entra dos dois lados
+    e se cancela. Ele nao consegue ver a propria falha, e por isso o alfa efetivo que ele mede
+    e uma estimativa OTIMISTA -- o piso do MDS que sai dela e um piso frouxo.
+    """
+    m = matriz_correlacionada(T=900, K=6, rho=0.95, seed=9)
+    par = V._params_do_painel(m)
+    X = V._painel_nulo(np.random.default_rng(3), par, "pesada")
+    painel = {("c", k): X[k].tolist() for k in range(par["K"])}
+    aninhado = V.controle_nulo(painel, M=300, seed=11)
+    direto = V.controle_nulo_direto(painel, M=300, seed=11, dgp="pesada")
+    assert direto["taxa"] < aninhado["taxa"], (direto["taxa"], aninhado["taxa"])
+    assert direto["classe"] == "FORA DA BANDA (abaixo)"
+    assert aninhado["classe"] == "CALIBRADO"          # cego: nao acusa o que o direto acusa
+
+
+def test_cada_painel_nulo_e_um_sorteio_independente_do_painel_real():
+    """Centrar por uma media que nao e a da distribuicao que gerou o painel deixa drift
+    residual no nulo, e o Reality Check o detecta corretamente -- medido, a taxa foi a 0,225
+    num painel gaussiano. O painel nulo e sorteado do dado e centrado pelo dado, uma vez so."""
+    m = matriz_correlacionada(T=500, K=3, seed=17)
+    cn = V.controle_nulo(m, M=200, seed=5)
+    assert cn["classe"] == "CALIBRADO", cn["taxa"]
+    import inspect
+    assert "n_bases" not in inspect.signature(V.controle_nulo).parameters
+
+
+def test_controle_nulo_direto_le_os_momentos_do_painel():
+    par = V._params_do_painel({("a",): serie_ar1(500, 0.4, seed=11),
+                               ("b",): serie_ar1(500, 0.4, seed=12)})
+    assert par["K"] == 2 and par["T"] == 500
+    assert 0.0 <= par["rho"] <= 1.0
+    assert par["phi"] == pytest.approx(0.4, abs=0.15)
+    cal = V.controle_nulo_direto({("a",): serie_ar1(400, 0.0, seed=13)}, M=20, seed=5)
+    assert cal["dgp"]["T"] == 400 and cal["dgp"]["K"] == 1
+    assert cal["dgp"]["forma"] == "normal"
+    assert cal["alfa_efetivo"] == cal["taxa"]
+
+
+def test_o_portao_de_calibracao_bloqueia_para_CIMA_por_MATERIALIDADE():
+    """[Q-7] item 2, a decisao registrada e a assimetria dela.
+
+    Super-rejeitar torna a condicao de EDGE facil demais -- ela le o Reality Check --, entao
+    bloqueia. Mas o gatilho e MATERIALIDADE, nao significancia: o tamanho real do RC medido
+    sobre 2.400 paineis normais e 0,0604, acima do nominal, entao uma banda de 95% centrada em
+    0,05 acusaria 17+/200 com probabilidade 0,099. Portao que bloqueia uma rodada honesta a
+    cada dez vira ruido, e portao que dispara por ruido e desligado por quem tem pressa.
+    """
+    base = _res_sintetico(mu=0.0, seed=21, n_dias=1000)
+    assert base["bloco_b"]["mds"] < V.MDS_LIMITE                 # ha poder: o portao de MDS cala
+
+    acima = dict(base)
+    acima["calibracao"] = V.classificar_calibracao(60, 200)      # taxa 0,30
+    v = V._veredito(acima)
+    assert v["classe"] == "INCONCLUSIVO" and "descalibrado" in v["motivo"]
+
+    quase = dict(base)
+    quase["calibracao"] = V.classificar_calibracao(17, 200)      # FORA DA BANDA (acima)...
+    assert quase["calibracao"]["classe"] == "FORA DA BANDA (acima)"
+    assert quase["calibracao"]["ic_taxa"][0] < V.ALFA_TETO_PORTAO
+    assert V._veredito(quase)["classe"] == base["veredito"]["classe"]   # ...e NAO bloqueia
+    assert V.ALFA_TETO_PORTAO == 0.10
+
+
+def test_mds_vira_PISO_quando_o_teste_sub_rejeita():
+    """[Q-7] item 4. O MDS e calculado com alfa NOMINAL; com alfa efetivo menor o poder real e
+    menor e o minimo detectavel e MAIOR. Publicar so o nominal seria publicar poder que o teste
+    nao tem. Aqui, a aritmetica que o card pediu, com o `mds_sharpe` de verdade."""
+    assert V.mds_sharpe(908, alfa=0.01) > V.mds_sharpe(908, alfa=0.05)
+    assert V.mds_sharpe(908, alfa=0.05) == pytest.approx(1.576, abs=0.002)
+    # o card estimou "~22%" pela formula da matriz; pelo `mds_sharpe` a razao e ~27,4%, e
+    # 1,576 x 1,274 = 2,008 -- o OUTRO lado do MDS_LIMITE, nao "a folga cai para 4%"
+    razao = V.mds_sharpe(908, alfa=0.01) / V.mds_sharpe(908, alfa=0.05)
+    assert razao == pytest.approx(1.274, abs=0.005)
+    assert V.mds_sharpe(908, alfa=0.01) > V.MDS_LIMITE
+
+
+def test_o_portao_de_poder_le_o_PISO_mas_pela_ponta_menos_exigente_do_IC():
+    """A outra metade da assimetria. Sub-rejeicao nao bloqueia por si; ela corrige o MDS, e o
+    portao le o piso calculado com o alfa no TOPO do IC -- o piso menos exigente compativel com
+    a imprecisao do diagnostico. Assim a guarda so dispara quando a largura do IC nao pode
+    explicar o achado, e nunca por um M pequeno demais."""
+    res = _res_sintetico(mu=0.0, seed=23, n_dias=1000)
+    b = res["bloco_b"]
+    T = b["T"]
+
+    # 2 rejeicoes em 200: alfa 0,01, IC [0,0012 ; 0,0357]
+    cal = V.classificar_calibracao(2, 200)
+    forjado = dict(res)
+    forjado["calibracao"] = cal
+    forjado["bloco_b"] = dict(b)
+    forjado["bloco_b"]["mds_piso"] = round(V.mds_sharpe(T, alfa=cal["taxa"]), 3)
+    forjado["bloco_b"]["mds_piso_min"] = round(V.mds_sharpe(T, alfa=cal["ic_taxa"][1]), 3)
+    assert forjado["bloco_b"]["mds_piso"] > forjado["bloco_b"]["mds_piso_min"]
+    # com T grande o piso menos exigente nao passa do limite -> o veredito NAO vira
+    assert forjado["bloco_b"]["mds_piso_min"] < V.MDS_LIMITE
+    assert V._veredito(forjado)["classe"] == res["veredito"]["classe"]
+
+    # ja um piso que nem no topo do IC cabe no limite bloqueia, e o motivo cita o PISO
+    duro = dict(forjado)
+    duro["bloco_b"] = dict(forjado["bloco_b"])
+    duro["bloco_b"]["mds_piso_min"] = V.MDS_LIMITE + 0.01
+    v = V._veredito(duro)
+    assert v["classe"] == "INCONCLUSIVO" and "PISO" in v["motivo"]
+
+
+def test_calibracao_entra_no_resultado_e_no_relatorio(capsys):
+    res = _res_sintetico(mu=0.0, seed=31, n_dias=300)
+    assert res["calibracao"]["M"] == V.M_CONTROLE_NULO
+    assert "mds_piso" in res["bloco_b"] and "mds_piso_min" in res["bloco_b"]
+    V.relatorio(res)
+    out = capsys.readouterr().out
+    assert "calibracao [Q-7]" in out
+    assert "banda de aceitacao CALCULADA" in out
+    assert res["calibracao"]["classe"] in out
+
+
+def test_relatorio_do_controle_nulo_imprime_o_alfa_e_a_causa(capsys):
+    res = _res_sintetico(mu=0.0, seed=41, n_dias=300)
+    causa = [(f, V.controle_nulo_direto(res["matriz_is"], M=20, seed=7, dgp=f))
+             for f in ("normal", "pesada")]
+    V.relatorio_controle_nulo(res["calibracao"], causa)
+    out = capsys.readouterr().out
+    assert "banda CALCULADA" in out and "a CAUSA" in out
+    assert "marginal   normal" in out and "marginal   pesada" in out
+    assert "F15" in out
+
+
+def test_m_calibracao_menor_alarga_a_banda_em_vez_de_desligar_a_guarda():
+    """Nao ha bandeira para desligar a calibracao -- so como medir com menos paineis. E menos
+    paineis alargam a banda, que e a consequencia certa: diagnostico impreciso reclama menos,
+    nunca mais. (CLAUDE.md §2: a guarda so protege se nao houver como desliga-la.)"""
+    assert V.banda_binomial(20, 0.05)["taxa_hi"] > V.banda_binomial(400, 0.05)["taxa_hi"]
+    assert V.ic_clopper_pearson(1, 20)[1] > V.ic_clopper_pearson(20, 400)[1]
+    import inspect
+    assinatura = inspect.signature(V.walk_forward).parameters
+    assert "m_calibracao" in assinatura
+    assert not any(n.startswith("sem_") or n == "calibrar" for n in assinatura)
