@@ -37,12 +37,18 @@ def _horas_por_barra(df, tf_horas, tf):
     hold real.
 
     **A direção do viés depende do sinal do funding líquido do período, e não é universal.**
-    Cobrar um quarto do carry significa pagar 1/4 quando o livro é net-LONG (P&L superestimado)
-    e RECEBER 1/4 quando é net-SHORT (P&L subestimado). No período de 1.095 dias registrado na
-    §6 do `ITEM1-VALIDACAO-RIGOROSA.md` o livro foi net-SHORT — a saída literal diz
-    `COM x SEM funding: R$+993 x R$+948 -> efeito do carry: R$+45, net-SHORT no período` —,
-    então ali o erro foi PARA MENOS. Quem reportar esta correção tem de dizer sobre qual
-    período fala; a magnitude é sempre 4x, o sinal não.
+    Cobrar um quarto do carry significa pagar 1/4 quando o livro é net-LONG (P&L
+    superestimado) e RECEBER 1/4 quando é net-SHORT (P&L subestimado). A magnitude é sempre
+    4×; o sinal, não — quem reportar esta correção tem de dizer sobre qual período fala.
+
+    **E para o período de 1.095 dias o sinal AINDA NÃO FOI MEDIDO.** O contraste que o
+    mediria é o do `[P2-10]` (`walk_forward_tendencia(com_contraste=True)`), e a §6 do
+    `ITEM1-VALIDACAO-RIGOROSA.md` registra que ele não chegou a rodar: *"a sessão foi cortada
+    por tempo antes de a segunda passada do grid (~13 min) terminar"*. O que está registrado
+    daquela rodada é o P&L OOS com funding (`+R$993`); o par sem funding, não. Enquanto o
+    contraste não for colado num documento, a direção nesse período é desconhecida — e a
+    linha `-> efeito do carry: ... net-LONG/net-SHORT` que o próprio script imprime é onde ela
+    vai aparecer.
 
     O conserto de sintoma seria acrescentar `tf=TF` na chamada da `validacao`. Ele funciona
     hoje e quebra de novo no próximo `df` com outra granularidade, em silêncio, porque a
