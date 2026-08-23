@@ -36,13 +36,71 @@ def _fluxo_checado(s):
     return MOTIVO_FLUXO_ND not in (s["motivos"] or "")
 
 
-def _alavancagem(cfg, conviccao):
+# [P1-11] Fração da distância até a liquidação em que o stop pode viver. 0,8 => a liquidação
+# sobra 25% ALÉM do stop (1/0,8). Não é config de usuário e por isso não vai para o banco:
+# é margem de engenharia sobre o `LIQ_BUFFER` do simulador, que é o modelo de liquidação.
+FOLGA_LIQ = 0.8
+
+# [P1-11] Quantas vezes o cap geométrico apertou a alavancagem, e o último caso. Mora em
+# módulo, e não só no retorno do ciclo, porque quem precisa expor isso é o `/status`
+# (`api.py` — território T-DECLARACAO, onda 2 do M4), que roda FORA do ciclo do auto-trader e
+# não teria como somar os `res` já descartados. Quem for lê-lo lê `autotrader.CAPS_GEOMETRIA`.
+CAPS_GEOMETRIA = {"total": 0, "ultimo": None}
+
+
+def _stop_dist(entrada, stop):
+    """Distância relativa entrada→stop — a MESMA para o sizing e para a alavancagem.
+
+    [P1-11] Vira função porque `_tamanho` e `_alavancagem` têm de concordar sobre a geometria
+    do trade: se cada uma calculasse a sua, a garantia "liquidação atrás do stop" valeria com
+    um número e a margem seria dimensionada com outro. 0.0 = não há geometria medível (sinal
+    sem stop, stop na entrada, entrada degenerada); quem chama decide o que fazer com isso."""
+    try:
+        if entrada and stop and entrada != stop:
+            return abs(float(entrada) - float(stop)) / float(entrada)
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return 0.0
+
+
+def _cap_geometrico(lev, stop_dist, ativo=None):
+    """[P1-11] Teto da alavancagem que mantém a LIQUIDAÇÃO ATRÁS DO STOP.
+
+    A liquidação fica a ~`LIQ_BUFFER/lev` da entrada (`simulador._preco_liquidacao`). Quando
+    `stop_dist > LIQ_BUFFER/lev` ela vem ANTES do stop: o stop é inalcançável, a perda é a
+    margem inteira e o trade vira binário — medido em 37,2% das barras de INJ 1h a 20x.
+
+    Lê o `LIQ_BUFFER` do `simulador` em vez de repetir 0.9: o número é do modelo de
+    liquidação, e uma cópia aqui garantiria divergir dele um dia."""
+    if not stop_dist or stop_dist <= 0:                 # sinal sem stop: não há o que medir
+        return lev
+    lev_geo = FOLGA_LIQ * simulador.LIQ_BUFFER / stop_dist
+    if lev_geo >= lev:
+        return lev
+    capada = max(1.0, float(int(lev_geo)))              # trunca PARA BAIXO: arredondar pra cima
+    if capada >= lev:                                   # traria a liquidação de volta pra dentro
+        return lev
+    CAPS_GEOMETRIA["total"] += 1
+    CAPS_GEOMETRIA["ultimo"] = {"ts": str(pd.Timestamp.now()), "ativo": ativo,
+                                "lev_conviccao": lev, "lev_efetiva": capada,
+                                "stop_dist": round(stop_dist, 6)}
+    log(f"lev capada {lev}->{capada} por geometria stop/liq {ativo}")
+    return capada
+
+
+def _alavancagem(cfg, conviccao, stop_dist=None, ativo=None):
     """Alavancagem do trade. Modo 'conviccao': escala LINEAR da convicção mínima (lev_min) até
     100 (lev_max=teto), arredondada e limitada a [lev_min, lev_max]. Modo 'fixo': alavancagem_padrao.
     AVISO: escalar pra cima na convicção assume que convicção prevê acerto — NÃO comprovado (DSR~0).
-    Alavancagem alta aproxima a liquidação (~LIQ_BUFFER/lev), virando stops em perdas de margem inteira."""
+
+    [P1-11] Sobre os DOIS modos vem o cap geométrico. Ele vale no modo 'fixo' também porque a
+    geometria é física, não artefato da convicção: `alavancagem_padrao=10` com stop de 9,5% é
+    tão degenerado quanto 20x por convicção. E ele pode descer ABAIXO de `lev_min` de
+    propósito — `lev_min` é o piso da escala de convicção, nunca foi garantia de risco.
+
+    Sem `stop_dist` (chamada antiga, ou sinal sem stop) nada muda: sem geometria não há cap."""
     if cfg.get("auto_lev_modo", "conviccao") != "conviccao":
-        return float(cfg.get("alavancagem_padrao", 10))
+        return _cap_geometrico(float(cfg.get("alavancagem_padrao", 10)), stop_dist, ativo)
     lev_min = float(cfg.get("auto_lev_min", 2))
     lev_max = float(cfg.get("auto_lev_max", 20))
     conv_min = float(cfg.get("auto_conviccao_min", 60))
@@ -50,24 +108,29 @@ def _alavancagem(cfg, conviccao):
     frac = (conv - conv_min) / max(100 - conv_min, 1)
     frac = min(max(frac, 0.0), 1.0)
     lev = lev_min + frac * (lev_max - lev_min)
-    return float(max(lev_min, min(round(lev), lev_max)))     # inteiro, dentro de [lev_min, teto]
+    lev = float(max(lev_min, min(round(lev), lev_max)))      # inteiro, dentro de [lev_min, teto]
+    return _cap_geometrico(lev, stop_dist, ativo)            # [P1-11] a geometria vem por cima
 
 
 def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0):
     """Sizing por risco: valor tal que a perda-até-o-stop ~= banca*risco_frac.
-    Capa em banca*max_frac. Retorna 0 (=pular o sinal) se a banca não comporta nem o piso —
-    nunca infla pro piso furando o cap, nem opera banca morta (<=0)."""
+    Capa em banca*max_frac. Retorna 0 (=pular o sinal) quando a banca não comporta o piso,
+    quando o risco pedido não paga o piso, ou com banca morta (<=0).
+
+    [P2-8] O piso é FILTRO, nunca inflador. `risco_por_trade` é TETO: subir o valor até o
+    piso furava esse teto em silêncio (banca R$100 a 3% pede R$3 e abria R$10 = 10% da
+    banca, 3,3x o configurado). Banca pequena passa a dar MENOS trades, nunca mais risco.
+    A guarda `cap < min_valor` acima NÃO cobre isso: ela só pega banca tão pequena que o
+    cap fica abaixo do piso (<R$40 com max_frac=0,25); o buraco estava na faixa do meio."""
     cap = banca * max_frac
     if banca <= 0 or cap < min_valor:           # banca morta ou pequena demais: não opera
         return 0.0
     risco_rs = banca * risco_frac
-    if entrada and stop and entrada != stop:
-        sd = abs(entrada - stop) / entrada
-        denom = min(lev * sd, 1.0)              # se a liquidação vem antes do stop, risco=valor (denom=1)
-    else:
-        denom = 1.0
+    sd = _stop_dist(entrada, stop)              # [P1-11] a mesma geometria que capa a alavancagem
+    denom = min(lev * sd, 1.0) if sd else 1.0   # se a liquidação vem antes do stop, risco=valor (denom=1)
     valor = risco_rs / denom if denom > 0 else risco_rs
-    valor = max(valor, min_valor)               # piso
+    if valor < min_valor:                       # [P2-8] piso: FILTRA o sinal, não infla o risco
+        return 0.0
     valor = min(valor, cap)                     # cap (>= min_valor, garantido acima)
     return round(valor, 2)
 
@@ -80,7 +143,8 @@ def auto_executar(saidas=None):
         return {"ativo": False}
 
     res = {"ativo": True, "abertos": [], "fechados": [], "rejeitados": [],
-           "ts": str(pd.Timestamp.now())}
+           "caps_geometria": 0, "ts": str(pd.Timestamp.now())}
+    caps_antes = CAPS_GEOMETRIA["total"]              # [P1-11] quantos caps ESTE ciclo produziu
 
     # 1) auto-fechar (scalp em reversão+lucro) — DESLIGADO quando o trailing está ativo:
     #    com trailing, deixamos o lucro correr e quem fecha o vencedor é o trailing stop, não o scalp.
@@ -160,7 +224,12 @@ def auto_executar(saidas=None):
             break
         if s["ativo"] in vistos:                          # 1 entrada por ativo por ciclo
             continue
-        lev = _alavancagem(cfg, s["conviccao"])           # alavancagem ∝ convicção (ou fixa)
+        # [P1-11] a lev sai da convicção e passa pelo cap geométrico ANTES de dimensionar: a
+        # margem tem de ser calculada sobre a alavancagem que vai ser aberta de fato. O
+        # `simulador.abrir` recompõe o stop mantendo a distância RELATIVA do sinal (`stop_rel`),
+        # então a garantia "liquidação atrás do stop" sobrevive ao preço de entrada ao vivo.
+        stop_dist = _stop_dist(s["preco"], s["stop_sugerido"])
+        lev = _alavancagem(cfg, s["conviccao"], stop_dist, s["ativo"])
         valor = _tamanho(banca, risco_frac, lev, s["preco"], s["stop_sugerido"], max_frac)
         if valor <= 0:                                    # banca não comporta: pula
             continue
@@ -186,6 +255,7 @@ def auto_executar(saidas=None):
             log(f"auto-trader abrir erro {s['ativo']}: {e}", "error")
             continue
 
+    res["caps_geometria"] = CAPS_GEOMETRIA["total"] - caps_antes
     if res["abertos"] or res["fechados"]:
         log(f"auto-trader: +{len(res['abertos'])} aberto(s), {len(res['fechados'])} fechado(s)")
     return res
