@@ -80,7 +80,7 @@ uvicorn api:app
 
 **Quatro decisões de ordem estão codificadas nesse desenho, e cada uma tem custo se invertida:**
 
-1. **O `try` do passo 1 é por posição, não em volta do `for`** (`simulador.py:266-279`). Em volta do
+1. **O `try` do passo 1 é por posição, não em volta do `for`** (`simulador.py:308-321`). Em volta do
    `for`, uma moeda que falha tira **todas** as posições seguintes da vigilância de stop, trailing e
    liquidação — funciona e perde dinheiro em silêncio. Invariante (`CLAUDE.md` §2).
 2. **O auto-trader tem `try` próprio dentro do ciclo** (`api.py:78-81`): falha do bot não pode
@@ -126,17 +126,17 @@ instante como parâmetro, `python api.py` prova a cadência sem esperar 60 s.
      POST /confirmar         autotrader.auto_executar       expirar_sinais()
      ou auto-trader                                         (signal_engine.py:345)
             │                                                     │
-            ▼ CLAIM ATÔMICO (simulador.py:197-204)                ▼
+            ▼ CLAIM ATÔMICO (simulador.py:239-246)                ▼
       'confirmado' ──► INSERT posicoes                       'expirado'
             │
       POST /pular ──► 'pulado'
 ```
 
-**O claim atômico é o invariante** (`simulador.py:196-206`): o `UPDATE sinais SET
+**O claim atômico é o invariante** (`simulador.py:238-248`): o `UPDATE sinais SET
 status='confirmado' WHERE id=? AND status='novo'` roda com checagem de `rowcount` **na mesma
 transação** do `INSERT INTO posicoes`. Quem ganha o UPDATE abre; o segundo pedido vê `rowcount 0` e
-é recusado. O pré-check de `simulador.py:165-166` é conveniência — a exclusão mútua é no UPDATE. E os
-tetos de risco e margem (`simulador.py:181-195`) levantam **antes** do claim, de propósito: recusa
+é recusado. O pré-check de `simulador.py:186-187` é conveniência — a exclusão mútua é no UPDATE. E os
+tetos de risco e margem (`simulador.py:223-237`) levantam **antes** do claim, de propósito: recusa
 por teto não pode consumir o sinal.
 
 **Dois relógios governam o envelhecimento**, e eles concordam por construção:
@@ -167,15 +167,16 @@ módulos.
 
 ## 5. As guardas de risco, e onde cada uma mora
 
-Três tetos, avaliados em pontos diferentes de propósito.
+Três tetos e uma geometria, avaliados em pontos diferentes de propósito.
 
 | Guarda | Onde | Mede |
 |---|---|---|
-| **Trava diária** (sticky) | `simulador.py:114-152` | equity de agora **vs. equity do início do dia** |
-| **Teto de risco aberto** | `simulador.py:181-189` | soma do risco-até-o-stop das abertas |
-| **Teto de margem** | `simulador.py:190-195` | soma de `valor_reais` vs. `banca × exposicao_max` |
+| **Trava diária** (sticky) | `simulador.py:135-173` | equity de agora **vs. equity do início do dia** |
+| **Teto de risco aberto** | `simulador.py:223-231` | soma do risco-até-o-stop das abertas |
+| **Teto de margem** | `simulador.py:232-237` | soma de `valor_reais` vs. `banca × exposicao_max` |
+| **Geometria stop×liquidação** (`P1-12`) | `simulador.py:195-215` | a liquidação vem **antes** do stop? |
 
-**A trava diária compara equity, não P&L realizado** (`simulador.py:129-137`): o baseline é o
+**A trava diária compara equity, não P&L realizado** (`simulador.py:150-158`): o baseline é o
 **primeiro** snapshot de `equity` do dia corrente (`ORDER BY rowid ASC LIMIT 1`), e o corrente é
 `banca.atual + SUM(pnl)` das abertas. Por isso um dia pode fechar com trades realizados positivos e
 a trava disparada — aconteceu em 22/08 (+34,68 realizados, trava por −80,34 de equity). É *sticky*:
@@ -189,16 +190,39 @@ invariante de risco por efeito colateral de faxina).
 
 **A liquidação é modelada, não decorativa**: `_preco_liquidacao` usa `LIQ_BUFFER = 0.9`
 (`simulador.py:17`, `:84-88`) — liquida quando a perda chega a ~90% da margem. E quando stop e
-liquidação batem no mesmo tick, ganha **o mais perto da entrada** (`simulador.py:298-301`) — a mesma
+liquidação batem no mesmo tick, ganha **o mais perto da entrada** (`simulador.py:340-343`) — a mesma
 regra do backtest, o que faz o empate ser resolvido do mesmo jeito nos dois lados. Paridade de novo.
 
+**E o modelo de liquidação virou guarda de entrada** (`P1-12`). Quando `lev × stop_dist ≥
+LIQ_BUFFER` a liquidação chega **antes** do stop: o stop é inalcançável, a perda é a margem inteira
+e o trade vira binário — 37,2% das barras de INJ 1h a 20x, medido no `P1-11`. `abrir()` recusa essa
+geometria com `ValueError`, e três detalhes do desenho não são estilo:
+
+- **Mora em `abrir()`, não na rota.** O cap do `P1-11` vive em `autotrader._alavancagem`, e só o
+  auto-trader passa por lá: `POST /confirmar` recebe `alavancagem` do **cliente** e a repassa
+  (`api.py:681`). Um pré-check na rota protegeria uma porta; `abrir()` é o único ponto por onde os
+  **dois** fluxos passam, e uma recusa ali não se contorna por rota nova, cliente novo ou `curl`.
+  `api.py:682` já traduz `ValueError` para `{ok:false, erro}`, então a rota não mudou.
+- **Recusa, não cap silencioso.** O auto-trader capa porque é ele quem escolhe a alavancagem; quem
+  digitou 20x no painel receberia uma posição de 14x que não pediu, dimensionada para outra
+  alavancagem, sem nada na tela dizendo isso. A mensagem devolve as duas distâncias e o teto de
+  alavancagem que aquele stop comporta.
+- **As duas camadas usam números diferentes de propósito.** A guarda é a parede física
+  (`LIQ_BUFFER`); o cap do auto-trader é o recuo de 25% que o bot se impõe antes dela
+  (`FOLGA_LIQ = 0,8`). Se as duas usassem o mesmo número o bot viveria em cima da fronteira e um
+  erro de ponto flutuante bastaria para ele recusar os próprios trades.
+
+Ela levanta **antes do claim atômico**, pela mesma razão que os tetos: recusa por geometria não é
+defeito do sinal, e consumi-lo tiraria da fila um sinal que volta a ser confirmável assim que a
+alavancagem pedida couber.
+
 **O stop tem gatilho e tem fill, e eles não são o mesmo preço** (`_fill_stop`,
-`simulador.py:313-336`, `P2-18`). O worker olha o mercado a cada 15 s; entre dois polls o preço
+`simulador.py:355-378`, `P2-18`). O worker olha o mercado a cada 15 s; entre dois polls o preço
 rompe o stop e segue. Fechar no preço do stop grava uma execução que não houve, e o erro é sempre
 para o **mesmo lado** — perda menor e trailing melhor que o real. Por isso o fill é o **pior** entre
 o stop e o preço observado: LONG executa no mais baixo dos dois, SHORT no mais alto. Quando isso
 acontece, o `motivo_saida` ganha o sufixo **`-gap`** (`stop-gap`, `trailing-gap`,
-`simulador.py:349-351`), e é isso que torna o custo do gap mensurável depois por query em `trades`,
+`simulador.py:391-393`), e é isso que torna o custo do gap mensurável depois por query em `trades`,
 sem instrumentação nova.
 
 O fill tem **piso no preço de liquidação**: passado ele a corretora já tomou a margem, então não
@@ -419,7 +443,7 @@ do `None` declarado do `/health` e do funding não medido do `P2-10`: **ausênci
 valor plausível.**
 
 **Rede fora de transação.** `abrir()` lê o sinal, sai da conexão, busca preço, e só então entra no
-lock + transação (`simulador.py:161-206`). `dca.aportar()` faz o mesmo em três passos — leitura
+lock + transação (`simulador.py:182-248`). `dca.aportar()` faz o mesmo em três passos — leitura
 curta, rede, escrita curta com `rowcount` (`dca.py:25-42`) — e se o plano sumiu durante a viagem de
 rede, nada é aportado **e o log não pode dizer que foi**.
 
@@ -444,10 +468,10 @@ levantamento é o `Q-6`; os números conferidos estão abaixo de cada item.
 | # | Onde | O modelo faz | Direção | Decisão |
 |---|---|---|---|---|
 | **(a)** | `_preco_liquidacao` (`simulador.py:84-88`) | `LIQ_BUFFER/lev`, sem *maintenance margin* | conservador **até ~20-25x**, otimista acima | documentar |
-| **(b)** | `_pnl` (`simulador.py:97`) | taxa das duas pernas sobre o nocional de **entrada** | segue o movimento do preço, ±R$0,01 no trade típico | documentar |
+| **(b)** | `_pnl` (`simulador.py:118`) | taxa das duas pernas sobre o nocional de **entrada** | segue o movimento do preço, ±R$0,01 no trade típico | documentar |
 | **(c)** | `_funding_custo` (`simulador.py:54-77`) | soma dos rates sobre o nocional de **entrada** | idem, e cresce com o tempo de hold | documentar |
 | **(d)** | `dados.baixar_ohlcv` (`pesquisa/dados.py`) | gravava o candle **em formação** no cache | irreprodutível — não é viés, é ruído | **corrigido** |
-| **(e)** | `_risco_posicao` (`simulador.py:104-111`) | risco-até-o-stop **sem as taxas** | subestima o risco em `2·fee·lev` da margem | documentar |
+| **(e)** | `_risco_posicao` (`simulador.py:125-132`) | risco-até-o-stop **sem as taxas** | subestima o risco por `1 + 2·fee/sd` | **documentar** (`P2-38`) |
 
 **(a) A liquidação não tem *maintenance margin*, e a conservadoria dela tem um ponto de virada.**
 O modelo liquida no movimento adverso de `LIQ_BUFFER/lev` = `0,9/lev`. Uma perpétua real liquida
@@ -481,7 +505,7 @@ o preço de saída para dentro do cálculo da taxa e reprecificar a paridade com
 `backtest_plataforma.TAXA`, que usa a mesma forma — custo alto para corrigir centavos.
 
 **(c) O funding também é somado sobre o nocional de entrada.** `_funding_custo` aplica a soma dos
-rates da janela sobre o nocional inicial (`simulador.py:223`); o real liquida a cada *settlement*
+rates da janela sobre o nocional inicial (`simulador.py:265`); o real liquida a cada *settlement*
 de 8 h sobre o nocional **corrente**. Mesma forma de erro do (b), e pequeno enquanto o hold for
 curto — a política viva é intraday e a maioria dos trades não atravessa nem um settlement. Cresce
 com o tempo de hold, e é a aproximação que mais rapidamente deixa de valer se a estratégia virar
@@ -497,26 +521,72 @@ de cache — que carrega a data — prometia uma janela reproduzível por dia. `
 **toda barra que sai de `baixar_ohlcv` é barra fechada**. Prova em `tests/test_execucao_real.py`.
 
 **(e) O risco-até-o-stop ignora as taxas — e o que ele alimenta não é o sizing.** `_risco_posicao`
-mede `valor · lev · distância_até_o_stop`, capado na margem. Quando o stop bate, as taxas somam
-`2 · fee · lev · valor` à perda: **1% da margem a 10x, 2% a 20x, 5% a 50x**. Então o teto de risco
-aberto e o `risco_inicial` gravado estão subestimados nessa fração.
+(`simulador.py:125-132`) mede `valor · lev · sd`, capado na margem, onde `sd` é a distância relativa
+até o stop. Quando o stop bate, as taxas das duas pernas somam `2 · fee · lev · valor` à perda, e
+elas ficam de fora da conta. Então o teto de risco aberto e o `risco_inicial` gravado estão
+subestimados nessa fração. Decidido no `P2-38`, em 2026-08-23: **documentar** (opção C do card).
 
-Somar as taxas ali é uma linha, e mesmo assim a decisão é documentar — pelo raio de alcance, não
-pelo tamanho:
+**A magnitude tem dois denominadores, e só um deles é o decisivo.**
 
-- **Não afeta o sizing.** Quem dimensiona é `autotrader._tamanho` (`autotrader.py:56-72`), que
-  tem a fórmula inversa escrita **de forma independente** e nunca chama `_risco_posicao`. Hoje as
-  duas são inversas exatas: `_tamanho` resolve `valor` para `valor·lev·sd = banca·risco_frac`, e
-  `_risco_posicao` devolve exatamente esse valor de volta. Mudar só um lado quebra a igualdade — o
-  bot passaria a dimensionar para R$30 de risco enquanto `guarda_risco` contaria R$32.
-- **Reescala a unidade R do histórico.** `risco_inicial` é gravado por trade (`simulador.py:231`)
-  e é o denominador dos R-múltiplos de `db.metricas()` (`db.py:294-295`, `expectancia_r` e
-  `sqn_r`). Trocar a definição no meio do caminho torna os trades de antes e de depois
-  incomparáveis **sem que nenhum número acuse** — que é exatamente o que o último item do aceite do
-  `Q-6` proíbe.
+Em fração da **margem**, o erro cresce com a alavancagem — é a leitura que o `Q-6` registrou:
 
-O conserto correto mexe nos dois lados ao mesmo tempo, e `autotrader.py` é território do `T-SIZING`
-nesta mesma onda. Fica registrado aqui como card a criar, não como mudança a fazer de passagem.
+| lev | taxa no stop, em fração da margem (`2·fee·lev`) |
+|---|---|
+| 2x | 0,20% |
+| 5x | 0,50% |
+| **10x** (`alavancagem_padrao`) | **1,00%** |
+| **20x** (`auto_lev_max`) | **2,00%** |
+| 50x | 5,00% |
+
+Mas o número que decide é o erro **relativo ao risco medido**, e nele **a alavancagem cancela** —
+os dois termos escalam com `lev · valor`, então `real/medido = (sd + 2·fee)/sd` depende **só da
+distância do stop**:
+
+| stop | onde aparece | fator | erro |
+|---|---|---|---|
+| 0,50% | stop colado (o cap por trade já morde antes) | 1,200x | +20,0% |
+| 0,74% | BTC 15m p50 | 1,135x | +13,5% |
+| 1,64% | BTC 15m p95 | 1,061x | +6,1% |
+| 2,65% | SOL 1h p50 | 1,038x | +3,8% |
+| 3,67% | INJ 1h p50 | 1,027x | +2,7% |
+| 9,50% | INJ 1h p95 | 1,011x | +1,1% |
+
+(`fee` = `taxa_por_lado` = 0,05%, `db.CONFIG_PADRAO`. Stops medidos: tabela do `P1-11`.)
+
+**Isto inverte a intuição da leitura por margem:** o caso perigoso não é a alavancagem alta, é o
+**stop curto**. A 50x com stop de 9,5% o erro relativo é 1,1%; a 2x com stop de 0,5% é 20%.
+
+**No que está vivo hoje** — banca R$1.000, `risco_por_trade` 3%, stop de 2%, 10x — `_tamanho` pede
+R$150 de margem, `guarda_risco` conta R$30 de risco e a perda real no stop é **R$31,50**: 5% acima
+do orçamento. No teto de risco aberto (10% do equity), a guarda vincula com R$90 medidos, que são
+R$94,50 reais — **9,4% do equity, não 9,0%**.
+
+**Por que documentar, e não consertar — as três opções do `P2-38` e o motivo de duas caírem.**
+
+- **(A) Corrigir os dois lados e declarar um corte no histórico.** Cai por **território e por
+  esquema**. Fazer `db.metricas()` não misturar duas unidades R exige escrever em `db.py`
+  (`T-DECLARACAO` na onda 2 do M4) e provavelmente uma coluna nova; esquema é estado compartilhado
+  que o território não isola (§9.2b do plano).
+- **(B) Corrigir só na guarda, não no sizing.** Cai por **contradizer o próprio critério de aceite**,
+  que pede "`guarda_risco()` e `_tamanho()` concordam sobre o que 'risco' significa — teste que
+  prove que uma é inversa da outra". B, por definição, as desalinha: o bot dimensionaria para R$30
+  enquanto a guarda contaria R$31,50. Estender B ao `_tamanho` deixa de ser B — encolhe toda
+  posição viva em ~5%, e mudar sizing vivo num card `toca-risco` é assinatura do dono (§9.8).
+- **(C) Documentar.** É esta seção, e é a mesma resposta que o `Q-6` deu para (a), (b) e (c).
+
+**O que mudou hoje e a próxima pessoa precisa saber: o `min(..., valor_reais)` deixou de mascarar.**
+Antes, a geometria degenerada (`lev·sd ≥ 1`) fazia `_risco_posicao` devolver a margem inteira, e
+nesse regime não havia o que subestimar. O `P1-12` recusa `lev·sd ≥ LIQ_BUFFER` na abertura, então
+**toda posição nova tem `lev·sd < 0,9`** e o cap nunca morde: a subestimação passa a valer em 100%
+das posições novas, em vez de só nas de geometria sadia. Na pior geometria que ainda passa, a perda
+real é 0,95 da margem (50x) — ainda abaixo dela, então o cap continua correto, só deixou de ser
+alcançado.
+
+**A decisão é executável, não só prosa.**
+`tests/test_guarda_risco.py::test_p2_38_o_risco_medido_exclui_as_taxas_e_isso_e_decisao_registrada`
+fixa a fórmula sem taxas e os fatores desta tabela. Quem "consertar" `_risco_posicao` de passagem
+derruba esse teste e cai aqui, no parágrafo sobre a unidade R — que é o efeito que nenhum número do
+painel acusaria sozinho.
 
 ---
 
@@ -543,7 +613,7 @@ cópia sem `.git` a reprova por um motivo que não é defeito. Quem auditar, use
 não é teste quebrado — é um defeito latente registrado.** `db.metricas()` classifica os trades
 tolerando NULL (`db.py:272-273`, `(t["pnl_reais"] or 0)`) e **soma a coluna crua** duas linhas
 abaixo (`db.py:274-275`): um `pnl_reais` NULL levanta `TypeError` e derruba o `/estado` inteiro.
-Latente hoje porque `simulador.py:237` é o único INSERT em `trades` e sempre passa float. O card é
+Latente hoje porque `simulador.py:279` é o único INSERT em `trades` e sempre passa float. O card é
 o `P2-36`. O `strict=True` é o ponto: **no dia em que o `P2-36` fechar, o xfail vira XPASS e quebra
 a suíte**, obrigando quem consertou a promover o teste. É convenção do projeto — um xfail estrito
 aqui é um card em aberto, não sujeira para limpar.

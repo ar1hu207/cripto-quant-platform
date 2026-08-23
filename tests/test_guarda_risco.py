@@ -13,7 +13,7 @@ import pytest
 
 import db
 import simulador
-from conftest import semear_equity, semear_posicao
+from conftest import semear_equity, semear_posicao, semear_sinal
 
 
 HOJE = str(pd.Timestamp.now().date())
@@ -203,3 +203,255 @@ def test_config_invalida_no_banco_nao_derruba_a_guarda(banco):
     g = simulador.guarda_risco()
     assert g["limite_pct"] == 5.0                  # caiu no padrao 0.05
     assert g["risco_aberto_pct"] == 10.0
+
+
+# ---------------------------------------------------------------- [P1-12] geometria em abrir()
+#
+# Por que aqui e nao em `tests/test_abrir.py`, onde o teto de MARGEM mora (docstring do topo):
+# a recusa do [P1-12] e guarda de RISCO -- ela nao pergunta se o trade cabe no orcamento,
+# pergunta se o DESENHO do trade e possivel -- e o territorio T-GUARDA da onda 2 do M4 tem
+# `tests/test_guarda_risco.py` e `tests/test_sizing.py`, nao `tests/test_abrir.py`. A convencao
+# do arquivo e a fronteira do territorio discordam aqui, e a fronteira manda (§9.4/P2).
+
+TABELA_STOPS_P1_11 = [0.0074, 0.0164, 0.0265, 0.0473, 0.0279, 0.0483, 0.0290,
+                      0.0456, 0.0359, 0.0586, 0.0373, 0.0919, 0.0367, 0.0950]
+
+
+def _sem_tetos():
+    """Desliga os tetos de risco e de margem. Sem isto, uma posicao de 20x com stop de 5% ja
+    estoura o teto de risco aberto, e o teste passaria pelo motivo errado -- provando a
+    recusa que JA existia em vez da que o card pede."""
+    db.set_config("risco_aberto_max", "0")
+    db.set_config("exposicao_max", "0")
+
+
+def test_p1_12_a_alavancagem_do_cliente_com_liquidacao_antes_do_stop_e_recusada(banco, sem_rede):
+    """Item 1 do aceite. O caso vivo: o `POST /confirmar` recebe `alavancagem` do CLIENTE e a
+    repassa para `abrir()`; a 20x com stop de 5% a liquidacao fica a 4,5% -- o stop e
+    inalcancavel e a perda e a margem inteira. O cap do [P1-11] nao alcanca este caminho.
+
+    A mensagem tem de DIZER a geometria: "recusado" sem os dois numeros nao diz ao operador
+    qual dos dois lados ele tem de mexer."""
+    _sem_tetos()
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    with pytest.raises(ValueError, match="geometria degenerada") as e:
+        simulador.abrir(sid, 100.0, 20)
+    assert "4.50%" in str(e.value) and "5.00%" in str(e.value)     # liquidacao e stop, os dois
+    assert "abaixo de 18.0x" in str(e.value)                       # e o que fazer a respeito
+
+
+def test_p1_12_a_recusa_por_geometria_nao_consome_o_sinal(banco, sem_rede):
+    """O invariante do CLAUDE.md §2 que `tests/test_abrir.py` trava para os tetos, aplicado a
+    guarda nova: ela levanta ANTES do claim atomico. Recusa por geometria nao e defeito do
+    sinal -- o mesmo sinal volta a ser confirmavel com uma alavancagem que caiba, e um claim
+    aqui o tiraria da fila para sempre."""
+    _sem_tetos()
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    with pytest.raises(ValueError, match="geometria"):
+        simulador.abrir(sid, 100.0, 20)
+    with db.conectar() as c:
+        assert c.execute("SELECT status FROM sinais WHERE id=?", (sid,)).fetchone()["status"] == "novo"
+    assert db.listar("posicoes", 10) == []
+    simulador.abrir(sid, 100.0, 10)                                # e a 10x o MESMO sinal abre
+    assert len(db.listar("posicoes", 10)) == 1
+
+
+def test_p1_12_a_recusa_chega_ao_painel_como_ok_false_e_nao_como_500(banco, sem_rede):
+    """Item 2 do aceite: reproduzivel SEM navegador. Chama a funcao da rota direto, que e o
+    que um `curl` alcanca -- e o que ele recebe e o contrato `{ok: false, erro}` que o painel
+    ja entende, porque `api.py:682` traduz o `ValueError`. Foi por isso que a opcao B do card
+    nao precisou de mudanca no `api.py`: se a rota devolvesse 500, uma recusa deliberada do
+    sistema apareceria como falha do servidor."""
+    import api
+    _sem_tetos()
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    r = api.confirmar(api.ConfirmarReq(sinal_id=sid, valor_reais=100.0, alavancagem=20))
+    assert r["ok"] is False
+    assert "geometria degenerada" in r["erro"]
+    assert db.listar("posicoes", 10) == []
+
+
+@pytest.mark.parametrize("lev,abre", [(2, True), (10, True), (16, True), (17, True),
+                                      (18, False), (19, False), (20, False), (50, False)])
+def test_p1_12_a_fronteira_e_a_liquidacao_ENCOSTANDO_no_stop(banco, sem_rede, lev, abre):
+    """Com stop de 5% o limite e `LIQ_BUFFER/0,05` = 18x exatos: a 17x a liquidacao fica a
+    5,29% (atras do stop) e a 18x fica a 5,00% (em cima dele).
+
+    O empate e RECUSADO, e isso e um aperto deliberado sobre a letra do card ("mais perto da
+    entrada que o stop"): com a liquidacao no mesmo preco do stop, quem bate primeiro passa a
+    ser decidido por um desempate de `_marcar_uma`, e a perda e a margem inteira dos dois
+    jeitos. Apertar guarda pode; afrouxar e do dono (CLAUDE.md §2)."""
+    _sem_tetos()
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    if abre:
+        assert simulador.abrir(sid, 20.0, lev)
+    else:
+        with pytest.raises(ValueError, match="geometria"):
+            simulador.abrir(sid, 20.0, lev)
+
+
+@pytest.mark.parametrize("lev,stop", [
+    (2, 95.0), (2, 90.0), (2, 60.0),        # 2x so degenera com stop > 45%
+    (5, 98.0), (5, 90.0), (5, 85.0),
+    (10, 99.0), (10, 98.0), (10, 95.0),     # 10x: o limite e 9%
+    (20, 99.0), (20, 98.0), (20, 96.0),     # 20x: o limite e 4,5%
+])
+def test_p1_12_o_caso_normal_abre_exatamente_como_hoje(banco, sem_rede, lev, stop):
+    """Item 3 do aceite, e a parte que segura a mao: a recusa so pode agir na geometria
+    degenerada. Cada par aqui tem `lev x stop_dist < 0,9`, entao a liquidacao esta atras do
+    stop e nada muda -- inclusive os pares que a suite ja usava antes deste card (`2x` com
+    stop de 5% em `tests/test_abrir.py`, `10x` com stop de 2% em `test_sim.py`)."""
+    _sem_tetos()
+    sid = semear_sinal(preco=100.0, stop=stop)
+    pid = simulador.abrir(sid, 20.0, lev)
+    p = db.listar("posicoes", 1)[0]
+    assert (p["id"], p["status"], p["alavancagem"]) == (pid, "aberta", lev)
+
+
+def test_p1_12_sinal_sem_stop_nao_e_barrado_pela_geometria(banco, sem_rede):
+    """Sem stop nao ha distancia para comparar, e derivar uma recusa de `stop=None` seria
+    inventar geometria. Quem cobre este caso e o teto de risco: `_risco_posicao` ja devolve a
+    MARGEM INTEIRA quando nao ha stop, que e a leitura honesta da perda maxima."""
+    _sem_tetos()
+    for i, stop in enumerate((None, 0)):
+        sid = semear_sinal(ativo="X%d/USDT" % i, preco=100.0, stop=stop)
+        assert simulador.abrir(sid, 20.0, 50)
+    db.set_config("risco_aberto_max", "0.10")                      # e com o teto ligado, ele pega
+    sid = semear_sinal(ativo="Y/USDT", preco=100.0, stop=None)
+    with pytest.raises(ValueError, match="teto de risco aberto"):
+        simulador.abrir(sid, 200.0, 50)
+
+
+def test_p1_12_a_guarda_vale_no_short(banco, sem_rede):
+    """A liquidacao e simetrica e o painel opera SHORT. Uma guarda que so olhasse LONG
+    deixaria metade do fluxo manual passar."""
+    _sem_tetos()
+    sid = semear_sinal(direcao="SHORT", preco=100.0, stop=105.0)
+    with pytest.raises(ValueError, match="geometria"):
+        simulador.abrir(sid, 100.0, 20)
+
+
+def test_p1_12_a_guarda_mede_a_entrada_AO_VIVO_e_o_stop_RECOMPOSTO(banco, sem_rede):
+    """A guarda fica DEPOIS da recomposicao do stop de proposito: `abrir()` refaz o stop a
+    partir do preco ao vivo mantendo a distancia RELATIVA, entao medir os campos do sinal
+    (100/95) em vez do que vai para o banco (200/190) seria medir uma posicao que nao existe.
+
+    Aqui as duas contas dao 5% e o veredito e o mesmo -- o que este teste trava e a ORDEM: se
+    alguem mover a guarda para antes da recomposicao, no dia em que as duas divergirem a
+    guarda estara olhando para o numero errado, e nenhum teste de valor acusaria."""
+    _sem_tetos()
+    sem_rede(200.0)
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    with pytest.raises(ValueError, match="geometria"):
+        simulador.abrir(sid, 100.0, 20)
+
+
+@pytest.mark.parametrize("stop_dist", TABELA_STOPS_P1_11)
+def test_p1_12_o_auto_trader_nunca_bate_na_propria_guarda(stop_dist):
+    """As duas camadas nao podem brigar. O cap do [P1-11] usa `FOLGA_LIQ` = 0,8 (25% de folga
+    ALEM do stop) e esta guarda usa a fronteira fisica (`LIQ_BUFFER`): o cap e estritamente
+    mais apertado, entao toda lev que o bot escolhe passa aqui com sobra.
+
+    Se as duas usassem o MESMO numero, o bot viveria em cima da fronteira e um erro de ponto
+    flutuante bastaria para ele recusar os proprios trades. A guarda e a parede; o cap e o
+    recuo que o bot se impoe antes dela.
+
+    Roda sobre a tabela de stops MEDIDOS do [P1-11] -- os mesmos ativos e percentis que
+    produziam 37,2% de trades binarios no INJ 1h a 20x."""
+    import autotrader
+    cfg = {"auto_lev_modo": "conviccao", "auto_lev_min": "2", "auto_lev_max": "20",
+           "auto_conviccao_min": "60"}
+    lev = autotrader._alavancagem(cfg, 100, stop_dist)
+    entrada = 100.0
+    assert simulador._liq_antes_do_stop(entrada, entrada * (1 - stop_dist), lev, 1) is None
+
+
+@pytest.mark.parametrize("entrada,stop,lev", [
+    (100.0, 100.0, 50),      # stop na entrada: distancia zero, nao ha o que comparar
+    (100.0, None, 50),
+    (100.0, 0, 50),
+    (0, 95.0, 50),           # entrada degenerada: nao pode virar divisao por zero
+    (None, None, 50),
+    (100.0, 95.0, 0),        # lev 0: `abrir()` ja recusa na primeira linha, e aqui nao explode
+])
+def test_p1_12_sem_geometria_medivel_a_guarda_se_cala(entrada, stop, lev):
+    """Mesma regra de `autotrader._stop_dist`: ausencia de geometria devolve ausencia, nunca
+    excecao no meio do ciclo do worker."""
+    assert simulador._liq_antes_do_stop(entrada, stop, lev, 1) is None
+
+
+# ------------------------------------------------- [P2-38] as taxas ficam FORA do risco medido
+#
+# A decisao do card foi a opcao C: documentar em `ARQUITETURA.md` §10(e), nao implementar. O que
+# segue nao prova um conserto -- prova a APROXIMACAO que foi decidida, e e o que impede que ela
+# seja desfeita de passagem. `_risco_posicao` grava `trades.risco_inicial` (`simulador.py:273`),
+# que e o denominador de `expectancia_r`/`sqn_r` em `db.metricas()`: somar as taxas aqui reescala
+# a unidade R no meio do historico, e NENHUM numero do painel acusa. Documentacao que ninguem
+# executa envelhece calada; esta tem um teste com o nome do card em cima.
+
+FEE = 0.0005          # db.CONFIG_PADRAO["taxa_por_lado"]
+
+
+@pytest.mark.parametrize("valor,lev,sd", [
+    (100.0, 2, 0.02), (100.0, 10, 0.02), (100.0, 20, 0.02), (150.0, 10, 0.0074),
+    (50.0, 5, 0.0164), (200.0, 3, 0.0367),
+])
+def test_p2_38_o_risco_medido_exclui_as_taxas_e_isso_e_decisao_registrada(banco, valor, lev, sd):
+    """A formula vigente e `valor x lev x sd`, sem os `2 x fee x lev x valor` das duas pernas.
+
+    O segundo assert e o conteudo da §10(e) que a intuicao erra: o fator de subestimacao e
+    `(sd + 2*fee)/sd` e **a alavancagem CANCELA** -- os dois termos escalam com `lev x valor`.
+    Ou seja, o caso perigoso nao e a alavancagem alta, e o STOP CURTO: a 50x com stop de 9,5% o
+    erro relativo e 1,1%; a 2x com stop de 0,5% e 20%. A tabela por alavancagem que o [Q-6]
+    deixou mede outra coisa (fracao da MARGEM), e e por isso que as duas convivem na secao."""
+    entrada = 100.0
+    stop = entrada * (1 - sd)
+    medido = simulador._risco_posicao(valor, lev, entrada, stop)
+    real = valor * lev * (sd + 2 * FEE)
+
+    assert medido == pytest.approx(valor * lev * sd)          # sem taxas, e de proposito
+    assert real / medido == pytest.approx((sd + 2 * FEE) / sd)
+    assert real > medido                                       # a direcao do vies: subestima
+
+
+@pytest.mark.parametrize("sd,fator", [
+    (0.0050, 1.200), (0.0074, 1.135), (0.0164, 1.061),
+    (0.0265, 1.038), (0.0367, 1.027), (0.0950, 1.011),
+])
+def test_p2_38_a_tabela_de_magnitude_da_arquitetura_e_esta(sd, fator):
+    """Os seis fatores tabelados em `ARQUITETURA.md` §10(e), conferidos contra a conta. Item
+    final do aceite da opcao C: a magnitude fica TABELADA, e uma tabela que ninguem recalcula
+    e so um numero velho com formatacao."""
+    assert (sd + 2 * FEE) / sd == pytest.approx(fator, abs=0.001)
+
+
+def test_p2_38_o_caso_vivo_arrisca_5pct_a_mais_do_que_a_guarda_conta(banco):
+    """O numero que a §10(e) usa para dizer o tamanho do buraco, medido em vez de estimado:
+    banca R$1.000 com `risco_por_trade` 3% e stop de 2% a 10x. `_tamanho` pede R$150, a guarda
+    conta R$30 e a perda real no stop e R$31,50.
+
+    Este teste tambem prova a premissa que sustenta a decisao C: `_tamanho` e `_risco_posicao`
+    sao INVERSAS EXATAS hoje. Mexer so num lado quebra esta igualdade, e e por isso que a opcao
+    B do card nao fecha -- ela desalinha as duas por construcao."""
+    import autotrader
+    valor = autotrader._tamanho(1000.0, 0.03, 10, 100.0, 98.0, 0.25)
+    medido = simulador._risco_posicao(valor, 10, 100.0, 98.0)
+    assert valor == pytest.approx(150.0)
+    assert medido == pytest.approx(30.0)                       # a inversa exata do sizing
+    assert medido + 2 * FEE * 10 * valor == pytest.approx(31.50)
+
+
+@pytest.mark.parametrize("lev", [2, 5, 10, 20, 50])
+def test_p2_38_o_cap_na_margem_deixou_de_mascarar_a_subestimacao(banco, lev):
+    """O que mudou HOJE e a §10(e) registra. Antes do [P1-12], `lev x sd >= 1` fazia
+    `_risco_posicao` devolver a margem inteira, e nesse regime nao havia o que subestimar. Com a
+    guarda nova toda posicao NOVA tem `lev x sd < LIQ_BUFFER`, entao o `min(...)` nunca morde e a
+    subestimacao passa a valer em 100% delas.
+
+    O segundo assert e o que mantem o cap correto: mesmo na pior geometria que ainda passa, a
+    perda real COM as taxas continua abaixo da margem (0,95 dela a 50x). O cap nao virou mentira
+    -- so deixou de ser alcancado."""
+    sd = (simulador.LIQ_BUFFER / lev) * 0.999999               # o mais degenerado que ainda abre
+    assert simulador._liq_antes_do_stop(100.0, 100.0 * (1 - sd), lev, 1) is None
+    assert simulador._risco_posicao(100.0, lev, 100.0, 100.0 * (1 - sd)) < 100.0   # nao capou
+    assert lev * (sd + 2 * FEE) < 1.0                          # e a perda real cabe na margem

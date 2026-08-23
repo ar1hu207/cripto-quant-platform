@@ -88,6 +88,27 @@ def _preco_liquidacao(entrada, d, lev):
     return entrada * (1 - d * (LIQ_BUFFER / lev))
 
 
+def _liq_antes_do_stop(entrada, stop, alavancagem, d):
+    """[P1-12] A liquidação alcança a entrada ANTES do stop? Devolve `(dist_stop, dist_liq)`
+    em fração da entrada quando sim, e `None` quando a geometria é sadia — ou quando não há
+    o que medir (sinal sem stop, stop na entrada, entrada/alavancagem degeneradas).
+
+    Mede chamando `_preco_liquidacao` em vez de repetir `LIQ_BUFFER/lev`: o modelo de
+    liquidação é UM, e uma cópia da fórmula aqui divergiria dele um dia. É o mesmo argumento
+    que `autotrader._cap_geometrico` usa para ler o `LIQ_BUFFER` daqui em vez de escrever 0,9.
+
+    `d` entra porque a liquidação é do lado da posição; a DISTÂNCIA é simétrica, então o
+    resultado não depende dele — passá-lo é o que mantém a chamada honesta se o modelo
+    deixar de ser simétrico um dia."""
+    if not entrada or not stop or not alavancagem:
+        return None
+    dist_stop = abs(entrada - stop)
+    dist_liq = abs(entrada - _preco_liquidacao(entrada, d, alavancagem))
+    if dist_liq > dist_stop:                          # liquidação atrás do stop: geometria sadia
+        return None
+    return dist_stop / entrada, dist_liq / entrada
+
+
 def _pnl(pos, preco_saida):
     if not pos["entrada"] or not pos["alavancagem"]:            # guard divisão por zero
         return 0.0, 0.0, 0.0
@@ -171,6 +192,27 @@ def abrir(sinal_id, valor_reais, alavancagem):
     stop_rel = (abs(sig["preco"] - sig["stop_sugerido"]) / sig["preco"]
                 if sig["preco"] and sig["stop_sugerido"] else 0.0)
     stop = round(preco * (1 - d * stop_rel), 6) if stop_rel else sig["stop_sugerido"]
+    # [P1-12] Geometria stop x liquidação, AQUI e não na rota. O cap do [P1-11] mora em
+    # `autotrader._alavancagem`, e o `grep` mostrou que só o auto-trader passa por ele: o
+    # `POST /confirmar` recebe a alavancagem do CLIENTE e a repassa. Guarda que se contorna
+    # com um `curl` não é guarda — a lição da bandeira `PERMITIR_SEM_SENHA` (CLAUDE.md §2).
+    # `abrir()` é o único ponto por onde os DOIS fluxos passam, então é aqui que a recusa
+    # não tem como ser contornada por rota nova, cliente novo ou script.
+    #
+    # Levanta ANTES do claim, pela mesma razão que os tetos: recusa por geometria não é
+    # defeito do sinal, e consumi-lo tiraria da fila um sinal que volta a ser confirmável
+    # assim que a alavancagem pedida couber.
+    #
+    # Recusa, e não cap silencioso: capar 20x para 14x abriria uma posição que o operador
+    # não pediu, com margem dimensionada para outra alavancagem, e sem ninguém saber. O
+    # auto-trader capa porque é ele quem escolhe a lev; quem digitou o número merece um não.
+    deg = _liq_antes_do_stop(preco, stop, alavancagem, d)
+    if deg:
+        sd, ld = deg
+        raise ValueError(f"geometria degenerada — a {alavancagem:g}x a liquidação fica a "
+                         f"{ld * 100:.2f}% da entrada e o stop a {sd * 100:.2f}%: o stop é "
+                         f"inalcançável e a perda seria a margem inteira. Com este stop a "
+                         f"alavancagem tem de ficar abaixo de {LIQ_BUFFER / sd:.1f}x.")
     cfg = db.get_config()
     exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
     with _abrir_lock:                                     # serializa aberturas (worker + API) — sem TOCTOU no teto

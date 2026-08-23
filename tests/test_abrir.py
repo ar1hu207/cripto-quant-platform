@@ -143,9 +143,19 @@ def test_o_teto_soma_o_que_ja_esta_aberto_ao_candidato(banco, sem_rede):
 
 
 def test_teto_de_risco_desligado_deixa_passar(banco, sem_rede):
+    """O risco tem de ser grande o bastante para o teto PEGAR se estivesse ligado -- senao o
+    teste passa por nao haver risco, e nao por o teto estar desligado.
+
+    [P1-12] A lev deste teste mudou, e o numero foi ESCOLHIDO. Era `100.0 @ 20x`, e 20x com
+    stop de 5% poe a liquidacao a 4,5% da entrada: a geometria que `abrir()` agora recusa. A
+    alavancagem alta estava aqui so para inflar o risco -- a geometria degenerada era acidente,
+    nao o assunto. `300.0 @ 10x` infla o mesmo tanto (300 x 10 x 5% = R$150, contra o teto
+    padrao de R$100) e fica do lado sadio da guarda (10 x 5% = 0,5 < `LIQ_BUFFER`). Nao volte
+    para 20x "porque e menos margem": o teste passa a falhar por geometria, que e outra
+    guarda e tem prova propria em `tests/test_guarda_risco.py`."""
     db.set_config("risco_aberto_max", "0")
     sid = semear_sinal(preco=100.0, stop=95.0)
-    simulador.abrir(sid, 100.0, 20)
+    simulador.abrir(sid, 300.0, 10)                  # R$150 de risco: o teto pegaria, se ligado
     assert len(db.listar("posicoes", 10)) == 1
 
 
