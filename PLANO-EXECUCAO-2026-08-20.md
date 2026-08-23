@@ -658,6 +658,80 @@ redesign. **Decidir antes de soltar o agente do M5**, não durante.
 
 ---
 
+#### 4g. Territórios das ondas 2 e 3 do M4 — declarados em 2026-08-23, depois de colher a onda 1
+
+A onda 1 fechou e mergeou (`1804427`, `9fc76a5`, `1c38059`). O `ORQUESTRACAO-ORCA.md` §14.3 manda
+reler o território da onda seguinte **depois** da colheita e **antes** do despacho, porque cada onda
+estreita a próxima. Esta seção é essa releitura, e ela tem conteúdo: **o M4 cresceu de 10 para 13
+cards**, e os três novos nasceram da auditoria da onda 1, não do planejamento.
+
+| Onda | Território | Cards | Arquivos que pode escrever |
+|---|---|---|---|
+| 2 | **`T-PORTFOLIO`** | `Q-5` (`fPL6lccf`) | `pesquisa/backtest_portfolio.py` (novo) · `tests/test_portfolio.py` (novo) |
+| 2 ‖ | **`T-DECLARACAO`** | `Q-3` (`CA6ezdNV`) · `P2-36` (`oDireXwJ`) · `P1-11` (a metade do `/status`) | `db.py` · `api.py` · `tests/test_metricas.py` · `tests/test_config.py` (novo) |
+| 2 ‖ | **`T-GUARDA`** | `P1-12` (`xD9xBfoe`) · `P2-38` (`JS5YAkvV`) | `simulador.py` · `autotrader.py` · `ARQUITETURA.md` · `tests/test_guarda_risco.py` · `tests/test_sizing.py` |
+| 3 ▸ | **`T-EDGE`** | `Q-7` (`W5GPISAV`) **→** `P1-10` (`lz5wVY9l`) · conclui `Q-4` (`Fe0UpFaF`) | `pesquisa/backtest_plataforma.py` · `pesquisa/validacao.py` · `tests/test_validacao.py` · `VEREDITO-M4.md` (novo) |
+
+##### As três decisões de fronteira que este desenho toma, e o porquê de cada uma
+
+**1. `P1-12` vai para `simulador.abrir`, e por isso mora com o `P2-38`, não com o `api.py`.** O card
+oferece duas opções; a matriz recomenda a **B**, o ponto de estrangulamento. Os dois fluxos passam
+por `abrir()`, então a recusa ali não se contorna por rota nova, cliente novo ou `curl` — e
+`api.py:682` **já traduz** `ValueError` para `{ok: false, erro}`, então a rota não precisa mudar.
+Consequência de território: `P1-12` é `simulador.py`, e o `P2-38` também (`_risco_posicao` mora lá,
+mais a inversa em `autotrader._tamanho`). Os dois no mesmo território **não é conveniência: é a §3**
+— eles editam o mesmo par de arquivos.
+
+**2. `ARQUITETURA.md` é do `T-GUARDA`, não do `T-DECLARACAO`.** A opção C do `P2-38` é documentar em
+`ARQUITETURA.md` §10 ("aproximações conhecidas do modelo"), que é exatamente onde o `Q-6` pôs as
+irmãs dela. O `Q-3` não precisa do arquivo: o próprio card manda registrar o racional **no catálogo
+de config do `P1-8`** (campo "racional" por parâmetro, em `api.py`) e nos comentários do
+`db.CONFIG_PADRAO`. Território de doc tem um dono por onda.
+
+**3. `Q-7` vai para a onda 3, junto do `P1-10` e ANTES dele.** Os dois escrevem
+`pesquisa/validacao.py`, então não podem ser paralelos. E a ordem importa: o `Q-7` mexe no MDS, o MDS
+é **portão** de emissão de veredito, e o `P1-10` é quem emite o veredito do marco. Rodar o `P1-10`
+com o MDS subestimado é decidir a pergunta central do projeto com o instrumento que o `Q-7` diz estar
+descalibrado. **Serial, `Q-7` primeiro.**
+
+##### O que a onda 1 deixou pronto e muda o trabalho da onda 2
+
+- **`autotrader._alavancagem` agora recebe `stop_dist`** e devolve lev capada pela geometria; a
+  contagem vive em `autotrader.CAPS_GEOMETRIA` (`{"total", "ultimo"}`) e em `res["caps_geometria"]`
+  por ciclo. **É isso que o `T-DECLARACAO` expõe em `/status`** — o nome não precisa ser descoberto.
+- **`autotrader._tamanho` devolve `0.0` onde antes inflava para o piso.** Quem for reusar o sizing
+  (o `Q-5` vai) tem de tratar o zero como "pular o sinal", não como erro.
+- **`simulador._fill_stop` existe** e o `motivo_saida` pode terminar em `-gap`. Backtest de portfólio
+  que compare com o histórico vivo precisa saber.
+- **A régua tem `MDS_LIMITE`, `T_EFETIVO_MINIMO` e `PADRAO` travado**, e `walk_forward` **recusa**
+  `criterio`/`modo`/`atribuir`/`block`/`purga` por assinatura. O `P1-10` roda a régua nova; ele não
+  a re-parametriza.
+- **`pesquisa/backtest_plataforma.py:82` não grava `ts_saida`**, e por isso a purga de borda de fold
+  está implementada e **desliga sozinha** (`purga: INATIVA` no relatório). O vazamento da §2/P2
+  continua presente e **não medido**, e empurra o resultado para **cima** — contra a conclusão
+  negativa. **É a primeira coisa que o `T-EDGE` conserta**, porque o arquivo é dele.
+
+##### O que continua fora de todo território do M4
+
+O aviso visual no painel — a geometria degenerada mostrada antes do clique (`P1-11`) e o perfil de
+risco ativo (`Q-3`). É `web/index.html`, o merge na `main` publica no Vercel (§9.9), e front é
+território do M5/M6 desde o dia 1. Vira card de front próprio, criado pela matriz quando a onda 2
+fechar — antes disso não há o que mostrar.
+
+##### O `Q-3` é `toca-risco` e mexe no que está VIVO — a instrução é a metade reversível
+
+O card propõe alinhar `risco_por_trade` (3%), `alavancagem_padrao` (10x) e `auto_lev_max` (20x) à
+`BASE-CONHECIMENTO-TRADING.md`, que conclui 0,5-1% e lev ≤2x. **A instrução ao worker é construir os
+dois perfis (`experimento` e `conservador`) e escrever o racional por parâmetro — sem trocar o
+default vivo.** Trocar é assinatura do dono, e ele decide com os dois perfis na mão em vez de no
+abstrato. O card autoriza isso explicitamente: *"alinhar **OU** declarar"*.
+
+Um número da onda 1 que o `Q-3` precisa ter na mão e não estava no card: a aproximação de liquidação
+`0,9/lev` é conservadora até **lev 20** e vira **otimista acima** (`ARQUITETURA.md` §10, medido no
+`Q-6`). O `auto_lev_max` vivo é exatamente 20 — o teto está em cima da fronteira.
+
+---
+
 #### 4e. `T-FRONT-PERF` — território do `P2-37`, declarado em 2026-08-22
 
 O M5/M6 fechou o front, e a primeira medição externa dele — Lighthouse 13.4.0 no domínio de
