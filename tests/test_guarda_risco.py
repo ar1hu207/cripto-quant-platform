@@ -378,3 +378,80 @@ def test_p1_12_sem_geometria_medivel_a_guarda_se_cala(entrada, stop, lev):
     """Mesma regra de `autotrader._stop_dist`: ausencia de geometria devolve ausencia, nunca
     excecao no meio do ciclo do worker."""
     assert simulador._liq_antes_do_stop(entrada, stop, lev, 1) is None
+
+
+# ------------------------------------------------- [P2-38] as taxas ficam FORA do risco medido
+#
+# A decisao do card foi a opcao C: documentar em `ARQUITETURA.md` §10(e), nao implementar. O que
+# segue nao prova um conserto -- prova a APROXIMACAO que foi decidida, e e o que impede que ela
+# seja desfeita de passagem. `_risco_posicao` grava `trades.risco_inicial` (`simulador.py:273`),
+# que e o denominador de `expectancia_r`/`sqn_r` em `db.metricas()`: somar as taxas aqui reescala
+# a unidade R no meio do historico, e NENHUM numero do painel acusa. Documentacao que ninguem
+# executa envelhece calada; esta tem um teste com o nome do card em cima.
+
+FEE = 0.0005          # db.CONFIG_PADRAO["taxa_por_lado"]
+
+
+@pytest.mark.parametrize("valor,lev,sd", [
+    (100.0, 2, 0.02), (100.0, 10, 0.02), (100.0, 20, 0.02), (150.0, 10, 0.0074),
+    (50.0, 5, 0.0164), (200.0, 3, 0.0367),
+])
+def test_p2_38_o_risco_medido_exclui_as_taxas_e_isso_e_decisao_registrada(banco, valor, lev, sd):
+    """A formula vigente e `valor x lev x sd`, sem os `2 x fee x lev x valor` das duas pernas.
+
+    O segundo assert e o conteudo da §10(e) que a intuicao erra: o fator de subestimacao e
+    `(sd + 2*fee)/sd` e **a alavancagem CANCELA** -- os dois termos escalam com `lev x valor`.
+    Ou seja, o caso perigoso nao e a alavancagem alta, e o STOP CURTO: a 50x com stop de 9,5% o
+    erro relativo e 1,1%; a 2x com stop de 0,5% e 20%. A tabela por alavancagem que o [Q-6]
+    deixou mede outra coisa (fracao da MARGEM), e e por isso que as duas convivem na secao."""
+    entrada = 100.0
+    stop = entrada * (1 - sd)
+    medido = simulador._risco_posicao(valor, lev, entrada, stop)
+    real = valor * lev * (sd + 2 * FEE)
+
+    assert medido == pytest.approx(valor * lev * sd)          # sem taxas, e de proposito
+    assert real / medido == pytest.approx((sd + 2 * FEE) / sd)
+    assert real > medido                                       # a direcao do vies: subestima
+
+
+@pytest.mark.parametrize("sd,fator", [
+    (0.0050, 1.200), (0.0074, 1.135), (0.0164, 1.061),
+    (0.0265, 1.038), (0.0367, 1.027), (0.0950, 1.011),
+])
+def test_p2_38_a_tabela_de_magnitude_da_arquitetura_e_esta(sd, fator):
+    """Os seis fatores tabelados em `ARQUITETURA.md` §10(e), conferidos contra a conta. Item
+    final do aceite da opcao C: a magnitude fica TABELADA, e uma tabela que ninguem recalcula
+    e so um numero velho com formatacao."""
+    assert (sd + 2 * FEE) / sd == pytest.approx(fator, abs=0.001)
+
+
+def test_p2_38_o_caso_vivo_arrisca_5pct_a_mais_do_que_a_guarda_conta(banco):
+    """O numero que a §10(e) usa para dizer o tamanho do buraco, medido em vez de estimado:
+    banca R$1.000 com `risco_por_trade` 3% e stop de 2% a 10x. `_tamanho` pede R$150, a guarda
+    conta R$30 e a perda real no stop e R$31,50.
+
+    Este teste tambem prova a premissa que sustenta a decisao C: `_tamanho` e `_risco_posicao`
+    sao INVERSAS EXATAS hoje. Mexer so num lado quebra esta igualdade, e e por isso que a opcao
+    B do card nao fecha -- ela desalinha as duas por construcao."""
+    import autotrader
+    valor = autotrader._tamanho(1000.0, 0.03, 10, 100.0, 98.0, 0.25)
+    medido = simulador._risco_posicao(valor, 10, 100.0, 98.0)
+    assert valor == pytest.approx(150.0)
+    assert medido == pytest.approx(30.0)                       # a inversa exata do sizing
+    assert medido + 2 * FEE * 10 * valor == pytest.approx(31.50)
+
+
+@pytest.mark.parametrize("lev", [2, 5, 10, 20, 50])
+def test_p2_38_o_cap_na_margem_deixou_de_mascarar_a_subestimacao(banco, lev):
+    """O que mudou HOJE e a §10(e) registra. Antes do [P1-12], `lev x sd >= 1` fazia
+    `_risco_posicao` devolver a margem inteira, e nesse regime nao havia o que subestimar. Com a
+    guarda nova toda posicao NOVA tem `lev x sd < LIQ_BUFFER`, entao o `min(...)` nunca morde e a
+    subestimacao passa a valer em 100% delas.
+
+    O segundo assert e o que mantem o cap correto: mesmo na pior geometria que ainda passa, a
+    perda real COM as taxas continua abaixo da margem (0,95 dela a 50x). O cap nao virou mentira
+    -- so deixou de ser alcancado."""
+    sd = (simulador.LIQ_BUFFER / lev) * 0.999999               # o mais degenerado que ainda abre
+    assert simulador._liq_antes_do_stop(100.0, 100.0 * (1 - sd), lev, 1) is None
+    assert simulador._risco_posicao(100.0, lev, 100.0, 100.0 * (1 - sd)) < 100.0   # nao capou
+    assert lev * (sd + 2 * FEE) < 1.0                          # e a perda real cabe na margem

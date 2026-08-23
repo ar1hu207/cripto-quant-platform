@@ -471,7 +471,7 @@ levantamento é o `Q-6`; os números conferidos estão abaixo de cada item.
 | **(b)** | `_pnl` (`simulador.py:118`) | taxa das duas pernas sobre o nocional de **entrada** | segue o movimento do preço, ±R$0,01 no trade típico | documentar |
 | **(c)** | `_funding_custo` (`simulador.py:54-77`) | soma dos rates sobre o nocional de **entrada** | idem, e cresce com o tempo de hold | documentar |
 | **(d)** | `dados.baixar_ohlcv` (`pesquisa/dados.py`) | gravava o candle **em formação** no cache | irreprodutível — não é viés, é ruído | **corrigido** |
-| **(e)** | `_risco_posicao` (`simulador.py:125-132`) | risco-até-o-stop **sem as taxas** | subestima o risco em `2·fee·lev` da margem | documentar |
+| **(e)** | `_risco_posicao` (`simulador.py:125-132`) | risco-até-o-stop **sem as taxas** | subestima o risco por `1 + 2·fee/sd` | **documentar** (`P2-38`) |
 
 **(a) A liquidação não tem *maintenance margin*, e a conservadoria dela tem um ponto de virada.**
 O modelo liquida no movimento adverso de `LIQ_BUFFER/lev` = `0,9/lev`. Uma perpétua real liquida
@@ -521,26 +521,72 @@ de cache — que carrega a data — prometia uma janela reproduzível por dia. `
 **toda barra que sai de `baixar_ohlcv` é barra fechada**. Prova em `tests/test_execucao_real.py`.
 
 **(e) O risco-até-o-stop ignora as taxas — e o que ele alimenta não é o sizing.** `_risco_posicao`
-mede `valor · lev · distância_até_o_stop`, capado na margem. Quando o stop bate, as taxas somam
-`2 · fee · lev · valor` à perda: **1% da margem a 10x, 2% a 20x, 5% a 50x**. Então o teto de risco
-aberto e o `risco_inicial` gravado estão subestimados nessa fração.
+(`simulador.py:125-132`) mede `valor · lev · sd`, capado na margem, onde `sd` é a distância relativa
+até o stop. Quando o stop bate, as taxas das duas pernas somam `2 · fee · lev · valor` à perda, e
+elas ficam de fora da conta. Então o teto de risco aberto e o `risco_inicial` gravado estão
+subestimados nessa fração. Decidido no `P2-38`, em 2026-08-23: **documentar** (opção C do card).
 
-Somar as taxas ali é uma linha, e mesmo assim a decisão é documentar — pelo raio de alcance, não
-pelo tamanho:
+**A magnitude tem dois denominadores, e só um deles é o decisivo.**
 
-- **Não afeta o sizing.** Quem dimensiona é `autotrader._tamanho` (`autotrader.py:56-72`), que
-  tem a fórmula inversa escrita **de forma independente** e nunca chama `_risco_posicao`. Hoje as
-  duas são inversas exatas: `_tamanho` resolve `valor` para `valor·lev·sd = banca·risco_frac`, e
-  `_risco_posicao` devolve exatamente esse valor de volta. Mudar só um lado quebra a igualdade — o
-  bot passaria a dimensionar para R$30 de risco enquanto `guarda_risco` contaria R$32.
-- **Reescala a unidade R do histórico.** `risco_inicial` é gravado por trade (`simulador.py:273`)
-  e é o denominador dos R-múltiplos de `db.metricas()` (`db.py:294-295`, `expectancia_r` e
-  `sqn_r`). Trocar a definição no meio do caminho torna os trades de antes e de depois
-  incomparáveis **sem que nenhum número acuse** — que é exatamente o que o último item do aceite do
-  `Q-6` proíbe.
+Em fração da **margem**, o erro cresce com a alavancagem — é a leitura que o `Q-6` registrou:
 
-O conserto correto mexe nos dois lados ao mesmo tempo, e `autotrader.py` é território do `T-SIZING`
-nesta mesma onda. Fica registrado aqui como card a criar, não como mudança a fazer de passagem.
+| lev | taxa no stop, em fração da margem (`2·fee·lev`) |
+|---|---|
+| 2x | 0,20% |
+| 5x | 0,50% |
+| **10x** (`alavancagem_padrao`) | **1,00%** |
+| **20x** (`auto_lev_max`) | **2,00%** |
+| 50x | 5,00% |
+
+Mas o número que decide é o erro **relativo ao risco medido**, e nele **a alavancagem cancela** —
+os dois termos escalam com `lev · valor`, então `real/medido = (sd + 2·fee)/sd` depende **só da
+distância do stop**:
+
+| stop | onde aparece | fator | erro |
+|---|---|---|---|
+| 0,50% | stop colado (o cap por trade já morde antes) | 1,200x | +20,0% |
+| 0,74% | BTC 15m p50 | 1,135x | +13,5% |
+| 1,64% | BTC 15m p95 | 1,061x | +6,1% |
+| 2,65% | SOL 1h p50 | 1,038x | +3,8% |
+| 3,67% | INJ 1h p50 | 1,027x | +2,7% |
+| 9,50% | INJ 1h p95 | 1,011x | +1,1% |
+
+(`fee` = `taxa_por_lado` = 0,05%, `db.CONFIG_PADRAO`. Stops medidos: tabela do `P1-11`.)
+
+**Isto inverte a intuição da leitura por margem:** o caso perigoso não é a alavancagem alta, é o
+**stop curto**. A 50x com stop de 9,5% o erro relativo é 1,1%; a 2x com stop de 0,5% é 20%.
+
+**No que está vivo hoje** — banca R$1.000, `risco_por_trade` 3%, stop de 2%, 10x — `_tamanho` pede
+R$150 de margem, `guarda_risco` conta R$30 de risco e a perda real no stop é **R$31,50**: 5% acima
+do orçamento. No teto de risco aberto (10% do equity), a guarda vincula com R$90 medidos, que são
+R$94,50 reais — **9,4% do equity, não 9,0%**.
+
+**Por que documentar, e não consertar — as três opções do `P2-38` e o motivo de duas caírem.**
+
+- **(A) Corrigir os dois lados e declarar um corte no histórico.** Cai por **território e por
+  esquema**. Fazer `db.metricas()` não misturar duas unidades R exige escrever em `db.py`
+  (`T-DECLARACAO` na onda 2 do M4) e provavelmente uma coluna nova; esquema é estado compartilhado
+  que o território não isola (§9.2b do plano).
+- **(B) Corrigir só na guarda, não no sizing.** Cai por **contradizer o próprio critério de aceite**,
+  que pede "`guarda_risco()` e `_tamanho()` concordam sobre o que 'risco' significa — teste que
+  prove que uma é inversa da outra". B, por definição, as desalinha: o bot dimensionaria para R$30
+  enquanto a guarda contaria R$31,50. Estender B ao `_tamanho` deixa de ser B — encolhe toda
+  posição viva em ~5%, e mudar sizing vivo num card `toca-risco` é assinatura do dono (§9.8).
+- **(C) Documentar.** É esta seção, e é a mesma resposta que o `Q-6` deu para (a), (b) e (c).
+
+**O que mudou hoje e a próxima pessoa precisa saber: o `min(..., valor_reais)` deixou de mascarar.**
+Antes, a geometria degenerada (`lev·sd ≥ 1`) fazia `_risco_posicao` devolver a margem inteira, e
+nesse regime não havia o que subestimar. O `P1-12` recusa `lev·sd ≥ LIQ_BUFFER` na abertura, então
+**toda posição nova tem `lev·sd < 0,9`** e o cap nunca morde: a subestimação passa a valer em 100%
+das posições novas, em vez de só nas de geometria sadia. Na pior geometria que ainda passa, a perda
+real é 0,95 da margem (50x) — ainda abaixo dela, então o cap continua correto, só deixou de ser
+alcançado.
+
+**A decisão é executável, não só prosa.**
+`tests/test_guarda_risco.py::test_p2_38_o_risco_medido_exclui_as_taxas_e_isso_e_decisao_registrada`
+fixa a fórmula sem taxas e os fatores desta tabela. Quem "consertar" `_risco_posicao` de passagem
+derruba esse teste e cai aqui, no parágrafo sobre a unidade R — que é o efeito que nenhum número do
+painel acusaria sozinho.
 
 ---
 
