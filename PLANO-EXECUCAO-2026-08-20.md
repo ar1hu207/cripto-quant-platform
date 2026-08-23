@@ -556,6 +556,20 @@ para**.
    é a armadilha exata que o card descreve. Ele está no território do `T-REGUA` por isso.
 3. **`legado/` já está limpo:** `grep` nos `legado/*.py` não acha nenhum veredito. A preferência 1
    do card (mover para `legado/`) é coerente com o que o `P2-16` fez, e é a que a matriz recomenda.
+4. **A lista de território nomeia as ORIGENS e não os DESTINOS, e isso quase reprovou código certo.**
+   Levantado pelo worker do `T-REGUA` em 2026-08-23. A tabela acima dá a ele `pesquisa/tune.py` e
+   irmãos; a preferência 1, que a própria §4f recomenda, **cria** `legado/tune.py` e mais quatro. Um
+   `git diff --name-only` cruzado literalmente com a lista marcaria os cinco destinos como fora do
+   território. **Os cinco `legado/<nome>.py` são território do `T-REGUA` por decorrência do card**, e
+   ficam declarados aqui. Regra geral que decorre: **território que autoriza mover arquivo autoriza o
+   caminho de destino** — e quando o destino for outro diretório, escreva-o na tabela, porque o
+   portão não infere.
+5. **O `Q-1` cita uma seção que não existe, e o briefing repetiu o erro.** O card manda seguir *"a
+   ordem de impacto que a própria revisão definiu (§F32)"*. Conferido: `grep -rn "F32" --include=*.md .`
+   **não acha nada no repositório inteiro**, e os achados do `REVISAO-ITEM1.md` param em **`F19`**. Os
+   seis consertos vêm da lista ordenada no fim do `F19`, mais `F14`, `F1`/§3.2 e `F3`. A matriz
+   transcreveu `§F32` do card para o briefing sem conferir — é a §14.4 outra vez, e desta vez o erro
+   atravessou card **e** briefing sem ninguém notar até o worker abrir o arquivo.
 
 ##### O `P1-11` fecha em duas ondas, e isso está declarado ANTES (§13)
 
