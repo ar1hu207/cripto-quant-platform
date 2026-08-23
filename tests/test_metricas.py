@@ -64,21 +64,67 @@ def test_trade_zerado_conta_como_perda(banco):
     assert m["win_rate"] == 0.0 and m["n_trades"] == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ACHADO do [P2-6], nao consertado: db.metricas() classifica com `(t['pnl_reais'] or 0)` "
-    "(db.py:260-261) mas SOMA a coluna crua logo abaixo (db.py:262-263), entao um trade com "
-    "pnl_reais NULL levanta TypeError e derruba /estado inteiro. O `or 0` de cima mostra que "
-    "tolerar NULL era a intencao; as somas ficaram de fora. Hoje o unico caminho que grava em "
-    "`trades` e simulador.fechar (simulador.py:237), que sempre passa float -- entao e defeito "
-    "LATENTE, nao bug vivo. Consertar exigiria escrever em db.py, que nao e territorio do "
-    "T-TESTE: fica registrado aqui e no relatorio. `strict=True` de proposito -- no dia em que "
-    "db.py for corrigido, este xfail vira XPASS e QUEBRA a suite, obrigando a promover o teste."))
+# [P2-36] Este teste nasceu `xfail(strict=True)` no [P2-6] -- achado registrado por quem nao
+# podia consertar `db.py` (fora do territorio T-TESTE). O [P2-36] consertou, o xfail virou
+# XPASS e QUEBROU a suite, que era exatamente o combinado (CLAUDE.md secao 6): o registro nao
+# dependia de ninguem lembrar. Promovido a teste normal aqui.
+#
+# A ASSERCAO MUDOU, e a mudanca e a entrega do card. O xfail original pedia
+# `win_rate == 50.0`, ou seja, o NULL contado como ZERO (cairia em `perdas`). O [P2-36]
+# decidiu o contrario -- NULL e medicao AUSENTE, sai das razoes e e publicado em `n_sem_pnl`
+# -- porque zero falso achata desvio padrao e expectancia sempre para o lado bonito. O card
+# deixava a decisao em aberto de proposito ("trade ignorado na conta, OU contado como zero.
+# Nao e a mesma coisa"); o que o autor do xfail fixou foi o defeito (o TypeError), e e o
+# defeito que as duas versoes do teste continuam provando.
 def test_pnl_nulo_no_banco_nao_derruba_a_conta(banco):
-    """Trade gravado por um caminho antigo, sem `pnl_reais`."""
+    """Trade gravado por um caminho antigo, sem `pnl_reais`. O bug era `TypeError` nas somas
+    da coluna crua, que derrubava `/estado` inteiro (poll de 3s do painel)."""
     trade(None)
     trade(10.0)
+    m = db.metricas()                                  # antes: TypeError aqui
+    assert m["n_trades"] == 2                          # a linha nao some da contagem...
+    assert m["n_sem_pnl"] == 1                         # ...e a ausencia fica VISIVEL
+    assert m["win_rate"] == 100.0                      # 1 win entre os 1 MEDIDOS
+    assert m["pnl_total"] == pytest.approx(10.0)       # o ausente nao entra como zero
+    assert m["expectancia"] == pytest.approx(10.0)     # nem dilui a media
+
+
+def test_pnl_nulo_nao_e_a_mesma_coisa_que_pnl_zero(banco):
+    """O par que fixa a decisao do [P2-36]: `0.0` e medicao ("empatou", conta como perda,
+    `test_trade_zerado_conta_como_perda`); `None` e ausencia de medicao. Com os dois no mesmo
+    banco os numeros tem de discordar -- se um dia voltarem a coincidir, o `or 0` voltou."""
+    trade(0.0)
+    trade(None)
     m = db.metricas()
-    assert m["n_trades"] == 2 and m["win_rate"] == 50.0
+    assert m["n_trades"] == 2 and m["n_sem_pnl"] == 1
+    assert m["win_rate"] == 0.0                        # o 0.0 e o unico medido, e e perda
+    assert m["perda_media"] == 0                       # -0.0/1 -- perda medida de zero
+    assert m["pnl_total"] == pytest.approx(0.0)
+
+
+def test_banco_so_de_pnl_ausente_nao_divide_por_zero(banco):
+    """Caso degenerado do [P2-36]: `medidos` vazio com `trades` cheio. Sem o desvio a media
+    dividiria por `len(medidos)` == 0 -- trocar um TypeError por um ZeroDivisionError seria
+    o mesmo `/estado` caido com outro nome."""
+    trade(None)
+    trade(None)
+    m = db.metricas()
+    assert m["n_trades"] == 2 and m["n_sem_pnl"] == 2
+    assert m["win_rate"] == 0 and m["profit_factor"] == 0 and m["sqn"] == 0
+    assert m["por_conviccao"] == []
+
+
+def test_pnl_ausente_sai_tambem_do_por_conviccao_e_dos_r_multiplos(banco):
+    """As somas que o card do [P2-36] nomeia nao sao so as duas de cima: a de `por_conviccao`
+    e a dos R-multiplos leem a mesma coluna. Um NULL em qualquer uma derrubava a rota."""
+    trade(None, conviccao=85, risco_inicial=5.0)
+    trade(10.0, conviccao=85, risco_inicial=5.0)
+    m = db.metricas()
+    faixas = {g["faixa"]: g for g in m["por_conviccao"]}
+    assert faixas["80-100"]["n"] == 1                  # so o medido entra na faixa
+    assert faixas["80-100"]["win_rate"] == 100.0
+    assert faixas["80-100"]["pnl"] == pytest.approx(10.0)
+    assert m["expectancia_r"] == pytest.approx(2.0)    # 10/5, e nao a media com um 0 falso
 
 
 def test_win_rate_e_profit_factor_com_os_dois_lados(banco):

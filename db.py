@@ -263,26 +263,50 @@ def metricas():
         eq_diario = [r["e"] for r in c.execute(
             "SELECT MAX(rowid) mr, equity_total e FROM equity GROUP BY substr(ts,1,10) ORDER BY mr")]
     banca_ini = bi["inicial"] if bi else 1000
-    base = {"n_trades": 0, "win_rate": 0, "pnl_total": 0, "taxa_total": 0,
+    base = {"n_trades": 0, "n_sem_pnl": 0, "win_rate": 0, "pnl_total": 0, "taxa_total": 0,
             "profit_factor": 0, "ganho_medio": 0, "perda_media": 0, "por_conviccao": [],
             "sqn": 0, "sortino": 0, "sharpe": 0, "max_drawdown": 0, "max_drawdown_pct": 0,
             "max_dd_mtm_pct": 0, "calmar": 0, "expectancia": 0, "expectancia_r": 0, "sqn_r": 0}
     if not trades:
         return base
-    wins = [t for t in trades if (t["pnl_reais"] or 0) > 0]
-    perdas = [t for t in trades if (t["pnl_reais"] or 0) <= 0]
+    # [P2-36] `pnl_reais` NULL é MEDIÇÃO AUSENTE, e ausente não é zero.
+    #
+    # A decisão: **trade sem `pnl_reais` sai de toda conta de P&L, e a saída é PUBLICADA**
+    # em `n_sem_pnl`. Não é a outra opção — contá-lo como zero —, e a diferença não é
+    # cosmética: um zero falso entra em `pnls` como um trade que empatou, e daí ele achata o
+    # desvio padrão (`sqn`, `sortino`), dilui a `expectancia` e puxa a `perda_media` para
+    # perto de zero. Todos os erros vão para o MESMO lado: o resultado parece melhor e menos
+    # volátil do que o medido. Numa casa cujo produto é o "sem edge" honesto (README, veredito
+    # DSR=0,004), a aproximação que embeleza é a proibida.
+    #
+    # É o padrão que o [P2-10] fixou quando `trades.funding` passou a aceitar NULL: gravar a
+    # ausência em vez de um zero falso. Aqui só se completa a outra ponta — quem LÊ a coluna
+    # também tem de distinguir ausente de zero.
+    #
+    # `0.0` continua sendo medição: um trade que empatou é perda (`test_trade_zerado_conta_
+    # como_perda`). Por isso o filtro é `is not None`, e não o `or 0`, que confunde os dois.
+    #
+    # `n_trades` continua contando TODAS as linhas — trade não some da contagem por não ter
+    # sido medido; some das razões, e `n_sem_pnl` diz quantos. As razões abaixo são "sobre os
+    # medidos", que é a única leitura defensável.
+    medidos = [t for t in trades if t["pnl_reais"] is not None]
+    n_sem_pnl = len(trades) - len(medidos)
+    if not medidos:                                    # banco só de ausências: nada a razoar
+        return {**base, "n_trades": len(trades), "n_sem_pnl": n_sem_pnl}
+    wins = [t for t in medidos if t["pnl_reais"] > 0]
+    perdas = [t for t in medidos if t["pnl_reais"] <= 0]
     soma_g = sum(t["pnl_reais"] for t in wins)
     soma_p = -sum(t["pnl_reais"] for t in perdas)
     faixas = [("80-100", 80, 101), ("60-80", 60, 80), ("40-60", 40, 60), ("0-40", 0, 40)]
     por_conv = []
     for nome, lo, hi in faixas:
-        grp = [t for t in trades if lo <= (t.get("conviccao") or 0) < hi]
+        grp = [t for t in medidos if lo <= (t.get("conviccao") or 0) < hi]
         if grp:
-            gw = sum(1 for t in grp if (t["pnl_reais"] or 0) > 0)
+            gw = sum(1 for t in grp if t["pnl_reais"] > 0)
             por_conv.append({"faixa": nome, "n": len(grp), "win_rate": round(gw / len(grp) * 100, 1),
                              "pnl": round(sum(t["pnl_reais"] for t in grp), 2)})
     # --- métricas avançadas (Van Tharp / risco) ---
-    pnls = [t["pnl_reais"] or 0 for t in sorted(trades, key=lambda t: t.get("fechado_em") or "")]
+    pnls = [t["pnl_reais"] for t in sorted(medidos, key=lambda t: t.get("fechado_em") or "")]
     nn = len(pnls)
     media = sum(pnls) / nn
     std = math.sqrt(sum((p - media) ** 2 for p in pnls) / nn)
@@ -292,7 +316,7 @@ def metricas():
     ddv = math.sqrt(sum(p * p for p in neg) / nn) if neg else 0            # downside deviation
     sortino = round(media / ddv * cap, 2) if ddv > 0 else 0
     # R-múltiplos (só trades com risco_inicial gravado — pnl / risco-até-o-stop; isola QUALIDADE do tamanho)
-    rmults = [(t["pnl_reais"] or 0) / t["risco_inicial"] for t in trades if t.get("risco_inicial")]
+    rmults = [t["pnl_reais"] / t["risco_inicial"] for t in medidos if t.get("risco_inicial")]
     if rmults:
         mr = sum(rmults) / len(rmults)
         sr = math.sqrt(sum((r - mr) ** 2 for r in rmults) / len(rmults))
@@ -326,8 +350,9 @@ def metricas():
             sharpe = round(m / sd * math.sqrt(365), 2) if sd > 0 else 0
     return {
         "n_trades": len(trades),
-        "win_rate": round(len(wins) / len(trades) * 100, 1),
-        "pnl_total": round(sum(t["pnl_reais"] for t in trades), 2),
+        "n_sem_pnl": n_sem_pnl,                        # [P2-36] quantos ficaram FORA das razões
+        "win_rate": round(len(wins) / len(medidos) * 100, 1),
+        "pnl_total": round(sum(t["pnl_reais"] for t in medidos), 2),
         "taxa_total": round(sum(t["taxa"] or 0 for t in trades), 2),
         "profit_factor": round(min(soma_g / soma_p, 999), 2) if soma_p > 0 else 999,
         "ganho_medio": round(soma_g / len(wins), 2) if wins else 0,
