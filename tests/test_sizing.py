@@ -5,10 +5,15 @@ Sao as duas funcoes que decidem QUANTO o bot arrisca sem ninguem olhando. Nenhum
 toca banco nem rede -- recebem numeros e devolvem numeros -- entao aqui nao ha fixture de
 banco: se algum dia uma delas passar a precisar de uma, este arquivo quebra, e isso e
 informacao.
+
+Tambem e a casa das provas do [P2-8] (o piso vira filtro) e da metade do [P1-11] que mora
+em `autotrader.py` (o cap geometrico da alavancagem) -- os dois mexem nestas mesmas duas
+funcoes, que e a razao de estarem no mesmo territorio.
 """
 import pytest
 
 import autotrader
+import simulador
 
 
 CFG = {"auto_lev_modo": "conviccao", "auto_lev_min": "2", "auto_lev_max": "20",
@@ -213,3 +218,163 @@ def test_faixa_invertida_nao_devolve_alavancagem_abaixo_do_piso(banco):
     """`lev_max` menor que `lev_min` e config errada; o `max(lev_min, ...)` garante que o
     erro nao vire alavancagem 1x silenciosa no meio de um trade."""
     assert autotrader._alavancagem(dict(CFG, auto_lev_min="10", auto_lev_max="5"), 100) >= 10.0
+
+
+# ================================================================ [P1-11] cap geometrico
+
+
+@pytest.fixture
+def caps_zerados():
+    """`autotrader.CAPS_GEOMETRIA` e estado de MODULO (vive o processo inteiro, porque quem o
+    le e o `/status`, fora do ciclo do auto-trader). Teste que conta precisa zera-lo antes e
+    devolve-lo depois, senao a ordem dos testes passa a decidir o resultado."""
+    antes = dict(autotrader.CAPS_GEOMETRIA)
+    autotrader.CAPS_GEOMETRIA.update({"total": 0, "ultimo": None})
+    yield autotrader.CAPS_GEOMETRIA
+    autotrader.CAPS_GEOMETRIA.clear()
+    autotrader.CAPS_GEOMETRIA.update(antes)
+
+
+def test_p1_11_o_criterio_de_aceite_stop_de_5pct_com_conviccao_pedindo_20x():
+    """Item 1 do aceite, literal: `stop_dist=5%` e conviccao 100 (que pede o teto de 20x)
+    -> lev efetiva <= 14, que e `0,8 x 0,9 / 0,05` = 14,4 truncado."""
+    assert autotrader._alavancagem(CFG, 100, 0.05) <= 14
+    assert autotrader._alavancagem(CFG, 100, 0.05) == pytest.approx(14.0)
+    assert autotrader._alavancagem(CFG, 100) == 20.0        # sem geometria, o teto de sempre
+
+
+@pytest.mark.parametrize("ativo,stop_dist", [
+    ("BTC 15m p50", 0.0074), ("BTC 15m p95", 0.0164),       # a tabela do card, medida em barras
+    ("SOL 1h p50", 0.0265), ("SOL 1h p95", 0.0473),
+    ("DOGE 1h p50", 0.0279), ("DOGE 1h p95", 0.0483),
+    ("AVAX 1h p50", 0.0290), ("AVAX 1h p95", 0.0456),
+    ("SUI 1h p50", 0.0359), ("SUI 1h p95", 0.0586),
+    ("NEAR 1h p50", 0.0373), ("NEAR 1h p95", 0.0919),
+    ("INJ 1h p50", 0.0367), ("INJ 1h p95", 0.0950),
+])
+@pytest.mark.parametrize("direcao", [1, -1])
+def test_p1_11_a_liquidacao_fica_sempre_atras_do_stop(ativo, stop_dist, direcao):
+    """Item 2 do aceite ("nenhum trade novo com a liquidacao mais perto que o stop"), escrito
+    como invariante sobre a tabela de stops MEDIDOS do card -- os mesmos ativos e percentis
+    que produziam 37,2% de trades binarios no INJ 1h a 20x.
+
+    A prova chama o `simulador._preco_liquidacao` de verdade em vez de repetir a formula: se
+    o modelo de liquidacao mudar, isto acusa em vez de concordar com uma copia velha. Roda
+    nos dois sentidos porque a liquidacao e simetrica e o bot opera LONG e SHORT."""
+    lev = autotrader._alavancagem(CFG, 100, stop_dist, ativo)
+    entrada = 100.0
+    stop = entrada * (1 - direcao * stop_dist)
+    liq = simulador._preco_liquidacao(entrada, direcao, lev)
+    dist_stop, dist_liq = abs(entrada - stop), abs(entrada - liq)
+    assert dist_liq > dist_stop                              # o stop volta a ser alcancavel
+    assert dist_liq / dist_stop >= 1.249                     # com a folga de >=25% do FOLGA_LIQ
+
+
+def test_p1_11_a_conviccao_alta_deixa_de_ser_o_caso_mais_perigoso():
+    """A perversao que o card aponta: conviccao MAIOR -> lev maior -> MAIS provavel o trade
+    ser binario, o inverso do desenho ("mais confianca, execucao melhor"). Com o stop do INJ
+    1h no p95 (9,5%), o teto passa a ser GEOMETRICO: da conviccao 80 para cima a lev para de
+    subir, e nenhum ponto da faixa produz trade binario.
+
+    Nas conviccoes baixas a lev continua vindo da escala (2x, 6x) -- e correto: la ela ja
+    esta abaixo do limite geometrico, e o cap nao tem nada a apertar."""
+    stop_dist = 0.095
+    levs = [autotrader._alavancagem(CFG, conv, stop_dist) for conv in range(60, 101)]
+    assert max(levs) == 7.0                                  # 0,8 x 0,9 / 0,095 = 7,57 -> 7
+    assert all(lev * stop_dist < 1.0 for lev in levs)        # nenhuma conviccao vira binario
+    assert {autotrader._alavancagem(CFG, c, stop_dist) for c in (80, 90, 100)} == {7.0}
+
+
+@pytest.mark.parametrize("stop_dist,esperado", [
+    (0.0072, 20.0),      # 0,72/0,0072 = 100x: o teto de conviccao e que vence
+    (0.036, 20.0),       # 0,72/0,036 = 20,0 exato -> empate NAO capa (a comparacao e >=)
+    (0.037, 19.0),       # 19,45 -> 19: trunca pra baixo, nunca arredonda pra cima
+    (0.05, 14.0),        # 14,4 -> 14
+    (0.10, 7.0),         # 7,2 -> 7
+    (0.20, 3.0),         # 3,6 -> 3
+    (0.40, 1.0),         # 1,8 -> 1: desce ABAIXO de lev_min de proposito
+    (0.90, 1.0),         # 0,8 -> piso absoluto de 1x
+])
+def test_p1_11_o_cap_trunca_para_baixo_e_tem_piso_de_1x(stop_dist, esperado):
+    """Arredondar (14,6 -> 15) devolveria a liquidacao para DENTRO do stop e desfaria o cap no
+    proprio ato de aplica-lo; por isso e truncamento. E o piso e 1x, nao `lev_min`: `lev_min`
+    e o inicio da escala de conviccao e nunca foi promessa de risco -- respeita-lo aqui seria
+    manter o trade binario para nao contrariar um parametro de UI."""
+    assert autotrader._alavancagem(CFG, 100, stop_dist) == pytest.approx(esperado)
+
+
+def test_p1_11_o_cap_tambem_vale_no_modo_fixo():
+    """A geometria e fisica: `alavancagem_padrao=10` com stop de 9,5% e tao degenerado quanto
+    20x por conviccao. Capar so o modo 'conviccao' deixaria o buraco aberto para quem virasse
+    a chave para 'fixo' -- que e config de UI, nao um regime de risco diferente."""
+    cfg = dict(CFG, auto_lev_modo="fixo", alavancagem_padrao="10")
+    assert autotrader._alavancagem(cfg, 95) == 10.0                  # sem stop: nada muda
+    assert autotrader._alavancagem(cfg, 95, 0.095) == 7.0            # com stop: capa igual
+
+
+def test_p1_11_sem_geometria_medivel_nada_muda():
+    """Sinal sem stop, stop na entrada, entrada degenerada: nao ha o que medir, e derivar um
+    cap de `stop_dist=0` seria divisao por zero disfarcada de guarda."""
+    for stop_dist in (None, 0, 0.0, -0.01):
+        assert autotrader._alavancagem(CFG, 100, stop_dist) == 20.0
+
+
+def test_p1_11_o_cap_conta_e_loga_quando_age(caps_zerados, monkeypatch):
+    """Item 3 do aceite, a metade que mora aqui: o log no formato do card, e a contagem
+    ACESSIVEL de fora do modulo. Quem a expoe no `/status` e o `api.py` (T-DECLARACAO,
+    onda 2 do M4), que le exatamente este `autotrader.CAPS_GEOMETRIA`."""
+    linhas = []
+    monkeypatch.setattr(autotrader, "log", lambda msg, nivel="info": linhas.append(msg))
+
+    assert autotrader._alavancagem(CFG, 100, 0.05, "INJ/USDT") == 14.0
+    assert linhas == ["lev capada 20.0->14.0 por geometria stop/liq INJ/USDT"]
+    assert caps_zerados["total"] == 1
+    assert caps_zerados["ultimo"]["ativo"] == "INJ/USDT"
+    assert caps_zerados["ultimo"]["lev_conviccao"] == 20.0
+    assert caps_zerados["ultimo"]["lev_efetiva"] == 14.0
+    assert caps_zerados["ultimo"]["stop_dist"] == pytest.approx(0.05)
+
+
+def test_p1_11_o_cap_fica_calado_quando_nao_age(caps_zerados, monkeypatch):
+    """Contador que soma quando o cap nao apertou nada vira ruido no `/status`, e log por
+    candidato numa varredura de 24 ativos vira arquivo de 10 MB. So conta quando muda a lev."""
+    linhas = []
+    monkeypatch.setattr(autotrader, "log", lambda msg, nivel="info": linhas.append(msg))
+
+    assert autotrader._alavancagem(CFG, 100, 0.0074, "BTC/USDT") == 20.0
+    assert autotrader._alavancagem(CFG, 60, 0.10, "BTC/USDT") == 2.0     # 7,2 > 2: nao aperta
+    assert linhas == []
+    assert caps_zerados["total"] == 0
+    assert caps_zerados["ultimo"] is None
+
+
+def test_p1_11_o_cap_desarma_o_trade_binario_no_sizing():
+    """O fecho do raciocinio do card. Antes, INJ 1h no p95 (stop 9,5%) a 20x dava
+    `denom = min(20 x 0,095, 1) = 1`: o sizing JA assumia perda = margem inteira, e por isso o
+    orcamento de risco nao estourava enquanto o desenho do trade virava ficcao -- e a razao de
+    ninguem ter percebido. Com o cap a 7x, `denom = 0,665 < 1`: o stop volta a decidir a perda."""
+    stop_dist = 0.095
+    assert min(20.0 * stop_dist, 1.0) == 1.0                         # binario: perda = margem
+
+    lev = autotrader._alavancagem(CFG, 100, stop_dist)
+    assert min(lev * stop_dist, 1.0) < 1.0
+    valor = autotrader._tamanho(1000.0, 0.03, lev, 100.0, 100.0 * (1 - stop_dist), 0.25)
+    assert valor * lev * stop_dist == pytest.approx(30.0, abs=0.01)  # R$30 no stop (1 centavo
+                                                                     # de folga: o round do valor)
+
+
+@pytest.mark.parametrize("entrada,stop,esperado", [
+    (100.0, 95.0, 0.05),
+    (100.0, 105.0, 0.05),        # short: a distancia e absoluta
+    (100.0, 100.0, 0.0),         # stop na entrada
+    (100.0, None, 0.0),
+    (100.0, 0, 0.0),
+    (0, 98.0, 0.0),              # entrada degenerada: nao pode virar divisao por zero
+    (None, None, 0.0),
+    ("x", "y", 0.0),             # campo corrompido no sinal: 0.0, nunca excecao no meio do ciclo
+])
+def test_p1_11_stop_dist_e_a_unica_fonte_da_geometria(entrada, stop, esperado):
+    """`_tamanho` e `_alavancagem` leem daqui, e nao cada uma da sua conta: com duas contas a
+    garantia "liquidacao atras do stop" valeria com um numero e a margem seria dimensionada
+    com outro. Os casos degenerados devolvem 0.0 -- ausencia de geometria, nao erro."""
+    assert autotrader._stop_dist(entrada, stop) == pytest.approx(esperado)
