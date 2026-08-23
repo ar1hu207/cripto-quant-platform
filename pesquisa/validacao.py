@@ -1106,6 +1106,25 @@ def controle_nulo(res, M=M_CONTROLE_NULO, seed=42, alfa=0.05, n_boot=N_BOOT_CONT
     dado real (o controle direto precisa de um DGP inventado), e ela erra para o lado que
     torna a guarda mais dificil de disparar, que e o lado permitido.
 
+    **E "frouxo" tem de vir com o tamanho da frouxidao, que e DESCONHECIDO -- essa parte
+    tambem e entrega.** O card do [Q-7] fez a conta com alfa = 0,01 e concluiu que o MDS de
+    1,576 viraria ~1,92, deixando 4% de folga ate o `MDS_LIMITE = 2,0`. Duas coisas derrubam
+    essa tranquilidade:
+
+      * a conta com o `mds_sharpe` DESTE arquivo nao da 1,92 e sim **2,008** -- a razao entre
+        alfa 0,01 e alfa 0,05 e 1,274, nao ~1,22 (`test_mds_vira_PISO_quando_o_teste_sub_rejeita`
+        fixa os dois numeros). Ja com o alfa OTIMISTA o MDS encosta do OUTRO lado do limite: a
+        folga nao cai para 4%, ela deixa de existir;
+      * e o alfa verdadeiro e MENOR que 0,01. Quanto menor, ninguem sabe. O controle direto
+        sobre um DGP com aquela marginal deu 0,0025, uma ordem de grandeza abaixo -- mas esse
+        DGP e uma caricatura escolhida a mao, e tratar o numero dele como medida do dado real
+        seria trocar um chute por outro.
+
+    O que se pode afirmar, entao, e so isto: **o MDS reportado e um piso, o piso e frouxo, e a
+    distancia ate o valor verdadeiro nao foi medida.** Fechar essa distancia exige o controle
+    nulo COMPLETO do F9 -- M geradores de sinal aleatorio pelo pipeline inteiro --, que
+    continua pendente por relogio. Quem escrever o veredito do M4 escreve isso, e nao a folga.
+
     **Consequencia, e ela e a metade que o card acertou:** o MDS e calculado supondo alfa
     nominal 0,05. Com alfa efetivo menor o poder real e menor e o minimo detectavel e MAIOR --
     **o MDS reportado e um PISO**, e o relatorio passa a dizer isso na linha dele.
