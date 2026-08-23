@@ -60,8 +60,8 @@ CREATE TABLE IF NOT EXISTS dca(
 # que valida chave e faixa por catalogo antes de gravar [P1-8]. Codigo de plataforma le
 # config do banco -- nunca constante literal espalhada pelo modulo.
 CONFIG_PADRAO = {
-    "risco_por_trade": "0.03",
-    "alavancagem_padrao": "10",
+    "risco_por_trade": "0.03",          # [Q-3] DIVERGE da base (0,5-2%) — racional em PERFIS_RISCO
+    "alavancagem_padrao": "10",         # [Q-3] DIVERGE da base (≤2x) — racional em PERFIS_RISCO
     "timeframe": "15m",                        # TF primário (gráfico + gestor de saída)
     "timeframes": "5m,15m,1h",                 # TFs que o scanner varre (alargamento)
     "ativos": ("BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,"
@@ -76,6 +76,7 @@ CONFIG_PADRAO = {
     "adx_max_rev": "22",       # ADX MÁXIMO pra reversão (só opera mercado lateral)
     "reversao_ativa": "0",     # reversão DESLIGADA ao vivo (não validou no backtest)
     "risco_aberto_max": "0.10",  # teto da soma do risco-até-o-stop das posições abertas (fração da banca; <=0 = sem teto)
+                                 # [Q-3] É ESTE que manda sobre `auto_max_posicoes` — ver PERFIS_RISCO
     "exposicao_max": "0.5",      # teto da MARGEM total aberta (soma de valor_reais) como fração da banca (<=0 = sem teto)
     "trava_dia_em": "",          # data em que a trava diária acionou (sticky: não destrava no mesmo dia)
     "alvo_roe": "5",           # ROE% que conta como "bom lucro" pro gestor de saída
@@ -89,11 +90,105 @@ CONFIG_PADRAO = {
     "auto_lev_modo": "conviccao", # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
     "auto_lev_min": "2",          # alavancagem na convicção mínima
     "auto_lev_max": "20",         # TETO de alavancagem (na convicção máxima)
+                                  # [Q-3] DIVERGE da base, e encosta no ponto de virada da
+                                  # aproximação de liquidação (ARQUITETURA.md §10a)
     "trailing_ativo": "1",        # trailing stop: deixa o lucro correr, trava o ganho (sobe o stop atrás do preço)
     "trailing_dist": "0.02",      # distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
     "telegram_token": "",
     "telegram_chat_id": "",
 }
+
+
+# ---------- [Q-3] os dois perfis de risco, e por que existem DOIS ----------
+#
+# A `BASE-CONHECIMENTO-TRADING.md` -- o cerebro de referencia do projeto, escrito com as
+# nossas proprias medicoes -- contradiz quatro numeros do `CONFIG_PADRAO` acima. A tabela da
+# linha 178-182 poe 0,5-1% como conservador e chama >3% de "territorio de ruina"; a §5.4
+# (linha 281) mede que "a 10x a mesma estrategia vira ruina"; a §6.1 (linha 313) diz que o
+# unico perfil que sobreviveu foi "trend-following SEM alavancagem"; a §6.4 (linha 336) poe
+# o teto em "1/4 a 1/2 Kelly, nunca acima".
+#
+# O que estava vivo contradizia tudo isso -- e a contradicao NAO era o defeito. O defeito era
+# nao estar escrito em lugar nenhum que ela e deliberada. O auto-trader e um experimento
+# declarado para VER o "no edge" acontecer ao vivo dentro de guardas (`autotrader.py:8-13`),
+# e agressividade ACELERA um experimento assim: com 0,5% por trade e 1x de alavancagem, a
+# deriva por taxa+funding que se quer observar leva meses para aparecer no equity. Escolher
+# o agressivo e defensavel. Escolher sem escrever que se escolheu e o que o [Q-3] fecha.
+#
+# Por isso sao DOIS perfis e nao um numero novo:
+#
+#   `experimento`  = EXATAMENTE o que esta vivo hoje. Nao e uma proposta -- e o retrato do
+#                    default, e o teste `test_o_perfil_experimento_e_o_default_vivo` trava a
+#                    igualdade, para que um perfil "atualizado" nao vire uma segunda fonte da
+#                    verdade ao lado do CONFIG_PADRAO (o erro que o [P2-16] ja pagou uma vez).
+#   `conservador`  = o alinhado a base: 1% por trade, alavancagem <=2x, teto agregado coerente.
+#
+# Trocar o perfil ATIVO e assinatura do dono, nao de agente: mexe em `risco_por_trade`,
+# `alavancagem_padrao` e `auto_lev_max` com `auto_trade` ligado e posicao aberta. O que o
+# codigo entrega e o mecanismo reversivel (`POST /perfil`) e o racional escrito
+# (`api.CONFIG_RACIONAL`); a decisao continua humana.
+#
+# A TENSAO DOS 15%, que o card manda parar de ser implicita: 5 slots x 3% = 15% agregado,
+# contra `risco_aberto_max` = 10%. Quem manda e o teto, e isso e medivel, nao opiniao --
+# `simulador.abrir` recusa quando `risco_ab + r_novo > teto` (simulador.py:185), entao com 3%
+# por trade a QUARTA posicao e recusada e `auto_max_posicoes=5` nunca chega a valer. No perfil
+# `experimento` esse parametro e config MORTA. No `conservador` ele volta a valer, e de
+# proposito: 5 x 1% = 5% = `risco_aberto_max`, ou seja, os cinco slots cabem exatamente
+# dentro do teto agregado. Os dois numeros passam a dizer a mesma coisa em vez de um anular
+# o outro em silencio. Provado em `tests/test_config.py`.
+#
+# Valores em STRING, como o CONFIG_PADRAO: e o que a tabela `config` guarda, e o que o
+# catalogo do `POST /config` valida. Perfil nao tem via expressa para o banco.
+PERFIS_RISCO = {
+    "experimento": {
+        "risco_por_trade": "0.03",
+        "risco_aberto_max": "0.10",
+        "alavancagem_padrao": "10",
+        "auto_lev_min": "2",
+        "auto_lev_max": "20",
+        "auto_max_posicoes": "5",
+    },
+    "conservador": {
+        "risco_por_trade": "0.01",
+        "risco_aberto_max": "0.05",
+        "alavancagem_padrao": "2",
+        "auto_lev_min": "1",
+        "auto_lev_max": "2",
+        "auto_max_posicoes": "5",
+    },
+}
+
+
+def _igual_cfg(a, b):
+    """Dois valores de config sao o mesmo? Numerico quando os dois sao numero, textual senao.
+
+    Nao e purismo: o `_validar_config` do `POST /config` normaliza float por `str(float(x))`,
+    entao gravar `alavancagem_padrao=2` devolve `"2.0"` ao banco enquanto o perfil aqui diz
+    `"2"`. Comparando string, aplicar um perfil e perguntar qual esta ativo dariam respostas
+    diferentes na mesma transacao -- o mostrador acusaria "personalizado" logo apos aplicar.
+    """
+    if a is None or b is None:
+        return a == b
+    try:
+        return float(str(a).replace(",", ".")) == float(str(b).replace(",", "."))
+    except ValueError:
+        return str(a) == str(b)
+
+
+def perfil_ativo(cfg=None):
+    """Qual perfil de risco esta vigente: 'experimento', 'conservador' ou 'personalizado'.
+
+    DERIVADO da config, nunca guardado. Uma chave `perfil_risco` no banco seria uma segunda
+    fonte da verdade sobre o mesmo fato: bastaria um `POST /config` mexendo em
+    `risco_por_trade` sozinho para o rotulo passar a mentir, e um rotulo de risco que mente e
+    pior que rotulo nenhum. 'personalizado' e resposta legitima e frequente -- ela diz
+    exatamente o que aconteceu: alguem ajustou a mao.
+    """
+    cfg = get_config() if cfg is None else cfg
+    for nome, vals in PERFIS_RISCO.items():
+        if all(_igual_cfg(cfg.get(k), v) for k, v in vals.items()):
+            return nome
+    return "personalizado"
 
 
 @contextmanager
@@ -263,26 +358,50 @@ def metricas():
         eq_diario = [r["e"] for r in c.execute(
             "SELECT MAX(rowid) mr, equity_total e FROM equity GROUP BY substr(ts,1,10) ORDER BY mr")]
     banca_ini = bi["inicial"] if bi else 1000
-    base = {"n_trades": 0, "win_rate": 0, "pnl_total": 0, "taxa_total": 0,
+    base = {"n_trades": 0, "n_sem_pnl": 0, "win_rate": 0, "pnl_total": 0, "taxa_total": 0,
             "profit_factor": 0, "ganho_medio": 0, "perda_media": 0, "por_conviccao": [],
             "sqn": 0, "sortino": 0, "sharpe": 0, "max_drawdown": 0, "max_drawdown_pct": 0,
             "max_dd_mtm_pct": 0, "calmar": 0, "expectancia": 0, "expectancia_r": 0, "sqn_r": 0}
     if not trades:
         return base
-    wins = [t for t in trades if (t["pnl_reais"] or 0) > 0]
-    perdas = [t for t in trades if (t["pnl_reais"] or 0) <= 0]
+    # [P2-36] `pnl_reais` NULL é MEDIÇÃO AUSENTE, e ausente não é zero.
+    #
+    # A decisão: **trade sem `pnl_reais` sai de toda conta de P&L, e a saída é PUBLICADA**
+    # em `n_sem_pnl`. Não é a outra opção — contá-lo como zero —, e a diferença não é
+    # cosmética: um zero falso entra em `pnls` como um trade que empatou, e daí ele achata o
+    # desvio padrão (`sqn`, `sortino`), dilui a `expectancia` e puxa a `perda_media` para
+    # perto de zero. Todos os erros vão para o MESMO lado: o resultado parece melhor e menos
+    # volátil do que o medido. Numa casa cujo produto é o "sem edge" honesto (README, veredito
+    # DSR=0,004), a aproximação que embeleza é a proibida.
+    #
+    # É o padrão que o [P2-10] fixou quando `trades.funding` passou a aceitar NULL: gravar a
+    # ausência em vez de um zero falso. Aqui só se completa a outra ponta — quem LÊ a coluna
+    # também tem de distinguir ausente de zero.
+    #
+    # `0.0` continua sendo medição: um trade que empatou é perda (`test_trade_zerado_conta_
+    # como_perda`). Por isso o filtro é `is not None`, e não o `or 0`, que confunde os dois.
+    #
+    # `n_trades` continua contando TODAS as linhas — trade não some da contagem por não ter
+    # sido medido; some das razões, e `n_sem_pnl` diz quantos. As razões abaixo são "sobre os
+    # medidos", que é a única leitura defensável.
+    medidos = [t for t in trades if t["pnl_reais"] is not None]
+    n_sem_pnl = len(trades) - len(medidos)
+    if not medidos:                                    # banco só de ausências: nada a razoar
+        return {**base, "n_trades": len(trades), "n_sem_pnl": n_sem_pnl}
+    wins = [t for t in medidos if t["pnl_reais"] > 0]
+    perdas = [t for t in medidos if t["pnl_reais"] <= 0]
     soma_g = sum(t["pnl_reais"] for t in wins)
     soma_p = -sum(t["pnl_reais"] for t in perdas)
     faixas = [("80-100", 80, 101), ("60-80", 60, 80), ("40-60", 40, 60), ("0-40", 0, 40)]
     por_conv = []
     for nome, lo, hi in faixas:
-        grp = [t for t in trades if lo <= (t.get("conviccao") or 0) < hi]
+        grp = [t for t in medidos if lo <= (t.get("conviccao") or 0) < hi]
         if grp:
-            gw = sum(1 for t in grp if (t["pnl_reais"] or 0) > 0)
+            gw = sum(1 for t in grp if t["pnl_reais"] > 0)
             por_conv.append({"faixa": nome, "n": len(grp), "win_rate": round(gw / len(grp) * 100, 1),
                              "pnl": round(sum(t["pnl_reais"] for t in grp), 2)})
     # --- métricas avançadas (Van Tharp / risco) ---
-    pnls = [t["pnl_reais"] or 0 for t in sorted(trades, key=lambda t: t.get("fechado_em") or "")]
+    pnls = [t["pnl_reais"] for t in sorted(medidos, key=lambda t: t.get("fechado_em") or "")]
     nn = len(pnls)
     media = sum(pnls) / nn
     std = math.sqrt(sum((p - media) ** 2 for p in pnls) / nn)
@@ -292,7 +411,7 @@ def metricas():
     ddv = math.sqrt(sum(p * p for p in neg) / nn) if neg else 0            # downside deviation
     sortino = round(media / ddv * cap, 2) if ddv > 0 else 0
     # R-múltiplos (só trades com risco_inicial gravado — pnl / risco-até-o-stop; isola QUALIDADE do tamanho)
-    rmults = [(t["pnl_reais"] or 0) / t["risco_inicial"] for t in trades if t.get("risco_inicial")]
+    rmults = [t["pnl_reais"] / t["risco_inicial"] for t in medidos if t.get("risco_inicial")]
     if rmults:
         mr = sum(rmults) / len(rmults)
         sr = math.sqrt(sum((r - mr) ** 2 for r in rmults) / len(rmults))
@@ -326,8 +445,9 @@ def metricas():
             sharpe = round(m / sd * math.sqrt(365), 2) if sd > 0 else 0
     return {
         "n_trades": len(trades),
-        "win_rate": round(len(wins) / len(trades) * 100, 1),
-        "pnl_total": round(sum(t["pnl_reais"] for t in trades), 2),
+        "n_sem_pnl": n_sem_pnl,                        # [P2-36] quantos ficaram FORA das razões
+        "win_rate": round(len(wins) / len(medidos) * 100, 1),
+        "pnl_total": round(sum(t["pnl_reais"] for t in medidos), 2),
         "taxa_total": round(sum(t["taxa"] or 0 for t in trades), 2),
         "profit_factor": round(min(soma_g / soma_p, 999), 2) if soma_p > 0 else 999,
         "ganho_medio": round(soma_g / len(wins), 2) if wins else 0,
