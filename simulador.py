@@ -298,24 +298,58 @@ def _marcar_uma(pos, trail_on, trail_d, eventos):
     hit_stop = pos["stop"] and ((d == 1 and preco <= pos["stop"]) or (d == -1 and preco >= pos["stop"]))
     if hit_liq and hit_stop:                                # empate: o mais perto da entrada bate 1o (= backtest)
         if abs(pos["entrada"] - pos["stop"]) <= abs(pos["entrada"] - liq):
-            return _fecha_stop(pos, eventos)
+            return _fecha_stop(pos, eventos, preco, liq)
         fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
     if hit_liq:
         fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
     if hit_stop:
-        return _fecha_stop(pos, eventos)
+        return _fecha_stop(pos, eventos, preco, liq)
     pnl, _, _ = _pnl(pos, preco)
     with db.conectar() as con:                              # persiste o stop trailado (sobe entre ciclos)
         con.execute("UPDATE posicoes SET preco_atual=?, pnl=?, stop=? WHERE id=? AND status='aberta'",
                     (preco, pnl, pos["stop"], pos["id"]))
 
 
-def _fecha_stop(pos, eventos):
-    """Fecha por stop, distinguindo no journal: 'trailing' (stop já em lucro) vs 'stop' (perda)."""
+def _fill_stop(stop, preco_atual, liq, d):
+    """[P2-18] Preço de execução de um stop-market, e não o preço do gatilho.
+
+    A causa do viés não é o stop estar errado — é confundir GATILHO com FILL. Entre dois
+    polls do worker passam 15s, e em cripto o preço rompe o stop e segue: na corretora o
+    stop-market dispara no gatilho e executa no book, que num gap está pior. Fechar no
+    `stop` grava um preço em que ninguém foi executado, e o erro é sempre para o mesmo
+    lado — perda menor e trailing melhor do que o real.
+
+    Por isso o fill é o **pior** entre o stop e o preço observado, e não o stop:
+    LONG executa no mais baixo dos dois, SHORT no mais alto.
+
+    **Piso na liquidação, e ele não afrouxa nada.** Passado o preço de liquidação a
+    posição não existe mais na corretora — a exchange tomou a margem no caminho, e não
+    há fill pior que esse (é o mesmo argumento do card para manter a liquidação como
+    está). Sem o piso, o empate stop×liquidação de `_marcar_uma` gravaria execução num
+    preço em que a posição já tinha sido liquidada: o paper ficaria pessimista ALÉM do
+    real, que é a mesma doença com o sinal trocado. A forma `min(stop, max(...))` é
+    deliberada — o piso só encurta o gap, nunca melhora o fill para além do `stop` de
+    hoje, então o resultado é sempre ≤ o atual. Aperta, nunca solta.
+    """
+    if d == 1:                                              # LONG: pior = mais baixo
+        return min(stop, max(preco_atual, liq)) if liq else min(stop, preco_atual)
+    return max(stop, min(preco_atual, liq)) if liq else max(stop, preco_atual)
+
+
+def _fecha_stop(pos, eventos, preco_atual, liq):
+    """Fecha por stop, distinguindo no journal: 'trailing' (stop já em lucro) vs 'stop' (perda).
+
+    [P2-18] O sufixo `-gap` marca o fechamento em que o fill saiu pior que o gatilho. Não é
+    enfeite de log: `motivo_saida` é coluna de `trades`, então medir depois quanto o gap
+    custou vira uma query, sem instrumentação nova. Sem a marca, o gap fica indistinguível
+    de um stop que executou no preço."""
     d = 1 if pos["direcao"] == "LONG" else -1
     em_lucro = (d == 1 and pos["stop"] >= pos["entrada"]) or (d == -1 and pos["stop"] <= pos["entrada"])
     motivo = "trailing" if em_lucro else "stop"
-    fechar(pos["id"], motivo, pos["stop"])
+    fill = _fill_stop(pos["stop"], preco_atual, liq, d)
+    if fill != pos["stop"]:
+        motivo += "-gap"
+    fechar(pos["id"], motivo, fill)
     eventos.append((pos["id"], motivo))
 
 

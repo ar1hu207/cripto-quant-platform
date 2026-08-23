@@ -192,6 +192,23 @@ invariante de risco por efeito colateral de faxina).
 liquidação batem no mesmo tick, ganha **o mais perto da entrada** (`simulador.py:298-301`) — a mesma
 regra do backtest, o que faz o empate ser resolvido do mesmo jeito nos dois lados. Paridade de novo.
 
+**O stop tem gatilho e tem fill, e eles não são o mesmo preço** (`_fill_stop`,
+`simulador.py:313-336`, `P2-18`). O worker olha o mercado a cada 15 s; entre dois polls o preço
+rompe o stop e segue. Fechar no preço do stop grava uma execução que não houve, e o erro é sempre
+para o **mesmo lado** — perda menor e trailing melhor que o real. Por isso o fill é o **pior** entre
+o stop e o preço observado: LONG executa no mais baixo dos dois, SHORT no mais alto. Quando isso
+acontece, o `motivo_saida` ganha o sufixo **`-gap`** (`stop-gap`, `trailing-gap`,
+`simulador.py:349-351`), e é isso que torna o custo do gap mensurável depois por query em `trades`,
+sem instrumentação nova.
+
+O fill tem **piso no preço de liquidação**: passado ele a corretora já tomou a margem, então não
+existe fill pior — é o mesmo argumento que mantém a liquidação fechando em `_preco_liquidacao`. Sem
+o piso, o desempate stop×liquidação acima gravaria execução num preço em que a posição já não
+existia, e o paper ficaria pessimista *além* do real. A forma `min(stop, max(preco, liq))` (e a
+espelhada do SHORT) é deliberada: o piso encurta o gap, nunca melhora o fill para além do `stop` —
+o resultado é sempre igual ou pior que o de antes do card. **Aperta a guarda, e apertar pode**
+(`CLAUDE.md` §2).
+
 ---
 
 ## 6. A API
@@ -418,7 +435,8 @@ MB × 5 backups = ~60 MB, "porque assim a poda viaja com o repositório". O arqu
 
 ## 10. A suíte, e o `xfail` que é decisão de processo
 
-`python -m pytest` → **143 passed, 1 xfailed** (medido em `3498ca4`, 33 s). Sem rede, banco
+`python -m pytest` → **164 passed, 1 xfailed** (medido no `T-EXEC-REAL`, `0fcf127` + `P2-18`, 55 s;
+eram 143 em `3498ca4`). Sem rede, banco
 temporário por teste, `preco_ao_vivo` substituído.
 
 A suíte tem duas metades. Em `tests/` estão os testes das funções que doem se quebrarem; a outra

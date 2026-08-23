@@ -171,3 +171,160 @@ def test_fechar_duas_vezes_nao_duplica_o_trade(banco, sem_rede):
     assert simulador.fechar(pid, "teste", 101.0) == pytest.approx(9.0)
     assert simulador.fechar(pid, "teste", 101.0) is None
     assert len(db.listar("trades", 10)) == 1
+
+
+# ================================================================ [P2-18] o fill do stop
+# O gatilho nao e o fill. Entre dois polls de 15s o preco rompe o stop e segue; fechar no
+# preco do stop grava execucao que nunca houve, sempre para o mesmo lado (perda menor,
+# trailing melhor). As asseracoes abaixo sao de VALOR pelo mesmo motivo do topo do arquivo:
+# um fill otimista nao levanta excecao, so grava o numero errado no historico de pesquisa.
+
+@pytest.mark.parametrize("d,stop,preco,liq,esperado,nota", [
+    (1,  100.0, 98.0,  91.0,  98.0,  "LONG: gap abaixo do stop -> fill no preco observado"),
+    (1,  100.0, 100.0, 91.0,  100.0, "LONG: preco exatamente no stop -> fill no stop"),
+    (1,  100.0, 103.0, 91.0,  100.0, "LONG: preco melhor que o stop nao melhora o fill"),
+    (1,  100.0, 85.0,  91.0,  91.0,  "LONG: passou da liquidacao -> piso na liq"),
+    (-1, 100.0, 102.0, 109.0, 102.0, "SHORT: gap acima do stop"),
+    (-1, 100.0, 100.0, 109.0, 100.0, "SHORT: preco exatamente no stop"),
+    (-1, 100.0, 97.0,  109.0, 100.0, "SHORT: preco melhor que o stop nao melhora o fill"),
+    (-1, 100.0, 115.0, 109.0, 109.0, "SHORT: passou da liquidacao -> teto na liq"),
+])
+def test_fill_stop(d, stop, preco, liq, esperado, nota):
+    assert simulador._fill_stop(stop, preco, liq, d) == pytest.approx(esperado), nota
+
+
+@pytest.mark.parametrize("d,stop,preco", [(1, 100.0, 85.0), (-1, 100.0, 115.0)])
+def test_o_fill_nunca_fica_melhor_que_o_stop_de_hoje(d, stop, preco):
+    """A direcao da mudanca e invariante, nao coincidencia: o [P2-18] APERTA a guarda, e
+    apertar pode (CLAUDE.md secao 2). Um fill melhor que `stop` seria afrouxar -- e e o que
+    um piso escrito como `max(min(stop,preco), liq)` faria quando o stop cai ABAIXO da
+    liquidacao. Por isso a forma e `min(stop, max(preco, liq))`."""
+    for liq in (0.0, 50.0, 91.0, 99.0, 100.0, 109.0, 150.0):
+        fill = simulador._fill_stop(stop, preco, liq, d)
+        assert (fill <= stop) if d == 1 else (fill >= stop)
+
+
+@pytest.mark.parametrize("d", [1, -1])
+def test_sem_liquidacao_modelada_o_piso_some_em_vez_de_zerar_o_gap(d):
+    """`_preco_liquidacao` devolve 0.0 quando a alavancagem e falsy. Zero e "nao ha liq
+    modelada", nao "a liq e no preco zero" -- e para um SHORT um teto em 0.0 anularia o gap
+    inteiro em silencio. O `if liq` existe para isso."""
+    assert simulador._fill_stop(100.0, 98.0, 0.0, d) == pytest.approx(98.0 if d == 1 else 100.0)
+    assert simulador._fill_stop(100.0, 102.0, 0.0, d) == pytest.approx(100.0 if d == 1 else 102.0)
+
+
+# ---------------------------------------------- fim a fim: o que chega na tabela `trades`
+
+def _fecha_por_stop(sem_rede, **kw):
+    """Semeia uma posicao, poe o preco ao vivo em `preco` e roda um ciclo de marcacao.
+    Devolve (id, eventos, trade gravado ou None)."""
+    preco = kw.pop("preco")
+    db.set_config("trailing_ativo", "0")        # o trailing tem teste proprio abaixo
+    pid = semear_posicao(**kw)
+    sem_rede(preco)
+    eventos = simulador.atualizar()
+    trades = db.listar("trades", 1)
+    return pid, eventos, (trades[0] if trades else None)
+
+
+def test_gap_no_stop_fecha_no_preco_observado_e_marca_o_motivo(banco, sem_rede):
+    """O criterio de aceite do card, literal: LONG com stop 100 e preco atual 98 fecha a
+    98, nao a 100, com motivo `stop-gap`."""
+    pid, eventos, t = _fecha_por_stop(sem_rede, direcao="LONG", entrada=102.0, valor_reais=100.0,
+                                      alavancagem=10, stop=100.0, preco=98.0)
+    assert t["saida"] == pytest.approx(98.0)
+    assert t["motivo_saida"] == "stop-gap"
+    assert eventos == [(pid, "stop-gap")]
+
+
+def test_o_gap_custa_dinheiro_de_verdade(banco, sem_rede):
+    """Nao basta gravar outro preco: o P&L tem de piorar na mesma proporcao. -1,96% ate o
+    stop viram -3,92% ate o fill, a 10x sobre R$100 de margem."""
+    _, _, t = _fecha_por_stop(sem_rede, direcao="LONG", entrada=102.0, valor_reais=100.0,
+                              alavancagem=10, stop=100.0, preco=98.0)
+    esperado = 100 * 10 * (98.0 / 102.0 - 1) - 1.0          # bruto alavancado - taxa dos 2 lados
+    assert t["pnl_reais"] == pytest.approx(esperado)
+    assert t["pnl_reais"] < -20.6                            # no stop exato seria -20,61
+
+
+def test_sem_gap_o_comportamento_e_identico_ao_de_antes(banco, sem_rede):
+    """Poll que pega o toque exato: fecha no stop, motivo sem sufixo. E o caso comum, e ele
+    nao pode mudar -- senao todo trade do historico ganharia `-gap` sem ter havido gap."""
+    pid, eventos, t = _fecha_por_stop(sem_rede, direcao="LONG", entrada=102.0, valor_reais=100.0,
+                                      alavancagem=10, stop=100.0, preco=100.0)
+    assert t["saida"] == pytest.approx(100.0)
+    assert t["motivo_saida"] == "stop"
+    assert eventos == [(pid, "stop")]
+
+
+def test_preco_entre_o_stop_e_a_entrada_nao_fecha_nada(banco, sem_rede):
+    """A outra metade de "sem gap": o stop nem foi tocado. A posicao segue aberta e nenhum
+    trade e gravado."""
+    _, eventos, t = _fecha_por_stop(sem_rede, direcao="LONG", entrada=102.0, valor_reais=100.0,
+                                    alavancagem=10, stop=100.0, preco=101.0)
+    assert eventos == []
+    assert t is None
+    assert db.listar("posicoes", 1)[0]["status"] == "aberta"
+
+
+def test_short_tambem_fecha_no_pior_preco(banco, sem_rede):
+    """O `d = 1 if LONG else -1` de novo: para o SHORT o pior e o mais ALTO."""
+    _, _, t = _fecha_por_stop(sem_rede, direcao="SHORT", entrada=98.0, valor_reais=100.0,
+                              alavancagem=10, stop=100.0, preco=102.0)
+    assert t["saida"] == pytest.approx(102.0)
+    assert t["motivo_saida"] == "stop-gap"
+
+
+def test_o_trailing_tambem_fecha_no_pior_preco(banco, sem_rede):
+    """Terceiro item do aceite. O trailing usa o MESMO caminho (`_fecha_stop`), entao o
+    vies era o mesmo -- e ele doia mais ali: o trailing so age em lucro, e o gap come
+    justamente o ganho travado."""
+    db.set_config("trailing_ativo", "1")
+    pid = semear_posicao(direcao="LONG", entrada=100.0, valor_reais=100.0,
+                         alavancagem=10, stop=105.0)         # stop acima da entrada = lucro travado
+    sem_rede(103.0)
+    eventos = simulador.atualizar()
+    t = db.listar("trades", 1)[0]
+    assert t["saida"] == pytest.approx(103.0)
+    assert t["motivo_saida"] == "trailing-gap"
+    assert eventos == [(pid, "trailing-gap")]
+
+
+def test_o_gap_nao_passa_do_preco_de_liquidacao(banco, sem_rede):
+    """A metade que o card manda NAO mexer, vista do outro lado. Passado o preco de liq a
+    corretora ja tomou a margem: nao existe fill pior. Sem o piso, o desempate
+    stop x liquidacao de `_marcar_uma` gravaria -R$100 onde a liquidacao grava -R$91."""
+    _, _, t = _fecha_por_stop(sem_rede, direcao="LONG", entrada=100.0, valor_reais=100.0,
+                              alavancagem=10, stop=98.0, preco=85.0)
+    liq = simulador._preco_liquidacao(100.0, 1, 10)
+    assert t["saida"] == pytest.approx(liq)                  # 91,0 e nao 85,0
+    assert t["motivo_saida"] == "stop-gap"
+    assert t["pnl_reais"] == pytest.approx(-(simulador.LIQ_BUFFER * 100.0) - t["taxa"])
+
+
+def test_a_liquidacao_continua_fechando_no_preco_de_liquidacao(banco, sem_rede):
+    """Regressao explicita: o card decide manter a liquidacao como esta, e o motivo nao
+    ganha sufixo. Aqui o stop esta MAIS LONGE da entrada que a liq, entao o desempate manda
+    para o ramo de liquidacao."""
+    db.set_config("trailing_ativo", "0")
+    pid = semear_posicao(direcao="LONG", entrada=100.0, valor_reais=100.0,
+                         alavancagem=10, stop=80.0)
+    sem_rede(70.0)
+    eventos = simulador.atualizar()
+    t = db.listar("trades", 1)[0]
+    assert t["saida"] == pytest.approx(simulador._preco_liquidacao(100.0, 1, 10))
+    assert t["motivo_saida"] == "liquidacao"
+    assert eventos == [(pid, "LIQUIDADO")]
+
+
+def test_as_metricas_leem_o_trade_com_gap_sem_quebrar(banco, sem_rede):
+    """Quarto item do aceite. `db.metricas()` faz `SELECT *` e nunca compara `motivo_saida`
+    (varredura do repositorio colada no relatorio do card) -- mas o P&L pior entra nas
+    contas, e e isso que se confere aqui: conta como perda e mexe no R-multiplo."""
+    _fecha_por_stop(sem_rede, direcao="LONG", entrada=102.0, valor_reais=100.0,
+                    alavancagem=10, stop=100.0, preco=98.0)
+    m = db.metricas()
+    assert m["n_trades"] == 1
+    assert m["win_rate"] == 0
+    assert m["pnl_total"] == pytest.approx(round(100 * 10 * (98.0 / 102.0 - 1) - 1.0, 2))
+    assert m["expectancia_r"] != 0                           # risco_inicial gravado -> R vivo
