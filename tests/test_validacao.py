@@ -27,8 +27,10 @@ louvor. O que define teste calibrado e UNIFORMIDADE dos p-valores, e e isso que
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
+from pesquisa import backtest_plataforma as B
 from pesquisa import validacao as V
 
 DIA = V.DIA_MS
@@ -560,3 +562,149 @@ def test_constantes_registradas():
     assert V.T_EFETIVO_MINIMO == 100
     assert V.PPA == 365
     assert V.PADRAO["seed"] == 42
+
+
+# ============================ o motor de backtest: `ts_saida` ============================
+# Estas provas nao sao da regua: sao do gerador que alimenta a regua
+# (`pesquisa/backtest_plataforma.backtest_ativo`). Moram aqui porque o campo que elas provam
+# -- `ts_saida` -- so existe para a purga de borda de fold, que e da regua. Rodam offline
+# porque o sinal e INJETADO (`sinal_fn`): sem isso, um `df` teria de disparar o `scoring` E
+# andar pela trajetoria que o teste quer, e o teste passaria a provar o scoring.
+TF_MS = 3_600_000
+
+
+def df_sintetico(closes, highs=None, lows=None, opens=None, tf_ms=TF_MS):
+    """`df` minimo que `backtest_ativo` consome: OHLC, timestamp, volume e `bb_mid`."""
+    n = len(closes)
+    return pd.DataFrame({
+        "timestamp": [T0 + i * tf_ms for i in range(n)],
+        "open": list(opens or closes), "high": list(highs or closes),
+        "low": list(lows or closes), "close": list(closes),
+        "volume": [1.0] * n, "bb_mid": list(closes),
+    })
+
+
+def sinal_em(indices, direcao=1, stop_dist=0.03, conv=99.0, adx=40.0):
+    """Gerador de sinal que dispara SO nos indices pedidos -- o resto do df fica mudo."""
+    alvo = set(indices)
+
+    def fn(df, i):
+        if i not in alvo:
+            return None
+        return {"direcao": direcao, "conviccao": conv, "adx": adx, "n_fatores": 3,
+                "stop_dist": stop_dist, "tipo": "tendencia"}
+    return fn
+
+
+def test_backtest_grava_ts_saida_no_FIM_do_candle_de_saida():
+    """A divida que a onda 1 deixou dentro do `T-EDGE`: sem `ts_saida` a purga desliga
+    sozinha e o vazamento de borda de fold segue presente e nao medido -- empurrando o
+    resultado para CIMA, contra a conclusao negativa.
+
+    O carimbo e o FIM do candle de saida, nao o comeco: e o instante em que o desfecho deixou
+    de ser incerto. Saida por stop dispara em algum ponto INTERNO do candle e o backtest nao
+    sabe qual -- carimbar o comeco afirmaria um instante nao observado, e purgaria de MENOS.
+    """
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0                                    # fura o stop de 3% no candle 65
+    df = df_sintetico(precos, lows=lows)
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]))
+    assert len(tr) == 1
+    t = tr[0]
+    assert t["motivo"] == "stop"
+    assert t["ts"] == T0 + 61 * TF_MS                  # fill no OPEN do candle seguinte
+    assert t["ts_saida"] == T0 + 65 * TF_MS + TF_MS    # FIM do candle de saida
+    assert t["ts_saida"] > t["ts"]
+
+
+def test_ts_saida_existe_em_todo_trade_e_nunca_precede_a_entrada():
+    """Vale para saida por regime tambem, que fecha em `closes[i]` e nao em nivel intrabar."""
+    precos = [100.0] * 62 + [101.0] * 8
+    df = df_sintetico(precos)
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
+                          sinal_fn=sinal_em([60], direcao=1))
+    # o sinal so dispara em 60; nos candles seguintes `fn` devolve None -> nao ha flip, a
+    # posicao atravessa o df inteiro e o trade nao fecha
+    assert tr == []
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
+                          sinal_fn=sinal_em([60, 64], direcao=1))
+    assert len(tr) == 0                                 # mesma direcao em 64: nao e flip
+    def fn(df_, i):
+        if i == 60:
+            return {"direcao": 1, "conviccao": 99.0, "adx": 40.0, "n_fatores": 3,
+                    "stop_dist": 0.03, "tipo": "tendencia"}
+        if i == 64:
+            return {"direcao": -1, "conviccao": 99.0, "adx": 40.0, "n_fatores": 3,
+                    "stop_dist": 0.03, "tipo": "tendencia"}
+        return None
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn)
+    assert len(tr) == 1 and tr[0]["motivo"] == "regime"
+    assert tr[0]["ts_saida"] == T0 + 64 * TF_MS + TF_MS
+    assert all(t["ts_saida"] >= t["ts"] for t in tr)
+
+
+def test_purga_fica_ATIVA_com_os_trades_do_motor_de_verdade():
+    """O contraste com `test_purga_desliga_sozinha_e_avisa_quando_falta_ts_saida`: aquele
+    prova que a regua nao MENTE quando o campo falta; este prova que o campo passou a vir."""
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df_sintetico(precos, lows=lows),
+                          sinal_fn=sinal_em([60]))
+    assert V._tem_ts_saida({("c",): tr}) is True
+
+
+def test_sensibilidade_roda_atribuir_so_quando_ha_ts_saida():
+    """[F3] `atribuir='saida'` virou possivel com o `ts_saida`, e mesmo assim NAO virou o
+    `PADRAO`: ele aparece como variante de diagnostico, ao lado de 'entrada'. Trocar o
+    criterio travado do veredito e decisao de dono, nao efeito colateral de um campo novo."""
+    assert V.PADRAO["atribuir"] == "entrada"
+    sem = V.sensibilidade(_res_sintetico(mu=0.0, seed=3, n_dias=300))
+    assert sem["atribuir"] == []                        # gerador sintetico nao grava ts_saida
+
+    pnls = serie_ar1(300, 0.0, seed=4)
+    saidas = [T0 + (i + 2) * DIA for i in range(300)]
+    por_cfg = {(50, 22): trades_diarios(pnls, ts_saida=saidas)}
+    res = V.walk_forward(gerador_constante(por_cfg), list(por_cfg), n_trials=100)
+    com = V.sensibilidade(res)
+    assert [nome for nome, _ in com["atribuir"]] == ["entrada", "saida"]
+    assert all(r is not None for _, r in com["atribuir"])
+
+
+def test_duracao_da_barra_sai_do_df_e_nao_do_default_de_tf():
+    """A causa: `tfh` vinha de `TF_MAPA[tf]`, e `tf` tem default (`"15m"`). Quem passa um `df`
+    pronto nao precisa passar `tf` -- e `validacao.gerador_tendencia` nao passava, com candles
+    de 1h. A barra valia 0,25h para um df de 1h, entao o funding do `[P2-10]` era cobrado por
+    UM QUARTO do hold real: carry menor, P&L maior, contra a conclusao negativa.
+
+    Aqui o df tem passo de 1h e `tf` fica no default errado de proposito. Se a duracao voltar
+    a sair do default, `ts_saida` anda 15 min por barra e o funding volta a ser 1/4."""
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0
+    df = df_sintetico(precos, lows=lows)               # passo de 1h nos timestamps
+    assert B.TF == "15m"                               # o default que enganava
+    t_medido = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                                funding_8h=0.001)[0]
+    t_default = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                                 funding_8h=0.001, tf_horas=0.25)[0]   # o valor antigo
+    # entrada no open da barra 61, saida no FIM da barra 65 -> 5 barras de distancia
+    assert t_medido["ts_saida"] - t_medido["ts"] == 5 * TF_MS          # barras de 1h
+    # com a duracao errada, os timestamps do df continuam de 1h mas a "barra" vale 15 min:
+    # o carimbo de saida cai 45 min ANTES do fechamento real -- purga de menos, e em silencio
+    assert t_default["ts_saida"] - t_default["ts"] == 4 * TF_MS + 900_000
+    # funding e LINEAR no tempo de hold: 4x o hold, 4x o carry pago pelo LONG
+    carry_medido = t_default["pnl"] - t_medido["pnl"]
+    carry_default = (t_default["pnl"] - B.backtest_ativo(
+        "X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]), funding_8h=0.0,
+        tf_horas=0.25)[0]["pnl"]) * -1
+    assert carry_medido == pytest.approx(3 * carry_default, rel=1e-9)
+
+
+def test_tf_horas_explicito_vence_a_medicao():
+    """Quem declara, declarou -- a medicao e o conserto do ESQUECIMENTO, nao um veto."""
+    df = df_sintetico([100.0] * 70)
+    assert B._horas_por_barra(df, 4.0, "15m") == 4.0
+    assert B._horas_por_barra(df, None, "15m") == pytest.approx(1.0)
+    assert B._horas_por_barra(df.iloc[:1], None, "15m") == 0.25      # sem passo: cai no mapa

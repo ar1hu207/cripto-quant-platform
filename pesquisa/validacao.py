@@ -31,22 +31,21 @@ De onde vem cada decisao. `ITEM1-VALIDACAO-RIGOROSA.md` (a proposta, jul/2026) e
 `REVISAO-ITEM1.md` (o parecer estatistico que a revisou). Onde os dois divergem, vale a
 revisao, e o achado dela esta citado por numero (F1..F19) no ponto do codigo.
 
-O que NAO foi implementado, e por que -- as duas razoes sao a mesma:
-`pesquisa/backtest_plataforma.py:82` nao grava `ts_saida`, e esse arquivo e territorio do
-`T-EDGE` (onda 3 do M4), nao desta sessao.
+O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado:
+`pesquisa/backtest_plataforma.py` passou a gravar `ts_saida` em cada trade.
 
   * PURGA (`ITEM1` §3.2 / F4): "so entra no treino trade com `ts_saida < tr_lim`". A funcao
-    existe e roda quando os trades trazem `ts_saida`; com os trades de hoje ela desliga
-    sozinha e o relatorio imprime que desligou. Nao e default silencioso: e recusa declarada.
+    sempre existiu e sempre foi PEDIDA (`PADRAO["purga"] = True`); ela desligava sozinha por
+    falta do campo, e o relatorio imprimia que desligou. Agora ela AGE, e o vazamento de
+    borda de fold do `ITEM1` §2/P2 -- que empurrava o resultado para CIMA, contra a conclusao
+    negativa -- deixa de estar presente e nao medido (F13). Numero que mudar por causa disso
+    e o instrumento funcionando, nao regressao.
   * `atribuir="saida"` (`ITEM1` §3.3 / F3): a revisao quer o P&L atribuido ao dia da SAIDA,
-    porque e onde ele e realizado. Sem `ts_saida` so da para atribuir pela ENTRADA. O
-    `PADRAO` diz `"entrada"` porque um `PADRAO` que declara o que nao roda e pior que um que
-    declara o que roda.
-
-Consequencia honesta: o vazamento de borda de fold que o `ITEM1` §2/P2 descreve continua
-presente, e a magnitude dele continua NAO MEDIDA (F13). Um trade que entra antes da borda e
-sai depois carrega P&L determinado dentro da janela de teste. Isso empurra o resultado para
-CIMA, ou seja, contra a conclusao negativa -- entao nao e uma desculpa para o numero ruim.
+    porque e onde ele e realizado. Isso passou a ser POSSIVEL, e mesmo assim o `PADRAO`
+    continua `"entrada"`: trocar o criterio travado do veredito e decisao de dono, nao efeito
+    colateral de um campo novo ([F3] existe justamente para o criterio nao virar grau de
+    liberdade). A variante roda em `sensibilidade()`, que imprime as duas lado a lado sempre
+    -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
 import math
 import sys
@@ -118,7 +117,7 @@ T_EFETIVO_MINIMO = 100          # cinto-e-suspensorio: dias com P&L nao-nulo na 
 PADRAO = {
     "criterio": "sharpe",
     "modo": "expandindo",
-    "atribuir": "entrada",      # "saida" e o alvo; ver o cabecalho (falta `ts_saida`)
+    "atribuir": "entrada",      # "saida" ja e possivel (ha `ts_saida`); trocar e do dono
     "block": 5,
     "purga": True,              # pedida sempre; desliga sozinha e avisa se faltar ts_saida
     "gap_pre_teste_ms": 0,
@@ -128,6 +127,7 @@ PADRAO = {
 }
 CRITERIOS = ("sharpe", "pnl", "pnl_por_trade")
 MODOS = ("expandindo", "rolante")
+ATRIBUIR = ("entrada", "saida")  # so roda em sensibilidade(), e so quando ha `ts_saida`
 BLOCKS = (1, 2, 5, 10, 20)      # [F18] sensibilidade a block; block=1 E o iid, de graca
 DIA_MS = 86_400_000
 
@@ -211,8 +211,7 @@ def _chave_periodo(t, atribuir):
     if atribuir == "saida":
         if "ts_saida" not in t:
             raise ValueError(
-                "atribuir='saida' exige `ts_saida` no trade, e "
-                "pesquisa/backtest_plataforma.py:82 nao grava (territorio do T-EDGE)")
+                "atribuir='saida' exige `ts_saida` no trade -- o gerador nao gravou")
         return int(t["ts_saida"]) // DIA_MS
     if atribuir != "entrada":
         raise ValueError("atribuir deve ser 'entrada' ou 'saida'")
@@ -692,7 +691,7 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo=""):
     res = {"rotulo": rotulo, "n_trials": n_trials, "bloco_a": bloco_a, "bloco_b": bloco_b,
            "padrao": dict(PADRAO), "purga_ativa": PADRAO["purga"] and base["tem_ts_saida"],
            "purga_motivo": ("" if base["tem_ts_saida"] else
-                            "backtest_plataforma.py:82 nao grava ts_saida (territorio T-EDGE)"),
+                            "o gerador nao grava ts_saida nos trades"),
            "sensibilidade_n_trials": sensibilidade_n_trials(serie_naive),
            # o numero antigo, preservado para o contraste do relatorio
            "dsr_legado_trades": deflated_sharpe([t["pnl"] for t in base["oos"]], n_trials),
@@ -762,13 +761,21 @@ def sensibilidade(res):
     """
     por_cfg = res["por_cfg"]
     n_trials = res["n_trials"]
-    fora = {"criterio": [], "modo": [], "block": []}
+    fora = {"criterio": [], "modo": [], "atribuir": [], "block": []}
     for c in CRITERIOS:
         r = _nucleo(por_cfg, **{**PADRAO, "criterio": c})
         fora["criterio"].append((c, _resumo_variante(r, n_trials)))
     for m in MODOS:
         r = _nucleo(por_cfg, **{**PADRAO, "modo": m})
         fora["modo"].append((m, _resumo_variante(r, n_trials)))
+    # `atribuir` so entra aqui depois que o gerador passou a gravar `ts_saida`. Enquanto o
+    # campo faltava, "saida" nem era rodavel; agora que e, ele NAO vira default em silencio --
+    # vira linha de diagnostico ao lado de "entrada", que e onde a revisao (F3/`ITEM1` §3.3)
+    # pode ser conferida sem que o veredito passe a depender da escolha.
+    if _tem_ts_saida(por_cfg):
+        for at in ATRIBUIR:
+            r = _nucleo(por_cfg, **{**PADRAO, "atribuir": at})
+            fora["atribuir"].append((at, _resumo_variante(r, n_trials)))
     base = _nucleo(por_cfg, **PADRAO)
     for bl in BLOCKS:
         s = base["serie_oos"]
@@ -983,6 +990,12 @@ def relatorio_sensibilidade(sens):
         if r:
             print(f"   {nome:>14}  {r['trades']:>7}  {r['pnl']:>+8.0f}  "
                   f"{str(r['ic_bloco']):>20}  {r['psr']:>6}  {str(r['sharpe_anual']):>10}")
+    for nome, r in sens.get("atribuir", []):
+        if r:
+            print(f"   {('atrib=' + nome):>14}  {r['trades']:>7}  {r['pnl']:>+8.0f}  "
+                  f"{str(r['ic_bloco']):>20}  {r['psr']:>6}  {str(r['sharpe_anual']):>10}")
+    if not sens.get("atribuir"):
+        print("   atribuir: nao rodado -- os trades deste gerador nao trazem `ts_saida`")
     print(f"\n   {'block':>14}  {'IC95% da media/dia':>24}   (block=1 E o iid) [F18]")
     for bl, ic in sens["block"]:
         print(f"   {bl:>14}  {str(ic):>24}")
