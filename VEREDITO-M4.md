@@ -690,6 +690,58 @@ todos os três horizontes**, e praticamente idêntico em 24h (−1,68% contra �
 veredito do portão, a população de sinais que ele filtra tem deriva negativa dos dois lados — o que
 é coerente com o `SEM EVIDÊNCIA DE EDGE` da §3.1 e não depende de a amostra fechar.
 
+#### Medição de 2026-08-24 13:21 UTC — **a amostra fechou. `[Q-4]` CONCLUÍDO**
+
+```
+passou:    n=301  alvo=160  stop=139  aberto=2   win=53.5%  ret_1h=+0.262  ret_4h=+0.255  ret_24h=-1.316  fluxo_medio=46.8
+rejeitado: n=276  alvo=138  stop=136  aberto=2   win=50.4%  ret_1h=+0.211  ret_4h=+0.232  ret_24h=-1.159  fluxo_medio=52.7
+delta_win=+3.1 p.p.   z=0.75   p=0.4533
+veredito: delta +3.1 p.p. nao se distingue de ruido (p=0.4533) -- o portao ainda nao mostrou valor
+```
+
+**Veredito do `[Q-4]`: o portão de fluxo NÃO mostrou valor.** Com 301 contra 276 sinais de
+tendência, o grupo que passou acerta 3,1 p.p. a mais que o rejeitado, e essa diferença não se
+distingue de ruído (`p = 0,45`). Isso **não** prova que o portão é inútil — prova que, nesta amostra
+e com este contrafactual, ele não demonstrou o valor que justificaria recusar sinais. É a mesma
+gramática do resto do documento: ausência de evidência, não evidência de ausência.
+
+##### O preliminar encolheu, e vale mais que o resultado
+
+A medição das 03h44 deste mesmo dia, colada acima, deu **+8,4 p.p. com `p = 0,246`** sobre
+97 × 88 sinais. Nove horas e ~390 sinais depois, o mesmo teste dá **+3,1 p.p. com `p = 0,45`**.
+**O efeito caiu para pouco mais de um terço à medida que a amostra cresceu** — que é o
+comportamento de um número que era ruído desde o começo.
+
+Este documento se recusou a citar o `+8,4` como resultado quando ele era o único número disponível,
+e o critério de ≥100 por grupo estava escrito no `db.relatorio_fluxo` **antes** de qualquer
+medição. As duas coisas juntas são o motivo de o `+8,4` não ter virado uma linha de release.
+Registrar isso importa mais do que o veredito: é a demonstração, no dado deste projeto, de por que
+o corte de amostra é escrito antes e não depois.
+
+##### O que isto significa para a §3.1, que era a pergunta original
+
+A ressalva era: *a tabela mede um universo de sinais maior que o que o vivo aceita*. Agora ela tem
+tamanho. **O portão recusa ~48% dos sinais de tendência** (276 de 577) e o grupo recusado tem
+desempenho **estatisticamente indistinguível** do aceito. Ou seja: o universo do backtest é maior
+que o do vivo, mas **o pedaço a mais não é sistematicamente pior**. A distorção que a §5 temia
+existe em **quantidade** e não em **qualidade demonstrável**, e portanto não desloca o veredito das
+políticas em direção conhecida.
+
+⚠️ **O que isto NÃO autoriza.** Desligar o `exigir_fluxo` é **afrouxar guarda**, e o `CLAUDE.md` §2
+é explícito: *apertar pode; afrouxar, só o dono*. O `[Q-4]` é medição, não mandato — e o
+contrafactual dele é de **sinal** (candle, 1R espelhado, sem fill, sem taxa e sem funding), não de
+P&L. Um portão pode não separar acerto e ainda assim proteger execução, que é uma pergunta que
+este teste **não** faz.
+
+##### Duas notas de método, para quem repetir
+
+* **O número é um instantâneo móvel.** Duas chamadas com ~90 s de intervalo devolveram
+  `+3,2` e `+3,1`: a amostra cresce ao vivo. Colar sem carimbo de hora é colar algo que não se
+  reproduz. O carimbo desta é **2026-08-24 13:21 UTC**.
+* **O `fluxo_medio` inverte entre os grupos** (46,8 quem passou contra 52,7 quem foi recusado) e
+  isso **não** é anomalia: `fluxo_comprador` alto é razão de recusa para sinal `SHORT`. A coluna
+  descreve o critério do portão, não a qualidade do sinal.
+
 **O que o `[Q-4]` dá ao `[P1-10]` é ressalva, não insumo.** O veredito das políticas não depende
 dele. O que ele responde é *quanto* o portão de fluxo desloca o que foi medido — e a direção do
 efeito no P&L é **desconhecida** hoje (é literalmente o que o `[Q-5]` declara no limite (b)). Até
