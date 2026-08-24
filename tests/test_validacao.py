@@ -1086,6 +1086,64 @@ def test_Q9_sd_min_recusa_o_sinal_de_stop_curto_e_o_default_nao_recusa_nada():
     assert roda(sd_min=0.04) == []
 
 
+def test_Q10_lev_por_conviccao_e_transcricao_fiel_do_autotrader():
+    """[Q-10] `pesquisa/` nao pode importar `autotrader` (ele arrasta `db` e `simulador`, e a
+    fronteira do `CLAUDE.md` 0 declara so `scoring` e `indicadores` como compartilhados). O
+    preco dessa fronteira e uma copia da formula de alavancagem -- e este teste E o preco da
+    copia: ele importa OS DOIS lados e quebra no dia em que divergirem.
+
+    Sem ele, alguem ajusta `autotrader._alavancagem` (ou o cap do [P1-11]) e a pesquisa segue
+    medindo a alavancagem de ontem, em silencio, produzindo numero que nao descreve a producao.
+    Varre a faixa inteira de conviccao E o regime em que o cap geometrico morde."""
+    import autotrader
+
+    cfg = {"auto_lev_modo": "conviccao", "auto_lev_min": 2, "auto_lev_max": 20,
+           "auto_conviccao_min": 60}
+    for conv in (0, 55, 60, 61, 70, 80, 99, 100, 120):
+        for sd in (0.0, 0.005, 0.02, 0.05, 0.12, 0.4):
+            esperado = autotrader._alavancagem(cfg, conv, stop_dist=sd, ativo="X/USDT")
+            obtido = B._lev_conviccao(conv, 2.0, 20.0, 60.0, sd)
+            assert obtido == esperado, f"conv={conv} sd={sd}: {obtido} != {esperado}"
+
+
+def test_Q11_zero_a_zero_arma_em_R_salva_o_trade_e_o_default_nao_arma_nada():
+    """[Q-11] A medicao de MFE de 2026-08-24 achou 19 dos 20 trades que foram de lucro a
+    prejuizo SEM o trailing jamais ter armado: ele so arma em `+trailing_dist` de PRECO, e
+    abaixo disso a protecao e zero. Em ROE isso escala com a alavancagem -- 2% de preco sao 40%
+    de ROE a 20x.
+
+    O cenario TEM de ser o da zona cega, senao nao prova nada: risco (1%) MENOR que a distancia
+    do trailing (2%). O preco sobe 1,5% -- passa de 1R de ganho, mas nao chega nos 2% que armam
+    o trailing -- e depois desaba ate abaixo do stop de entrada. E exatamente a geometria dos
+    #38/#39/#40 de producao, que ficaram a menos de meio ponto percentual de ganhar protecao.
+
+    Com `be_em_R=1` a guarda ja moveu o stop para o zero-a-zero e o trade fecha em EMPATE; sem
+    ela, vai ao stop cheio. Mesmo df, mesmo sinal, mesma politica -- o unico fator e a guarda.
+
+    O default `None` nao pode armar nada: e o que garante que as rodadas ja publicadas nao
+    mudem de numero."""
+    precos = [100.0] * 62 + [101.5] * 2 + [98.0] * 6
+    highs, lows = list(precos), list(precos)
+    lows[64] = 98.0
+    df = df_com_indicadores(precos, highs=highs, lows=lows)
+    fn = sinal_em([60], stop_dist=0.01)                 # risco = 1% -- METADE do trailing
+
+    def roda(**kw):
+        return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
+                                saida="trailing", trailing_dist=0.02, **kw)
+
+    sem = roda()[0]
+    assert sem["motivo"] == "stop" and sem["pnl"] < 0    # sem guarda: stop cheio
+
+    com = roda(be_em_R=1.0)[0]
+    assert com["motivo"] == "zero-a-zero"               # motivo PROPRIO, nao 'trailing'
+    assert com["pnl"] > sem["pnl"]
+    assert abs(com["pnl"]) < abs(sem["pnl"]) / 5        # empate, nao lucro nem perda cheia
+
+    # gatilho alto demais para a excursao (2R de ganho contra 5R pedidos): nao arma
+    assert roda(be_em_R=5.0)[0]["motivo"] == "stop"
+
+
 def test_B_fecha_em_reversao_COM_lucro_e_nao_fecha_sem_lucro():
     """Paridade com `autotrader.auto_executar` passo 1: fecha quando o gestor de saida devolve
     nivel 'forte' ou 'lucro', que e reversao COM ROE acima de 1%. Sem lucro o nivel vira

@@ -1314,6 +1314,95 @@ def varredura_geometria(dfs=None, funding_8h=FUNDING_8H):
     return {"baseline": base, "geometria": geo}
 
 
+# ---------------------------------------------------------------------------
+# [Q-11] O stop zero-a-zero, medido com ALAVANCAGEM POR CONVICCAO ([Q-10]).
+#
+# Por que esta rodada nao e mais uma varredura de saida. As anteriores mediram parametros de
+# saida com `LEV` FIXO em 10x, e o defeito que este card ataca E a interacao entre alavancagem
+# e um limiar fixo em preco: o trailing so arma em +2% de PRECO, e como o lucro que o operador
+# ve e ROE (= preco x alavancagem), o mesmo gatilho vale 6% de ROE a 3x e 40% a 20x. Num
+# backtest de alavancagem constante essa interacao NAO EXISTE -- e por isso nenhuma rodada
+# anterior poderia te-la encontrado. A medicao de MFE dos 47 trades de producao (2026-08-24)
+# encontrou: 19 dos 20 trades que foram de lucro a prejuizo nunca tiveram o trailing armado.
+#
+# `be_em_R = None` esta na grade como hipotese nula, mesmo padrao do [Q-9]: se a guarda nao
+# ajudar, o treino escolhe "sem guarda" sozinho.
+GRID_BE_R = (None, 0.5, 1.0, 1.5)
+GRID_ZAZ = [(mc, ax, be) for mc in (50, 55, 65) for ax in (22, 25) for be in GRID_BE_R]
+
+# [F10] Piso contado, CUMULATIVO no dia. A varredura de geometria ja gastou 480 tentativas
+# neste arquivo hoje (N_TRIALS_GEOMETRIA=550), e esta rodada acrescenta 24 x 5 = 120. Contar so
+# as proprias seria fingir que a busca comecou agora -- o data-snooping do dia e o mesmo dono
+# olhando o mesmo dado. 550 + 120 = 670. Na duvida o piso sobe: DSR menor e a direcao que
+# desfavorece quem esta medindo.
+N_TRIALS_ZAZ = 670
+
+
+def _trades_zaz(cfg):
+    """Uma config da grade do zero-a-zero, nas 12 moedas. Alvo de ProcessPoolExecutor."""
+    mc, ax, be = cfg
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, saida="trailing",
+                                 trailing_dist=0.02, be_em_R=be, lev_modo="conviccao")
+        except Exception:
+            pass
+    return cfg, tr
+
+
+def gerar_zaz_paralelo(grid, dfs, funding_8h, n_workers=None):
+    import concurrent.futures as cf
+    n = n_workers or max(1, min(6, (os.cpu_count() or 2) - 2))
+    out, feito = {}, 0
+    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                initargs=(dfs, funding_8h)) as pool:
+        for cfg, tr in pool.map(_trades_zaz, grid):
+            out[cfg] = tr
+            feito += 1
+            print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
+    return out
+
+
+def _diagnostico_por_braco(por_cfg):
+    """DIAGNOSTICO por valor de `be_em_R`, agregando as 6 configs de entrada de cada braco.
+
+    Nao e o veredito e nao decide nada -- o veredito sai do walk-forward, que escolhe no
+    TREINO. Isto existe para uma pergunta que o veredito nao responde: a guarda MUDA alguma
+    coisa? Uma guarda que nunca arma e uma guarda que arma e nao move o P&L sao fracassos
+    diferentes, e so a contagem de motivos separa os dois."""
+    print("\n-- DIAGNOSTICO por braco (in-sample, todas as configs de entrada somadas) --")
+    print(f"   {'be_em_R':>8} {'trades':>8} {'PnL':>10} {'zero-a-zero':>12} {'stop':>7} "
+          f"{'trailing':>9} {'liquid':>7}")
+    for be in GRID_BE_R:
+        tr = [t for cfg, lst in por_cfg.items() if cfg[2] == be for t in lst]
+        if not tr:
+            continue
+        m = {}
+        for t in tr:
+            m[t["motivo"]] = m.get(t["motivo"], 0) + 1
+        print(f"   {str(be):>8} {len(tr):>8} {sum(t['pnl'] for t in tr):>+10.0f} "
+              f"{m.get('zero-a-zero', 0):>12} {m.get('stop', 0):>7} {m.get('trailing', 0):>9} "
+              f"{m.get('liquidacao', 0):>7}")
+
+
+def varredura_zero_a_zero(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-11] A regua sobre a grade do stop zero-a-zero, com alavancagem por conviccao.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao zeroazero
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+    print(f"\n[zero-a-zero] be_em_R x entrada — {len(GRID_ZAZ)} configs, lev por conviccao",
+          flush=True)
+    por_cfg = gerar_zaz_paralelo(GRID_ZAZ, dfs, funding_8h)
+    _diagnostico_por_braco(por_cfg)
+    res = walk_forward(lambda cfg: por_cfg[cfg], GRID_ZAZ, n_trials=N_TRIALS_ZAZ,
+                       rotulo=f"C trailing 2% + zero-a-zero | lev conviccao | {TF} {DIAS}d")
+    relatorio(res)
+    return res
+
+
 def baixar_paineis():
     """As 12 moedas, preparadas uma vez. Separado porque a comparacao de politicas roda quatro
     walk-forwards sobre EXATAMENTE os mesmos dados -- baixar de novo por politica nao seria so
@@ -1582,6 +1671,9 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "geometria":
         varredura_geometria()                         # [Q-8]/[Q-9] k e sd_min varridos no treino
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "zeroazero":
+        varredura_zero_a_zero()                       # [Q-11] stop zero-a-zero, lev por conviccao
         sys.exit(0)
     r = walk_forward_tendencia("tendencia")
     if "erro" not in r:
