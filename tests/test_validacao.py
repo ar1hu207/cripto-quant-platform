@@ -1056,6 +1056,36 @@ def test_C_em_k_ATR_e_o_item_3_do_card_distancia_em_unidade_do_ATR():
                             saida="trailing", trailing_k_atr=1.0) == []   # 5%: 100,7 -> nao bate
 
 
+def test_Q9_sd_min_recusa_o_sinal_de_stop_curto_e_o_default_nao_recusa_nada():
+    """[Q-9] O piso de distancia do stop e portao de CUSTO, e a conta que o justifica nao
+    depende de amostra: `taxa/risco = 2*taxa_lado/sd`. Com `taxa=0,0005`, um stop a 0,19% da
+    entrada (medido em producao em 2026-08-24, TRX 5m) poe 53% do risco-ate-o-stop na
+    corretora antes de o mercado se mexer.
+
+    O default `0.0` tem de deixar TUDO passar: e o que garante que nenhuma rodada anterior --
+    inclusive os numeros ja publicados no `VEREDITO-M4.md` -- mude de resultado por causa
+    deste parametro. Um piso que agisse por default reescreveria o veredito em silencio.
+
+    E o portao mede a distancia do SINAL, nao o desfecho: por isso o teste compara o mesmo df,
+    o mesmo sinal e a mesma politica, mudando so `sd_min` -- o unico jeito de provar que quem
+    recusou foi o piso."""
+    precos = [100.0] * 62 + [106.0] * 3 + [100.5] * 5
+    lows = list(precos)
+    lows[65] = 100.5
+    df = df_com_indicadores(precos, lows=lows)
+    fn = sinal_em([60], stop_dist=0.019)                # 1,9% -- abaixo de 2%, acima de 1%
+
+    def roda(**kw):
+        return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
+                                saida="trailing", trailing_dist=0.02, **kw)
+
+    assert len(roda()) == 1                             # default: portao desligado
+    assert len(roda(sd_min=0.0)) == 1                   # explicito e igual ao default
+    assert len(roda(sd_min=0.01)) == 1                  # 1,9% >= 1% -> passa
+    assert roda(sd_min=0.02) == []                      # 1,9% < 2% -> recusado no portao
+    assert roda(sd_min=0.04) == []
+
+
 def test_B_fecha_em_reversao_COM_lucro_e_nao_fecha_sem_lucro():
     """Paridade com `autotrader.auto_executar` passo 1: fecha quando o gestor de saida devolve
     nivel 'forte' ou 'lucro', que e reversao COM ROE acima de 1%. Sem lucro o nivel vira

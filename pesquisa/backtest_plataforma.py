@@ -121,7 +121,7 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                    estrategia="tendencia", df=None, adx_min=25, adx_max_rev=22,
                    max_hold=20, taxa=TAXA, slip=0.0002, funding_8h=0.0, tf_horas=None,
                    sinal_fn=None, saida="regime", trailing_dist=TRAILING_DIST,
-                   trailing_k_atr=None, alvo_roe=ALVO_ROE):
+                   trailing_k_atr=None, alvo_roe=ALVO_ROE, sd_min=0.0):
     """Backtest com PARIDADE honesta: sinal no candle FECHADO i, execução no OPEN do
     candle SEGUINTE (i+1) + slippage. estrategia: 'tendencia' ou 'reversao' (alvo = volta à
     média + time-stop). df pré-carregado evita re-baixar.
@@ -155,6 +155,11 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     Com `trailing_k_atr=k` a distância vira `k·ATR/preço`, medida **na entrada** e fixa depois:
     coerente com o stop de entrada, e um número por trade, como o vivo. Recalculá-la a cada
     candle seria outra política, não a mesma em outra unidade.
+
+    **`sd_min` — o piso de distância do stop ([Q-9]).** Portão de CUSTO: recusa o sinal cujo
+    stop está tão perto que o round-trip come o risco (`taxa/risco = 2·taxa_lado/sd`). Default
+    `0.0` = desligado, para que nenhuma rodada anterior mude de resultado. O porquê completo
+    está no ponto do gate, junto do `continue`.
 
     **`ts_saida`, e por que ele é o FECHAMENTO do candle de saída e não a abertura.**
     Cada trade grava o instante da entrada (`ts`, o open do candle i+1, que é o fill) e o
@@ -221,6 +226,22 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
             else:                                               # reversão: só mercado lateral
                 if p["adx"] > adx_max_rev or p["n_fatores"] < 2:
                     continue
+            # [Q-9] Piso de distância do stop — portão de CUSTO, não de estratégia.
+            #
+            # `taxa/risco = 2·taxa_lado/sd`: a fração do risco-até-o-stop que vira taxa não
+            # depende de tamanho, de alavancagem nem de edge, só de `sd`. Com `taxa=0,0005`,
+            # `sd=0,19%` (TRX 5m em produção, 2026-08-24) põe **53%** do risco na corretora
+            # antes de o mercado se mexer. O gate espelha o `_liq_antes_do_stop` do
+            # `simulador` ([P1-12]), que recusa a degeneração do outro lado — stop LONGE
+            # demais, atrás da liquidação. Perto demais é a mesma doença com o sinal trocado,
+            # e não tinha guarda nenhuma.
+            #
+            # Fica no `backtest_ativo` e não no `scoring` de propósito: `scoring` é a paridade
+            # com o vivo (`CLAUDE.md` §0) e mudar a pontuação mudaria o SINAL. Isto não muda o
+            # sinal — recusa executá-lo quando o custo do round-trip come o risco. Default 0,0
+            # = portão desligado, então nenhuma rodada anterior muda de resultado.
+            if sd_min and (p.get("stop_dist") or 0.0) < sd_min:
+                continue
             d = p["direcao"]
             e = opens[i + 1] * (1 + d * slip)                   # fill no OPEN do próximo candle + slippage
             # distância do trailing FIXADA na entrada: k×ATR/preço se pedido, senão o % fixo

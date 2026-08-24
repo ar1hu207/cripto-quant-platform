@@ -51,6 +51,7 @@ O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado
     -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
 import math
+import os
 import sys
 
 import numpy as np
@@ -1214,6 +1215,105 @@ POLITICAS_M4 = (
 )
 
 
+# ---------------------------------------------------------------------------
+# [Q-8]/[Q-9] A varredura de GEOMETRIA — o pre-requisito que a §7.3 do VEREDITO-M4 deixou
+# escrito e nao rodou.
+#
+# O que a §7.3 registrou: `C trailing 3xATR` ficou ABAIXO de `C trailing 2% fixo` (Sharpe
+# 0,436 x 0,645; DSR 0,0145 x 0,0602), e no mesmo paragrafo disse por que isso nao decide
+# nada -- *"o `k=3` usado aqui e o do smoke, NAO foi escolhido no treino, e a §7.3 sempre
+# disse que o `k` de producao sai do walk-forward. Um `k` varrido no grid e pre-requisito de
+# qualquer proposta de troca"*. Comparar um `k` arbitrario com um `trailing_dist` que TAMBEM
+# nunca foi escolhido no treino compara dois chutes, nao duas politicas.
+#
+# Entao `k` e `sd_min` entram na GRADE, e nao no rotulo da rodada: a escolha passa a acontecer
+# dentro do fold de TREINO de cada dobra, que e o unico lugar onde escolher parametro nao e
+# olhar o resultado. E o preco disso e pago na mesma moeda: a grade multiplica por 16 e o
+# `n_trials` sobe junto (ver `N_TRIALS_GEOMETRIA`).
+#
+# `sd_min=0.0` esta na grade DE PROPOSITO: e a hipotese nula do [Q-9]. Se o piso nao ajudar,
+# o treino escolhe 0,0 sozinho e a varredura devolve isso -- que e uma resposta, nao uma falha.
+GRID_GEO_K = (1.0, 2.0, 3.0, 4.0)          # trailing em k x ATR, a mesma unidade do stop
+GRID_GEO_SD = (0.0, 0.01, 0.02, 0.04)      # piso de distancia do stop; 0,0 = portao desligado
+GRID_GEOMETRIA = [(mc, ax, k, sd) for mc in (50, 55, 65) for ax in (22, 25)
+                  for k in GRID_GEO_K for sd in GRID_GEO_SD]
+
+# [F10] O piso contado, atualizado. O 100 do `N_TRIALS` contava `GRID x N_FOLDS = 30` deste
+# arquivo mais o snooping historico do projeto (~70). A grade da geometria e 96 configs, entao
+# a parcela deste arquivo passa de 30 para 96 x 5 = 480: 100 - 30 + 480 = 550. Declarar menos
+# seria pedir ao DSR que descontasse menos tentativas do que a rodada realmente fez.
+N_TRIALS_GEOMETRIA = 550
+
+
+def _trades_geo(cfg):
+    """Roda UMA config da grade de geometria nas 12 moedas. Modulo-level e sem `dfs` no
+    argumento porque e alvo de `ProcessPoolExecutor` no Windows (spawn): o painel viaja uma
+    vez por worker pelo `initializer`, nao uma vez por tarefa."""
+    mc, ax, k, sd = cfg
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, saida="trailing",
+                                 trailing_k_atr=k, sd_min=sd)
+        except Exception:
+            pass
+    return cfg, tr
+
+
+_DFS_W, _FUNDING_W = None, None
+
+
+def _init_worker(dfs, funding_8h):
+    global _DFS_W, _FUNDING_W
+    _DFS_W, _FUNDING_W = dfs, funding_8h
+
+
+def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None):
+    """Pre-computa `{cfg: trades}` em processos. NAO muda estatistica nenhuma: `walk_forward`
+    chama o gerador uma vez por config e fatia depois (o contrato de causalidade dele), entao
+    calcular as mesmas configs em paralelo devolve exatamente os mesmos trades. E so tempo de
+    parede -- 96 configs x ~2,5 min sequencial nao cabe numa sessao."""
+    import concurrent.futures as cf
+    n = n_workers or max(1, min(6, (os.cpu_count() or 2) - 2))
+    out, feito = {}, 0
+    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                initargs=(dfs, funding_8h)) as pool:
+        for cfg, tr in pool.map(_trades_geo, grid):
+            out[cfg] = tr
+            feito += 1
+            print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
+    return out
+
+
+def varredura_geometria(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-8]/[Q-9] A regua sobre a grade de geometria, e o baseline na MESMA janela.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao geometria
+
+    O baseline (`C trailing 2% fixo`, a politica que roda ao vivo hoje) e RE-MEDIDO aqui em vez
+    de citado do `VEREDITO-M4.md`: aquele numero saiu da janela de 2026-08-23 e esta rodada e
+    de outra data. Comparar Sharpe de janelas diferentes e comparar duas coisas com um fator a
+    mais, e o fator seria o dia.
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+
+    print(f"\n[baseline] C trailing 2% fixo — {len(GRID)} configs", flush=True)
+    base = walk_forward(gerador_tendencia(dfs, "tendencia", funding_8h,
+                                          {"saida": "trailing", "trailing_dist": 0.02}),
+                        [_chave(g) for g in GRID], n_trials=N_TRIALS,
+                        rotulo=f"C trailing 2% fixo | {TF} {DIAS}d | {LEV}x")
+    relatorio(base)
+
+    print(f"\n[varredura] k x sd_min — {len(GRID_GEOMETRIA)} configs", flush=True)
+    por_cfg = gerar_por_cfg_paralelo(GRID_GEOMETRIA, dfs, funding_8h)
+    geo = walk_forward(lambda cfg: por_cfg[cfg], GRID_GEOMETRIA,
+                       n_trials=N_TRIALS_GEOMETRIA,
+                       rotulo=f"C trailing kxATR + piso sd | {TF} {DIAS}d | {LEV}x")
+    relatorio(geo)
+    return {"baseline": base, "geometria": geo}
+
+
 def baixar_paineis():
     """As 12 moedas, preparadas uma vez. Separado porque a comparacao de politicas roda quatro
     walk-forwards sobre EXATAMENTE os mesmos dados -- baixar de novo por politica nao seria so
@@ -1479,6 +1579,9 @@ def relatorio_sensibilidade(sens):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "politicas":
         comparar_politicas()                          # [P1-10] A x B x C, mesma regua
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "geometria":
+        varredura_geometria()                         # [Q-8]/[Q-9] k e sd_min varridos no treino
         sys.exit(0)
     r = walk_forward_tendencia("tendencia")
     if "erro" not in r:
