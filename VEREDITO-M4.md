@@ -1,5 +1,9 @@
 # VEREDITO-M4 — a política de saída que está viva, medida pela régua corrigida
 
+> **Estado em 2026-08-24: os números chegaram e estão colados.** As quatro políticas rodaram e
+> as quatro saíram `SEM_EVIDENCIA DE EDGE`; a §7.2 aponta o Caso 1. A moldura abaixo fica como
+> foi escrita para que se possa conferir que ela é anterior aos números.
+>
 > **Estado deste documento.** A estrutura, as ressalvas e a recomendação condicional são do
 > `T-EDGE` (onda 3 do M4). **Os números são da matriz**, que roda o `A×B×C` em primeiro plano —
 > cada bloco marcado `<!-- COLAR -->` recebe saída literal. Antes de a colagem existir, este
@@ -86,7 +90,10 @@ arredondar para o fim purga de mais, isto é, contra o resultado.
      linha carrega o vazamento. -->
 
 ```
-(cole aqui a linha "purga: ATIVA" de uma das políticas, como prova de que ligou)
+A stop+flip de regime    purga: ATIVA
+B auto-saida             purga: ATIVA
+C trailing 2% fixo       purga: ATIVA
+C trailing 3xATR         purga: ATIVA
 ```
 
 ### 2.2 O funding passou a ser cobrado pelo tempo certo (`44dd5b9`, direção corrigida em `ddbdf33`)
@@ -147,6 +154,123 @@ de existir.
 
 ---
 
+### 2.4 O que as três correções de fato moveram, medido em vez de suposto
+
+A abertura desta seção diz que, se os números mudassem em relação ao `[Q-1]`, *"a causa provável
+é esta seção"*. Eles mudaram: a política `A` deu **+R$1.127** contra os **+R$993** publicados na §6
+do `ITEM1-VALIDACAO-RIGOROSA.md`. **"Provável" não fecha card nesta casa**, e havia uma segunda
+causa candidata que ninguém tinha descartado: a janela. A rodada do `[Q-1]` baixou os painéis às
+13h23 de 23/08 e esta rodada os baixou às 20h32 do mesmo dia — mesma data no nome do cache,
+**última barra diferente**.
+
+O discriminante separa as duas: o código **anterior** ao `44dd5b9` (worktree `t-regua`, `13bb90f`,
+purga desligada e funding sobre 1/4 do tempo) rodando sobre **exatamente os painéis desta rodada**,
+com `dados.baixar_ohlcv` e `scoring.preparar` interceptados para servir o painel serializado.
+
+```
+=== WALK-FORWARD: tendencia | 1h 1095d | 10x | 6 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: INATIVA -- backtest_plataforma.py:82 nao grava ts_saida (territorio T-EDGE)
+n_trials = 100 (PISO CONTADO, nao estimativa)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1            (65, 25)      390  R$   +196
+    2            (50, 22)      537  R$  +5817
+    3            (55, 22)      528  R$  -1219
+    4            (55, 22)      503  R$   +889
+    5            (50, 22)      616  R$  -4690
+
+OOS agregado: 2574 trades | win 29.8% | PnL R$+993
+  serie diaria da JANELA OOS: 908 dias (721 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=6 configs, 2000 bootstraps de bloco): p = 0.4928
+   Hansen SPA (estudentizado):                                     p = 0.4988
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.4033
+     -> o grid custou 0.09 de multiplicidade. [F12]
+   DSR da melhor config in-sample (50, 22) sobre a SERIE DIARIA (1089 dias): DSR = 0.0095
+     (sr=0.007 vs sr0_esperado=0.0767 para n_trials=100)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 2574 trades OOS: 0.0116
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 6 configs sobrevivem -- FORA do veredito, nao-informativo em N=6 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0394   0.1377
+          30    0.0628   0.0301
+         100    0.0767   0.0095
+        1000    0.0986    0.001
+       10000     0.117   0.0001
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-13.1424, 15.8736)   iid: (-11.0114, 14.479)
+   PSR (sem deflacao, SR*=0): 0.5697  (sr/dia = 0.0057)
+   Sharpe ANUALIZADO: 0.109   IC95% (bloco): (-1.688, 1.343)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=908): 1.576
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.223 do lucro bruto | folds positivos 3/5 | maior fold = 5.86 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [0.2217, 0.0323, -0.0051, -0.0028, -0.021, -0.0143, -0.0434, -0.0384, 0.021, 0.0251]
+     banda +-1,96/sqrt(T) = +-0.065 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-13.1424, 15.8736) inclui 0 ou PSR 0.5697 <= 0,95 ou RC p = 0.4928 > 0,05).
+   IC95% do Sharpe anualizado: [-1.688 ; 1.343].
+   O teste NAO exclui edges de Sharpe ate 1.343 -- MDS = 1.576. Ausencia de evidencia nao e evidencia de ausencia. [F7]
+
+PnL OOS agregado (codigo antigo, paineis novos): R$+993  |  2574 trades
+```
+
+**+R$993, 2.574 trades, Sharpe 0,109, DSR 0,0095, MDS 1,576, T=908** — reproduz o número publicado
+do `[Q-1]` dígito por dígito. Como `antigo+antigo` e `antigo+novo` dão o mesmo número, **a janela
+não contribuiu com nada**, e os R$134 de diferença são **integralmente** das correções desta seção.
+A linha `purga: INATIVA -- backtest_plataforma.py:82 nao grava ts_saida` é a §2.1 dita pela própria
+régua antiga, e a ausência de qualquer linha `calibracao [Q-7]` é a §2.3 pelo mesmo caminho.
+
+### 2.5 A purga estava certa e não mudou nada; o funding mudou tudo o que mudou
+
+O discriminante permite ir mais fundo do que separar janela de correção, porque as duas rodadas
+escolheram **as mesmas configs em todos os cinco folds** — `(65,25)`, `(50,22)`, `(55,22)`,
+`(55,22)`, `(50,22)` — com **contagem de trades idêntica** em cada um: 390, 537, 528, 503, 616.
+
+Daí saem duas leituras, e nenhuma delas estava escrita aqui antes:
+
+**A purga funcionou e foi inerte.** Ela só remove trade do **treino**, nunca do teste — o que os
+números confirmam, já que o conjunto OOS não mudou. Ela mexeu no in-sample (Reality Check
+`p = 0,4928 → 0,4873`, DSR `0,0095 → 0,0099`), mas **não virou nenhuma seleção**: as seis configs
+mantiveram a ordem relativa em todos os folds. O vazamento que a §2.1 descreve era real e a
+correção era obrigatória; **neste dado ele não estava alterando a resposta.** Registrar isso
+importa porque a §2.1 avisa que o viés empurra *para cima* — verdadeiro como mecanismo, e de
+magnitude **zero em seleção** aqui. Uma correção obrigatória pode ser inerte, e dizer que ela
+"consertou o número" quando não consertou seria a mesma fabricação que o `c8b4593` teve de desfazer.
+
+**O funding é a totalidade do movimento, e ele revela o sinal do carry.** Com trades idênticos,
+sobra um único canal para os R$134: a duração da barra. Por fold:
+
+| fold | antigo (funding sobre 1/4 do tempo) | novo (tempo real) | Δ |
+|---|---|---|---|
+| 1 | +196 | +216 | **+20** |
+| 2 | +5.817 | +5.808 | −9 |
+| 3 | −1.219 | −1.212 | +7 |
+| 4 | +889 | +977 | **+88** |
+| 5 | −4.690 | −4.663 | +27 |
+| **OOS** | **+993** | **+1.127** | **+134** |
+
+**Cobrar o funding por 4× mais tempo fez o P&L SUBIR.** Pela regra que o `ddbdf33` fixou — *a
+direção segue o sinal do carry líquido do período* — isso só acontece num livro que **recebe** mais
+do que paga: **net-SHORT nos 1.095 dias**, sob a política `A`. É a resposta à pergunta que a §2.2
+deixou explicitamente em aberto (*"para os 1.095 dias, esse sinal ainda NÃO foi medido"*).
+
+⚠️ **E ela não é o contraste do `[P2-10]`.** O que está medido aqui é *1/4 do tempo* contra
+*tempo real*, não *com funding* contra *sem funding*; o módulo do efeito do carry continua sem
+medida, e só o **sinal** está determinado. Quem quiser o módulo roda
+`python -m pesquisa.validacao` (com contraste), que imprime a linha `COM x SEM funding`. O sinal
+também é da política `A` e não se transfere às outras três sem medição: elas têm hold médio e
+direção diferentes.
+
+---
+
 ## 3. Os números
 
 Comando, da **raiz** do repositório (`pesquisa/` é pacote — por caminho não roda):
@@ -164,7 +288,23 @@ quatro políticas. `seed=42` no `PADRAO`, `numpy.random.default_rng`, nunca o `r
      motivos de saída por política e as duas linhas finais sobre o P&L ser diagnóstico. -->
 
 ```
-(cole aqui o bloco COMPARACAO DE POLITICAS DE SAIDA inteiro)
+==============================================================================================================
+COMPARACAO DE POLITICAS DE SAIDA -- mesma regua, mesmas janelas, mesmos dados [P1-10]
+==============================================================================================================
+politica                 trades   win%   PnL OOS Sharpe an.          IC95% Sharpe     DSR    MDS  veredito
+A stop+flip de regime      2574   29.9     +1127      0.124       (-1.683, 1.359)  0.0099  1.576 (piso)  SEM_EVIDENCIA
+B auto-saida               5314   63.9     -7837     -1.018       (-2.334, 0.075)     0.0  1.575  SEM_EVIDENCIA
+C trailing 2% fixo         5342   61.2     +5040      0.645       (-0.714, 1.824)  0.0602  1.575  SEM_EVIDENCIA
+C trailing 3xATR           4037   50.4     +4227      0.436       (-0.918, 1.634)  0.0145  1.575  SEM_EVIDENCIA
+
+motivos de saida por politica (o que de fato fechou os trades):
+   A stop+flip de regime    regime: 1334 | stop: 1227 | liquidacao: 13
+   B auto-saida             auto-saida: 3394 | stop: 1847 | liquidacao: 73
+   C trailing 2% fixo       trailing: 3420 | stop: 1871 | liquidacao: 51
+   C trailing 3xATR         trailing: 2086 | stop: 1862 | liquidacao: 89
+
+O P&L esta na tabela como DIAGNOSTICO. O que decide e o veredito da ultima coluna,
+emitido sob o PADRAO travado -- soma bruta de P&L favorece quem mais opera [F3].
 ```
 
 ### 3.2 O relatório completo de cada política
@@ -174,7 +314,219 @@ quatro políticas. `seed=42` no `PADRAO`, `numpy.random.default_rng`, nunca o `r
      sozinha não permite auditar o motivo de cada veredito. -->
 
 ```
-(cole aqui os quatro relatórios completos, na ordem A, B, C-2%, C-3xATR)
+=== WALK-FORWARD: tendencia | 1h 1095d | 10x | saida: A stop+flip de regime | 6 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: ATIVA
+n_trials = 100 (PISO CONTADO, nao estimativa)
+calibracao [Q-7]: o controle nulo rejeitou 1/200 paineis sem sinal (taxa 0.005) -> FORA DA BANDA (abaixo)
+   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, 95%): [4 ; 16] rejeicoes = [0.02 ; 0.08] | IC da taxa medida: (0.00013, 0.02754)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1            (65, 25)      390  R$   +216
+    2            (50, 22)      537  R$  +5808
+    3            (55, 22)      528  R$  -1212
+    4            (55, 22)      503  R$   +977
+    5            (50, 22)      616  R$  -4663
+
+OOS agregado: 2574 trades | win 29.9% | PnL R$+1127
+  serie diaria da JANELA OOS: 908 dias (721 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=6 configs, 2000 bootstraps de bloco): p = 0.4873
+   Hansen SPA (estudentizado):                                     p = 0.4958
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.4013
+     -> o grid custou 0.086 de multiplicidade. [F12]
+   DSR da melhor config in-sample (50, 22) sobre a SERIE DIARIA (1089 dias): DSR = 0.0099
+     (sr=0.0074 vs sr0_esperado=0.0767 para n_trials=100)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 2574 trades OOS: 0.0127
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 6 configs sobrevivem -- FORA do veredito, nao-informativo em N=6 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0394    0.141
+          30    0.0628   0.0311
+         100    0.0767   0.0099
+        1000    0.0986   0.0011
+       10000     0.117   0.0001
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-12.931, 16.0049)   iid: (-10.7905, 14.5654)
+   PSR (sem deflacao, SR*=0): 0.5792  (sr/dia = 0.0065)
+   Sharpe ANUALIZADO: 0.124   IC95% (bloco): (-1.683, 1.359)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=908): 1.576 -- e um PISO
+     -> alfa efetivo medido 0.005 (nao 0,05), IC (0.00013, 0.02754): com ele o MDS vale 2.167; com a ponta MENOS exigente do IC, 1.75. Limite = 2.0.
+        O numero da linha acima e um PISO -- e o portao le 1.75, para nao bloquear por imprecisao do diagnostico.
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.223 do lucro bruto | folds positivos 3/5 | maior fold = 5.15 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [0.2218, 0.0319, -0.0054, -0.0031, -0.0205, -0.0143, -0.0434, -0.0389, 0.0209, 0.0243]
+     banda +-1,96/sqrt(T) = +-0.065 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-12.931, 16.0049) inclui 0 ou PSR 0.5792 <= 0,95 ou RC p = 0.4873 > 0,05).
+   IC95% do Sharpe anualizado: [-1.683 ; 1.359].
+   O teste NAO exclui edges de Sharpe ate 1.359 -- MDS = 1.576 (PISO; com o alfa efetivo medido, 2.167). Ausencia de evidencia nao e evidencia de ausencia. [F7]
+
+=== WALK-FORWARD: tendencia | 1h 1095d | 10x | saida: B auto-saida | 6 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: ATIVA
+n_trials = 100 (PISO CONTADO, nao estimativa)
+calibracao [Q-7]: o controle nulo rejeitou 8/200 paineis sem sinal (taxa 0.04) -> CALIBRADO
+   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, 95%): [4 ; 16] rejeicoes = [0.02 ; 0.08] | IC da taxa medida: (0.01742, 0.07729)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1            (65, 22)      858  R$  -1683
+    2            (55, 25)     1190  R$   +478
+    3            (55, 25)     1171  R$  -3378
+    4            (55, 25)     1081  R$   -695
+    5            (55, 25)     1014  R$  -2559
+
+OOS agregado: 5314 trades | win 63.9% | PnL R$-7837
+  serie diaria da JANELA OOS: 910 dias (844 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=6 configs, 2000 bootstraps de bloco): p = 0.985
+   Hansen SPA (estudentizado):                                     p = 0.0315
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.987
+     -> o grid custou -0.002 de multiplicidade. [F12]
+   DSR da melhor config in-sample (55, 25) sobre a SERIE DIARIA (1092 dias): DSR = 0.0
+     (sr=-0.0612 vs sr0_esperado=0.0766 para n_trials=100)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 5314 trades OOS: 0.0
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 6 configs sobrevivem -- FORA do veredito, nao-informativo em N=6 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0393   0.0008
+          30    0.0627      0.0
+         100    0.0766      0.0
+        1000    0.0985      0.0
+       10000    0.1168      0.0
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-17.9768, 0.6426)   iid: (-18.8722, 2.1717)
+   PSR (sem deflacao, SR*=0): 0.0613  (sr/dia = -0.0533)
+   Sharpe ANUALIZADO: -1.018   IC95% (bloco): (-2.334, 0.075)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=910): 1.575
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.137 do lucro bruto | folds positivos 1/5 | maior fold = 0.43 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [-0.0528, -0.0341, -0.0211, -0.0294, -0.0581, 0.0604, -0.0172, -0.0287, -0.0228, -0.023]
+     banda +-1,96/sqrt(T) = +-0.065 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-17.9768, 0.6426) inclui 0 ou PSR 0.0613 <= 0,95 ou RC p = 0.985 > 0,05).
+   IC95% do Sharpe anualizado: [-2.334 ; 0.075].
+   O teste NAO exclui edges de Sharpe ate 0.075 -- MDS = 1.575. Ausencia de evidencia nao e evidencia de ausencia. [F7]
+
+=== WALK-FORWARD: tendencia | 1h 1095d | 10x | saida: C trailing 2% fixo | 6 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: ATIVA
+n_trials = 100 (PISO CONTADO, nao estimativa)
+calibracao [Q-7]: o controle nulo rejeitou 14/200 paineis sem sinal (taxa 0.07) -> CALIBRADO
+   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, 95%): [4 ; 16] rejeicoes = [0.02 ; 0.08] | IC da taxa medida: (0.0388, 0.11466)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1            (55, 22)     1116  R$  +1681
+    2            (55, 22)     1163  R$  +2862
+    3            (55, 22)     1119  R$   -732
+    4            (55, 22)      986  R$  +2183
+    5            (50, 22)      958  R$   -955
+
+OOS agregado: 5342 trades | win 61.2% | PnL R$+5040
+  serie diaria da JANELA OOS: 910 dias (863 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=6 configs, 2000 bootstraps de bloco): p = 0.2034
+   Hansen SPA (estudentizado):                                     p = 0.2294
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.1724
+     -> o grid custou 0.031 de multiplicidade. [F12]
+   DSR da melhor config in-sample (50, 22) sobre a SERIE DIARIA (1092 dias): DSR = 0.0602
+     (sr=0.0311 vs sr0_esperado=0.0766 para n_trials=100)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 5342 trades OOS: 0.2823
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 6 configs sobrevivem -- FORA do veredito, nao-informativo em N=6 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0393   0.3887
+          30    0.0627   0.1398
+         100    0.0766   0.0602
+        1000    0.0985   0.0107
+       10000    0.1168   0.0017
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-5.4961, 16.9222)   iid: (-4.4958, 16.4639)
+   PSR (sem deflacao, SR*=0): 0.8544  (sr/dia = 0.0338)
+   Sharpe ANUALIZADO: 0.645   IC95% (bloco): (-0.714, 1.824)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=910): 1.575
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.11 do lucro bruto | folds positivos 3/5 | maior fold = 0.57 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [0.0854, 0.0217, -0.0219, -0.0438, -0.0431, 0.046, -0.0555, -0.0407, 0.0, -0.0101]
+     banda +-1,96/sqrt(T) = +-0.065 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-5.4961, 16.9222) inclui 0 ou PSR 0.8544 <= 0,95 ou RC p = 0.2034 > 0,05).
+   IC95% do Sharpe anualizado: [-0.714 ; 1.824].
+   O teste NAO exclui edges de Sharpe ate 1.824 -- MDS = 1.575. Ausencia de evidencia nao e evidencia de ausencia. [F7]
+
+=== WALK-FORWARD: tendencia | 1h 1095d | 10x | saida: C trailing 3xATR | 6 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: ATIVA
+n_trials = 100 (PISO CONTADO, nao estimativa)
+calibracao [Q-7]: o controle nulo rejeitou 9/200 paineis sem sinal (taxa 0.045) -> CALIBRADO
+   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, 95%): [4 ; 16] rejeicoes = [0.02 ; 0.08] | IC da taxa medida: (0.02078, 0.0837)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1            (55, 22)      793  R$  -1058
+    2            (50, 22)      804  R$  +3140
+    3            (50, 22)      812  R$   +520
+    4            (50, 22)      815  R$  +3649
+    5            (50, 22)      813  R$  -2024
+
+OOS agregado: 4037 trades | win 50.4% | PnL R$+4227
+  serie diaria da JANELA OOS: 910 dias (844 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=6 configs, 2000 bootstraps de bloco): p = 0.4453
+   Hansen SPA (estudentizado):                                     p = 0.4608
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.3603
+     -> o grid custou 0.085 de multiplicidade. [F12]
+   DSR da melhor config in-sample (50, 22) sobre a SERIE DIARIA (1092 dias): DSR = 0.0145
+     (sr=0.0113 vs sr0_esperado=0.0766 para n_trials=100)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 4037 trades OOS: 0.087
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 6 configs sobrevivem -- FORA do veredito, nao-informativo em N=6 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0393    0.174
+          30    0.0627   0.0427
+         100    0.0766   0.0145
+        1000    0.0985   0.0018
+       10000    0.1168   0.0002
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-8.7558, 18.8564)   iid: (-8.4918, 17.8807)
+   PSR (sem deflacao, SR*=0): 0.7594  (sr/dia = 0.0228)
+   Sharpe ANUALIZADO: 0.436   IC95% (bloco): (-0.918, 1.634)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=910): 1.575
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.12 do lucro bruto | folds positivos 3/5 | maior fold = 0.86 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [0.0613, 0.0077, 0.0239, -0.0321, -0.0278, -0.0016, -0.0182, -0.0424, 0.0225, -0.0128]
+     banda +-1,96/sqrt(T) = +-0.065 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-8.7558, 18.8564) inclui 0 ou PSR 0.7594 <= 0,95 ou RC p = 0.4453 > 0,05).
+   IC95% do Sharpe anualizado: [-0.918 ; 1.634].
+   O teste NAO exclui edges de Sharpe ate 1.634 -- MDS = 1.575. Ausencia de evidencia nao e evidencia de ausencia. [F7]
 ```
 
 ### 3.3 O smoke curto, que já está rodado
@@ -244,6 +596,55 @@ deve ser citada junto do veredito, nunca o veredito sozinho.
 <!-- COLAR: para cada política, se a linha do MDS trouxer "-- e um PISO", cole também as duas
      linhas seguintes (alfa efetivo medido, IC, mds_piso e mds_piso_min). Sem elas o leitor não
      tem como saber quanto de folga sobrou. -->
+
+**Das quatro políticas, só uma trouxe `-- e um PISO`: a `A`.** As outras três saíram `CALIBRADO`,
+e por isso o MDS delas se lê como está impresso, sem a folga desconhecida desta seção.
+
+```
+A stop+flip de regime    o controle nulo rejeitou 1/200 paineis sem sinal (taxa 0.005) -> FORA DA BANDA (abaixo)
+B auto-saida             o controle nulo rejeitou 8/200 paineis sem sinal (taxa 0.04) -> CALIBRADO
+C trailing 2% fixo       o controle nulo rejeitou 14/200 paineis sem sinal (taxa 0.07) -> CALIBRADO
+C trailing 3xATR         o controle nulo rejeitou 9/200 paineis sem sinal (taxa 0.045) -> CALIBRADO
+```
+
+```
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=908): 1.576 -- e um PISO
+     -> alfa efetivo medido 0.005 (nao 0,05), IC (0.00013, 0.02754): com ele o MDS vale 2.167; com a ponta MENOS exigente do IC, 1.75. Limite = 2.0.
+        O numero da linha acima e um PISO -- e o portao le 1.75, para nao bloquear por imprecisao do diagnostico.
+```
+
+### O que esta rodada acrescentou ao `[Q-7]`, e não estava previsto aqui
+
+**A miscalibração não é propriedade da régua: é propriedade da régua *aplicada àquela política*.**
+O controle nulo roda o pipeline inteiro, saída incluída, então trocar a política troca a marginal
+que ele amostra — e a §4 diz que a causa do desvio é exatamente **a forma da marginal**.
+
+A rodada dá quatro pontos, e eles ficam em ordem com o mecanismo:
+
+| política | dias com P&L não-nulo | rejeições em 200 | leitura |
+|---|---|---|---|
+| A stop+flip de regime | 721 / 908 (79%) | 1 (0,005) | **FORA DA BANDA (abaixo)** |
+| B auto-saída | 844 / 910 (93%) | 8 (0,04) | CALIBRADO |
+| C trailing 3×ATR | 844 / 910 (93%) | 9 (0,045) | CALIBRADO |
+| C trailing 2% fixo | 863 / 910 (95%) | 14 (0,07) | CALIBRADO |
+
+Quanto mais dias zerados, mais degenerada a marginal, mais inflado o quantil nulo, menos
+rejeições — que é, palavra por palavra, o mecanismo que o `[Q-7]` descreveu em `spa_hansen`,
+`[F15]`. **Quatro pontos não demonstram uma relação**, e nenhum deles foi desenhado para testá-la;
+o que eles fazem é dar ao mecanismo a primeira evidência empírica que ele tinha, e apontar a
+variável que o controle nulo completo do `[F9]` deveria varrer.
+
+**E a consequência desconfortável:** a política `A` é a única fora de banda, e é justamente a que
+a régua sempre mediu — é dela o *"sem edge"* que está no cabeçalho do `CLAUDE.md`, no `README.md`
+e no `autotrader.py:8-13`. O veredito histórico do projeto foi emitido no único ponto do espaço
+medido em que o instrumento se sabe descalibrado. Isso **não** o invalida: descalibrado *para baixo*
+significa alfa efetivo menor que o nominal, portanto MDS maior, portanto **menos** poder — o erro
+empurra na direção de não detectar edge, que é a direção do veredito que já está publicado. O que
+ele faz é medir a folga: para `A`, o MDS honesto é **2,167**, não 1,576, e 2,167 está **acima** do
+`MDS_LIMITE = 2,0`. Se o portão lesse o alfa medido em vez da ponta menos exigente do IC, a
+política `A` sairia **`INCONCLUSIVO`**.
+
+Uma política **B**, **C-2%** ou **C-3×ATR** não tem esse problema: o piso delas é o número impresso.
 
 ---
 
@@ -320,6 +721,12 @@ anualizado` lido junto — nunca o veredito sozinho (§4).
 
 ### 7.2 As quatro leituras possíveis, e a recomendação sob cada uma
 
+> **Aplica-se o Caso 1.** As quatro políticas saíram `SEM_EVIDENCIA` (§3.1), nenhuma passou do
+> `MDS_LIMITE` na leitura do portão, e nenhuma saiu `INCONCLUSIVO`. A recomendação é, portanto:
+> **registrar o desvio, não trocar o default** — a segunda metade do item 4 do aceite.
+> O texto dos quatro casos fica exatamente como foi escrito antes da rodada: é ele que prova que
+> o critério não foi escolhido depois de ver o placar.
+
 **Caso 1 — todas as quatro saem `SEM_EVIDENCIA` (o desfecho esperado).**
 Recomendação: **registrar o desvio, não trocar o default.** Ou seja, a segunda metade do item 4 do
 aceite. Se nenhuma política tem edge demonstrável, trocar o default do vivo por outra política sem
@@ -367,6 +774,23 @@ unidade: o parâmetro atual mede uma coisa diferente em cada ativo e em cada ala
 torna qualquer resultado sobre ele não-transferível. A linha `C trailing 3xATR` da tabela dá a
 ordem de grandeza; o `k` de produção sai do walk-forward, não desta recomendação.
 
+**O placar NÃO apoiou esta recomendação, e isso fica registrado aqui em vez de ser omitido.**
+`C trailing 3×ATR` ficou **abaixo** de `C trailing 2% fixo` nas três medidas que importam: Sharpe
+anualizado 0,436 contra 0,645, PSR 0,759 contra 0,854, DSR 0,0145 contra 0,0602. Se o argumento
+desta seção fosse de performance, a rodada o teria derrubado.
+
+Ele não é, e por isso segue de pé: a incoerência de unidade do `trailing_dist=2%` é verdadeira
+independentemente de qual das duas pontua mais, e foi por isso que esta seção foi escrita **antes**
+dos números. Some-se que as duas saíram `SEM_EVIDENCIA` e que os IC95% de Sharpe se sobrepõem
+quase inteiros — `(-0,714; 1,824)` contra `(-0,918; 1,634)`: a ordenação entre elas **não é uma
+diferença demonstrada**, é ruído com sinal. Ler o placar como "o 2% é melhor" seria cometer, na
+comparação entre políticas, o mesmo erro que a §7.1 proíbe cometer com o P&L.
+
+O que a rodada muda de fato na recomendação: o `k=3` usado aqui é o do smoke, **não** foi escolhido
+no treino, e a §7.3 sempre disse que o `k` de produção sai do walk-forward. Um `k` varrido no grid
+é pré-requisito de qualquer proposta de troca — e a comparação acima, com `k` fixo e arbitrário,
+não é evidência contra o k×ATR nem a favor dele.
+
 **Isto é recomendação escrita, não commit.** `autotrader.py`, `simulador.py`, `db.py` e `api.py`
 estão em produção desde hoje e **não** são território do `T-EDGE`.
 
@@ -400,6 +824,24 @@ python -m pytest                            # a suíte
 
 Tudo da **raiz** do repositório: `pesquisa/` é pacote e `python pesquisa/validacao.py` **não**
 funciona (`pesquisa/__init__.py` explica por quê).
+
+**Como esta rodada foi produzida, que não foi pelo comando canonico.** A matriz rodou as quatro
+políticas **uma por invocação**, para que um corte no meio não levasse junto as já concluídas. Isso
+abre um risco que o comando canoónico não tem: `comparar_politicas` chama `baixar_paineis()` **uma
+vez** e passa o mesmo `dfs` às quatro, enquanto quatro invocações separadas chamariam
+`baixar_paineis()` quatro vezes — e o nome do cache carrega a data (`pesquisa/dados.py:39`), de
+modo que uma rodada que atravessa a meia-noite mediria as primeiras políticas numa janela e as
+últimas em outra. A rodada começou às 23h08 de 23/08 e terminou depois da meia-noite, então o
+risco era real e não hipotético.
+
+O que foi feito: os painéis foram preparados uma vez e **serializados**, e cada invocação carregou
+o mesmo arquivo — 12 moedas × 26.280 barras, janela `2023-08-24 17:00 → 2026-08-23 16:00`,
+idêntica nas quatro. **A rodada inteira foi executada duas vezes e as quatro saídas conferem bit a
+bit**, o que é a reprodução independente que o `seed=42` promete.
+
+Quem quiser reproduzir pelo caminho canoônico usa `python -m pesquisa.validacao politicas`, que
+não tem esse risco por construir os painéis uma única vez — ao custo de perder tudo se for
+cortado.
 
 As provas das políticas rodam **offline**, sem rede, porque o sinal é injetado (`sinal_fn`) —
 trajetória conhecida → saída esperada, em `tests/test_validacao.py`.
