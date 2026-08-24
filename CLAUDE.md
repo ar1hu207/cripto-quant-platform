@@ -6,7 +6,9 @@ Projeto AI-first: o desenvolvimento é feito por sessões de agente, e este arqu
 entre elas. Cada regra aqui nasceu de um erro real — as datas dizem quando doeu.
 
 **Honestidade é premissa, não bug a consertar.** O walk-forward + DSR já concluiu que **não
-existe edge deployável** (tendência: 370 trades OOS, **DSR = 0,004**; ver `README.md`), e o
+existe edge deployável**, e o M4 estendeu a conclusão às quatro políticas de saída — inclusive
+à que o sistema executa ao vivo (`C trailing`: 5.342 trades OOS em 3 anos, Sharpe anualizado
+0,645, **DSR = 0,060**, `SEM EVIDÊNCIA DE EDGE`; ver `VEREDITO-M4.md` e `README.md`), e o
 auto-trader existe para *ver o "no edge" acontecer ao vivo dentro de guardas*, não para ganhar
 dinheiro (`autotrader.py:8-13`). Não "melhore" o resultado ruim: ele é o produto.
 

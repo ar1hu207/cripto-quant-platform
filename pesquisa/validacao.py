@@ -24,29 +24,31 @@ para BAIXO (DSR sobre ~900 observacoes diarias em vez de 370 trades pseudo-indep
 por blocos em vez de iid, n_trials 30 -> 100). Se o numero piorar, e o instrumento
 funcionando.
 
-Rodar (da RAIZ do repo):  python -m pesquisa.validacao
+Rodar (da RAIZ do repo):
+
+    python -m pesquisa.validacao              # a politica A + o contraste de funding [P2-10]
+    python -m pesquisa.validacao politicas    # A x B x C na mesma regua [P1-10]
 
 ---
 De onde vem cada decisao. `ITEM1-VALIDACAO-RIGOROSA.md` (a proposta, jul/2026) e
 `REVISAO-ITEM1.md` (o parecer estatistico que a revisou). Onde os dois divergem, vale a
 revisao, e o achado dela esta citado por numero (F1..F19) no ponto do codigo.
 
-O que NAO foi implementado, e por que -- as duas razoes sao a mesma:
-`pesquisa/backtest_plataforma.py:82` nao grava `ts_saida`, e esse arquivo e territorio do
-`T-EDGE` (onda 3 do M4), nao desta sessao.
+O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado:
+`pesquisa/backtest_plataforma.py` passou a gravar `ts_saida` em cada trade.
 
   * PURGA (`ITEM1` §3.2 / F4): "so entra no treino trade com `ts_saida < tr_lim`". A funcao
-    existe e roda quando os trades trazem `ts_saida`; com os trades de hoje ela desliga
-    sozinha e o relatorio imprime que desligou. Nao e default silencioso: e recusa declarada.
+    sempre existiu e sempre foi PEDIDA (`PADRAO["purga"] = True`); ela desligava sozinha por
+    falta do campo, e o relatorio imprimia que desligou. Agora ela AGE, e o vazamento de
+    borda de fold do `ITEM1` §2/P2 -- que empurrava o resultado para CIMA, contra a conclusao
+    negativa -- deixa de estar presente e nao medido (F13). Numero que mudar por causa disso
+    e o instrumento funcionando, nao regressao.
   * `atribuir="saida"` (`ITEM1` §3.3 / F3): a revisao quer o P&L atribuido ao dia da SAIDA,
-    porque e onde ele e realizado. Sem `ts_saida` so da para atribuir pela ENTRADA. O
-    `PADRAO` diz `"entrada"` porque um `PADRAO` que declara o que nao roda e pior que um que
-    declara o que roda.
-
-Consequencia honesta: o vazamento de borda de fold que o `ITEM1` §2/P2 descreve continua
-presente, e a magnitude dele continua NAO MEDIDA (F13). Um trade que entra antes da borda e
-sai depois carrega P&L determinado dentro da janela de teste. Isso empurra o resultado para
-CIMA, ou seja, contra a conclusao negativa -- entao nao e uma desculpa para o numero ruim.
+    porque e onde ele e realizado. Isso passou a ser POSSIVEL, e mesmo assim o `PADRAO`
+    continua `"entrada"`: trocar o criterio travado do veredito e decisao de dono, nao efeito
+    colateral de um campo novo ([F3] existe justamente para o criterio nao virar grau de
+    liberdade). A variante roda em `sensibilidade()`, que imprime as duas lado a lado sempre
+    -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
 import math
 import sys
@@ -101,6 +103,34 @@ N_TRIALS_TABELA = (6, 30, 100, 1000, 10000)
 MDS_LIMITE = 2.0
 T_EFETIVO_MINIMO = 100          # cinto-e-suspensorio: dias com P&L nao-nulo na serie OOS
 
+# [Q-7] Calibracao. `M` paineis nulos por rodada; a banda binomial e CALCULADA a partir
+# destes dois numeros, nunca escrita como texto no print -- foi assim que a rodada do [Q-1]
+# imprimiu "[0,02 ; 0,09]" ao lado de um 0,01 medido e ninguem comparou. `n_boot=200` dentro
+# do controle e deliberado e barato: sob a regra `p = (1+#)/(B+1)` o TAMANHO do teste e
+# 10/201 = 0,0498 com B=200 e 100/2001 = 0,04998 com B=2000 -- a discretizacao move menos de
+# 0,5% relativo. O que `n_boot` grande compra e precisao de CADA p, nao tamanho, e a taxa de
+# rejeicao media sobre M paineis nao precisa disso. Prova: `test_calibracao_nao_depende_de_n_boot`.
+M_CONTROLE_NULO = 200
+N_BOOT_CONTROLE = 200
+CONF_BANDA = 0.95
+
+# [Q-7] O TETO que bloqueia o veredito por SUPER-rejeicao, e por que ele nao e simplesmente
+# "fora da banda de 95%".
+#
+# Um portao que bloqueia o marco inteiro tem de disparar so quando a impressao do proprio
+# diagnostico nao pode explicar o achado. A banda de 95% e o DIAGNOSTICO que o card pediu, e
+# ela continua sendo calculada e reportada; mas ela tem 2,5% de falso alarme por construcao,
+# e com M=200 o IC exato da taxa medida e largo (2 rejeicoes -> [0,001 ; 0,036]). Gatear na
+# banda faria a guarda depender do tamanho da amostra do diagnostico, nao do defeito.
+#
+# Entao o gatilho e MATERIALIDADE, lida pela ponta do IC que torna o disparo mais dificil:
+# bloqueia quando o limite INFERIOR do IC exato passa de 0,10, o dobro do alfa nominal. Um
+# teste com o dobro do tamanho torna a condicao de EDGE materialmente mais facil. A mesma
+# regra, espelhada, vale para o lado de baixo: o portao de poder le o piso do MDS calculado
+# com o alfa no TOPO do IC (`mds_piso_min`). As duas guardas leem a ponta menos conveniente
+# para si -- e isso e o que impede "medi com M pequeno e o portao disparou" nos dois sentidos.
+ALFA_TETO_PORTAO = 0.10
+
 # [F3] O criterio e TRAVADO. `criterio` (3) x `modo` (2) x `atribuir` (2) x `block` (5) x
 # `purga` (2) sao 120 maneiras de rodar a regua, e um instrumento que existe para detectar
 # data-snooping nao pode multiplicar por 120 a superficie de snooping. Alguem -- talvez voce,
@@ -118,7 +148,7 @@ T_EFETIVO_MINIMO = 100          # cinto-e-suspensorio: dias com P&L nao-nulo na 
 PADRAO = {
     "criterio": "sharpe",
     "modo": "expandindo",
-    "atribuir": "entrada",      # "saida" e o alvo; ver o cabecalho (falta `ts_saida`)
+    "atribuir": "entrada",      # "saida" ja e possivel (ha `ts_saida`); trocar e do dono
     "block": 5,
     "purga": True,              # pedida sempre; desliga sozinha e avisa se faltar ts_saida
     "gap_pre_teste_ms": 0,
@@ -128,6 +158,7 @@ PADRAO = {
 }
 CRITERIOS = ("sharpe", "pnl", "pnl_por_trade")
 MODOS = ("expandindo", "rolante")
+ATRIBUIR = ("entrada", "saida")  # so roda em sensibilidade(), e so quando ha `ts_saida`
 BLOCKS = (1, 2, 5, 10, 20)      # [F18] sensibilidade a block; block=1 E o iid, de graca
 DIA_MS = 86_400_000
 
@@ -211,8 +242,7 @@ def _chave_periodo(t, atribuir):
     if atribuir == "saida":
         if "ts_saida" not in t:
             raise ValueError(
-                "atribuir='saida' exige `ts_saida` no trade, e "
-                "pesquisa/backtest_plataforma.py:82 nao grava (territorio do T-EDGE)")
+                "atribuir='saida' exige `ts_saida` no trade -- o gerador nao gravou")
         return int(t["ts_saida"]) // DIA_MS
     if atribuir != "entrada":
         raise ValueError("atribuir deve ser 'entrada' ou 'saida'")
@@ -471,6 +501,181 @@ def sensibilidade_n_trials(serie, ns=N_TRIALS_TABELA):
     return [(n, deflated_sharpe(serie, n)) for n in ns]
 
 
+# ============================ calibracao [Q-7] ============================
+def _binom_cdf(k, n, p):
+    """P(X <= k) exata para X ~ Binomial(n, p). `math.comb` e inteiro exato; n aqui e da
+    ordem de centenas, entao nao ha razao para aproximar por normal justamente na cauda,
+    que e a regiao que o portao le."""
+    if k < 0:
+        return 0.0
+    k = min(int(k), n)
+    return float(sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k + 1)))
+
+
+def banda_binomial(M, alfa=0.05, conf=CONF_BANDA):
+    """Faixa de ACEITACAO exata: quantas rejeicoes em `M` paineis sao compativeis com um
+    teste de tamanho `alfa`, a `conf` de confianca.
+
+    [Q-7] Isto existe porque a banda era uma STRING no `print`. A rodada do [Q-1] imprimiu
+    `taxa de rejeicao a 5% = 0.01 (banda binomial [0,02 ; 0,09])` -- o valor medido ja estava
+    fora da banda que a propria linha anunciava, e nada no codigo comparou os dois. Medir e
+    nao comparar e o mesmo erro de emitir veredito sem declarar poder.
+
+    Devolve contagens (`k_lo`, `k_hi`) e taxas. Note que a banda literal antiga estava errada
+    tambem no numero: para M=200 e alfa=0,05 a faixa exata e [4 ; 16] rejeicoes, ou seja
+    [0,02 ; 0,08], nao [0,02 ; 0,09].
+    """
+    if M <= 0:
+        return {"M": M, "alfa": alfa, "conf": conf, "k_lo": 0, "k_hi": 0,
+                "taxa_lo": 0.0, "taxa_hi": 0.0}
+    cauda = (1.0 - conf) / 2.0
+    k_lo = 0
+    while k_lo < M and _binom_cdf(k_lo, M, alfa) <= cauda:
+        k_lo += 1
+    k_hi = M
+    while k_hi > 0 and (1.0 - _binom_cdf(k_hi - 1, M, alfa)) <= cauda:
+        k_hi -= 1
+    return {"M": M, "alfa": alfa, "conf": conf, "k_lo": k_lo, "k_hi": k_hi,
+            "taxa_lo": round(k_lo / M, 4), "taxa_hi": round(k_hi / M, 4)}
+
+
+def ic_clopper_pearson(k, n, conf=CONF_BANDA):
+    """IC exato para a proporcao. Serve para dizer o que M paineis NAO conseguem separar --
+    com M=200 e 2 rejeicoes o IC vai de ~0,001 a ~0,036, e um alfa efetivo dentro dessa faixa
+    move o MDS em muito mais do que a folga do portao. Ou seja: a precisao do diagnostico faz
+    parte do diagnostico."""
+    if n <= 0:
+        return (0.0, 1.0)
+    lo, hi = 0.0, 1.0
+    if k > 0:                                    # menor p com P(X >= k) >= (1-conf)/2
+        a, b = 0.0, 1.0
+        for _ in range(200):
+            m = (a + b) / 2
+            if 1.0 - _binom_cdf(k - 1, n, m) < (1 - conf) / 2:
+                a = m
+            else:
+                b = m
+        lo = (a + b) / 2
+    if k < n:                                    # maior p com P(X <= k) >= (1-conf)/2
+        a, b = 0.0, 1.0
+        for _ in range(200):
+            m = (a + b) / 2
+            if _binom_cdf(k, n, m) > (1 - conf) / 2:
+                a = m
+            else:
+                b = m
+        hi = (a + b) / 2
+    return (round(lo, 5), round(hi, 5))
+
+
+def classificar_calibracao(rejeicoes, M, alfa=0.05, conf=CONF_BANDA):
+    """CALIBRADO / FORA DA BANDA (abaixo) / FORA DA BANDA (acima) -- em codigo, comparando."""
+    b = banda_binomial(M, alfa, conf)
+    if M <= 0:
+        classe = "NAO MEDIDO"
+    elif rejeicoes < b["k_lo"]:
+        classe = "FORA DA BANDA (abaixo)"
+    elif rejeicoes > b["k_hi"]:
+        classe = "FORA DA BANDA (acima)"
+    else:
+        classe = "CALIBRADO"
+    return {"classe": classe, "rejeicoes": int(rejeicoes), "M": M,
+            "taxa": round(rejeicoes / M, 4) if M else None, "banda": b,
+            "ic_taxa": ic_clopper_pearson(rejeicoes, M, conf)}
+
+
+def _params_do_painel(matriz):
+    """Momentos do painel real que o controle DIRETO tem de reproduzir: tamanho, numero de
+    configs, desvio por config, autocorrelacao de lag 1 e correlacao media entre configs."""
+    cfgs = list(matriz)
+    M0 = np.asarray([matriz[c] for c in cfgs], dtype=float)
+    K, T = M0.shape
+    sd = M0.std(axis=1, ddof=1)
+    sd = np.where(sd <= 0, 1.0, sd)
+    a = acf(M0.mean(axis=0).tolist(), lags=1)
+    phi = float(min(max(a[0] if a else 0.0, -0.9), 0.9))
+    if K > 1:
+        C = np.corrcoef(M0)
+        rho = float(np.nanmean(C[np.triu_indices(K, 1)]))
+    else:
+        rho = 0.0
+    rho = float(min(max(rho if rho == rho else 0.0, 0.0), 0.999))
+    return {"K": K, "T": T, "sd": sd, "phi": phi, "rho": rho}
+
+
+def _painel_nulo(rng, par, dgp="normal"):
+    """Um painel SEM sinal, com media populacional zero -- gerado, nao reamostrado.
+
+    `dgp` e variavel controlada: "normal" e a forma de referencia; "pesada" e a caricatura da
+    serie diaria de P&L (maioria dos dias zerada, truncada a esquerda, cauda longa a direita),
+    e e trocando UMA pela outra que o [Q-7] identificou a causa da sub-rejeicao."""
+    K, T, phi, rho = par["K"], par["T"], par["phi"], par["rho"]
+    F = rng.standard_normal(T)
+    E = rng.standard_normal((K, T))
+    Z = math.sqrt(rho) * F[None, :] + math.sqrt(1 - rho) * E
+    if dgp == "pesada":
+        X = np.maximum(Z * 40.0 * np.exp(rng.standard_normal((K, T))), -100.0)
+        X[rng.random((K, T)) < 0.2] = 0.0
+        return (X - X.mean()) * (par["sd"][:, None] / max(X.std(), 1e-9))
+    if phi:
+        X = np.empty_like(Z)
+        X[:, 0] = Z[:, 0]
+        for t in range(1, T):
+            X[:, t] = phi * X[:, t - 1] + Z[:, t]
+        X *= math.sqrt(1 - phi ** 2)
+    else:
+        X = Z
+    return X * par["sd"][:, None]
+
+
+def controle_nulo_direto(matriz, M=M_CONTROLE_NULO, seed=42, alfa=0.05,
+                         n_boot=N_BOOT_CONTROLE, dgp="normal"):
+    """[Q-7] O controle que isola a CAUSA -- nao o que mede o alfa desta rodada.
+
+    Cada um dos M paineis vem de um DGP **gerado**, com media populacional zero e forma de
+    marginal escolhida (`dgp`), em vez de sair de uma reamostragem dos dados. Isso troca a
+    pergunta: `controle_nulo` responde *"qual o alfa efetivo AQUI"* (e para isso precisa da
+    marginal real, por isso e nao-parametrico); esta funcao responde *"o que, na forma dos
+    dados, move o alfa"* -- e para isso a marginal tem de ser variavel controlada.
+
+    Foi ela que fechou o item 3 do card. Sobre 800-1.200 paineis por celula, T=900, K=6,
+    correlacao 0,95 (a forma do `matriz_is` real):
+
+        normal ......................... RC 0,030-0,053 | SPA 0,0488
+        cauda pesada + 20% de zeros .... RC 0,0025      | SPA 0,0000
+
+    Isto e, trocando SO a marginal e mantendo tudo o mais, o tamanho cai uma ordem de
+    grandeza -- e a linha de baixo bate com o 0,01 que a rodada do [Q-1] mediu sobre o dado
+    real, que e a confirmacao de que o DGP nao esta caricaturando o problema para mais. E
+    o que descarta as tres suspeitas do card (o `+1` do p, `block=5`, `M` pequeno) e nomeia a
+    causa: o maximo de medias BRUTAS sobre cauda pesada infla o quantil nulo -- o mecanismo
+    que `spa_hansen` ja descrevia em [F15] sem que ninguem o ligasse a este numero.
+
+    Parametrica de proposito, e so serve para isso: um DGP gaussiano diria "calibrado" para um
+    painel cuja marginal real da 0,01. **Por isso ela NAO alimenta o portao** -- quem alimenta
+    e `controle_nulo`, que e a unica medida possivel sobre o dado real. O preco dessa escolha
+    esta escrito la: o controle aninhado e cego para a propria falha e erra para o lado
+    otimista.
+    """
+    par = _params_do_painel(matriz)
+    rng = np.random.default_rng(seed)
+    ps = []
+    for _ in range(M):
+        X = _painel_nulo(rng, par, dgp)
+        emb = {k: X[k].tolist() for k in range(par["K"])}
+        ps.append(reality_check(emb, n_boot=n_boot, block=PADRAO["block"],
+                                seed=int(rng.integers(1, 10 ** 9)))["p_valor"])
+    ps = np.asarray(ps)
+    rej = int((ps <= alfa).sum())
+    fora = classificar_calibracao(rej, M, alfa)
+    fora.update({"media_p": round(float(ps.mean()), 4) if M else None,
+                 "alfa_efetivo": fora["taxa"],
+                 "dgp": {"forma": dgp, "phi": round(par["phi"], 4),
+                         "rho": round(par["rho"], 4), "T": par["T"], "K": par["K"]},
+                 "n_boot": n_boot})
+    return fora
+
+
 def mds_sharpe(T, poder=0.80, alfa=0.05, ppa=PPA):
     """Sharpe ANUALIZADO minimo detectavel com `poder` a `alfa` unilateral, dado T periodos.
 
@@ -631,7 +836,7 @@ def _nucleo(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste_ms
             "cfgs": list(por_cfg.keys()), "block": block, "n_boot": n_boot, "seed": seed}
 
 
-def walk_forward(gerar_trades, grid, *, n_trials, rotulo=""):
+def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONTROLE_NULO):
     """A regua. Roda SEMPRE sob `PADRAO` -- nao ha argumento que mude o criterio ([F3]).
 
     `gerar_trades(cfg) -> [{"ts": int_ms, "pnl": float, "ts_saida": int_ms (opcional)}, ...]`
@@ -645,6 +850,11 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo=""):
     `n_trials` nao tem default de proposito: quem chama e obrigado a declarar e defender o
     numero de tentativas que o resultado precisa descontar ([F10]).
 
+    `m_calibracao` [Q-7]: quantos paineis nulos medem o alfa efetivo do Reality Check ANTES
+    de o veredito ser emitido. Nao ha como desligar -- so como medir com menos paineis, e
+    menos paineis alargam a banda, que e a consequencia certa: um diagnostico impreciso
+    reclama menos, nao mais. O portao dele esta em `_veredito`.
+
     Devolve estrutura; quem imprime e `relatorio()` ([F3] §3.7). A separacao existe porque o
     Item 3 compara time bars vs dollar bars e o Item 2 compara frente A vs frente B lado a
     lado -- funcao que so imprime nao se compara.
@@ -656,6 +866,10 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo=""):
                 "veredito": {"classe": "INCONCLUSIVO", "motivo": "amostra insuficiente"}}
 
     block, n_boot, seed = PADRAO["block"], PADRAO["n_boot"], PADRAO["seed"]
+    # [Q-7] A calibracao e computada ANTES do veredito, e o veredito le. Medir e nao comparar
+    # foi o defeito que este card veio consertar; deixar a medida fora da estrutura que
+    # `_veredito` recebe seria repeti-lo com outra roupa.
+    calib = controle_nulo(base["matriz_is"], M=m_calibracao, seed=seed)
     serie = base["serie_oos"]
     T = len(serie)
     T_efetivo = int(sum(1 for x in serie if x != 0.0))
@@ -683,16 +897,28 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo=""):
     sr_an = sharpe_anualizado(serie)
     ic_sr = _ic_sharpe_anualizado(serie, n_boot, block, seed)
     mds = mds_sharpe(T)
+    # [Q-7] O MDS e calculado com o alfa NOMINAL (0,05). Se o teste rejeitar menos que isso, o
+    # poder real e menor e o MDS verdadeiro e MAIOR -- o reportado vira um PISO. So se calcula
+    # o piso quando ha medida que o justifique; `None` significa "medido e nao e piso".
+    mds_piso, mds_piso_min = None, None
+    if calib["classe"] == "FORA DA BANDA (abaixo)" and calib["alfa_efetivo"]:
+        mds_piso = round(mds_sharpe(T, alfa=max(calib["alfa_efetivo"], 1e-6)), 3)
+        # o piso MENOS exigente compativel com a imprecisao do diagnostico: alfa no topo do
+        # IC. E ele que o portao le, para que a guarda so dispare quando a largura do IC nao
+        # puder explicar o achado.
+        mds_piso_min = round(mds_sharpe(T, alfa=max(calib["ic_taxa"][1], 1e-6)), 3)
     bloco_b = {"T": T, "T_efetivo": T_efetivo, "ic_bloco": ic_bloco, "ic_iid": ic_iid,
                "psr": psr, "sharpe_anualizado": None if sr_an is None else round(sr_an, 3),
-               "ic_sharpe_anualizado": ic_sr, "mds": round(mds, 3),
+               "ic_sharpe_anualizado": ic_sr, "mds": round(mds, 3), "mds_piso": mds_piso,
+               "mds_piso_min": mds_piso_min,
                "concentracao": concentracao(serie, base["por_fold"]),
                "acf": acf(serie), "banda_acf": banda_acf(T)}
 
     res = {"rotulo": rotulo, "n_trials": n_trials, "bloco_a": bloco_a, "bloco_b": bloco_b,
+           "calibracao": calib,
            "padrao": dict(PADRAO), "purga_ativa": PADRAO["purga"] and base["tem_ts_saida"],
            "purga_motivo": ("" if base["tem_ts_saida"] else
-                            "backtest_plataforma.py:82 nao grava ts_saida (territorio T-EDGE)"),
+                            "o gerador nao grava ts_saida nos trades"),
            "sensibilidade_n_trials": sensibilidade_n_trials(serie_naive),
            # o numero antigo, preservado para o contraste do relatorio
            "dsr_legado_trades": deflated_sharpe([t["pnl"] for t in base["oos"]], n_trials),
@@ -724,7 +950,8 @@ def _ic_sharpe_anualizado(serie, n_boot, block, seed):
 
 
 def _veredito(res):
-    """Tres respostas, e a terceira e a que o [Q-1] acrescenta.
+    """Tres respostas, e a terceira e a que o [Q-1] acrescenta. O [Q-7] poe um portao ANTES
+    das tres: se o instrumento nao estiver calibrado, nao ha resposta a dar.
 
     Ordem importa: o portao de PODER vem ANTES do teste de edge ([F14]). Um instrumento sem
     poder emite "nao tem edge" tanto quando nao tem quanto quando nao da pra saber, e as duas
@@ -737,11 +964,37 @@ def _veredito(res):
     a ~0,9 ele passa todas ou nenhuma e nunca discrimina.
     """
     b, a = res["bloco_b"], res["bloco_a"]
+    cal = res.get("calibracao") or {}
+    # [Q-7] O portao de poder passa a ler o MDS **corrigido pelo alfa efetivo**, e le a ponta
+    # MENOS exigente do IC dele: so bloqueia quando nem a imprecisao do controle nulo explica
+    # a falta de poder. O MDS nominal continua valendo sozinho quando nao ha medida de alfa.
+    piso_min = b.get("mds_piso_min")
+    if piso_min and piso_min > MDS_LIMITE:
+        return {"classe": "INCONCLUSIVO",
+                "motivo": (f"instrumento sem poder: o MDS nominal {b['mds']} e um PISO -- com "
+                           f"o alfa efetivo medido ({cal.get('alfa_efetivo')}, IC "
+                           f"{cal.get('ic_taxa')}) ele vale ao menos {piso_min}, acima do "
+                           f"limite {MDS_LIMITE}")}
     if b["mds"] > MDS_LIMITE or b["T_efetivo"] < T_EFETIVO_MINIMO:
         return {"classe": "INCONCLUSIVO",
                 "motivo": (f"instrumento sem poder: MDS = {b['mds']} "
                            f"(limite {MDS_LIMITE}), T_efetivo = {b['T_efetivo']} "
                            f"(minimo {T_EFETIVO_MINIMO})")}
+    # [Q-7] Portao de CALIBRACAO, DEPOIS do de poder e ANTES do de edge. Depois do poder
+    # porque num painel curto os dois disparam e o MDS e a causa, nao o sintoma -- a mensagem
+    # util e "T pequeno demais". Antes do edge porque a condicao de EDGE le o Reality Check
+    # (`reality_check <= 0,05`, logo abaixo): emitir EDGE com o teste super-rejeitando e
+    # decidir com a regua que este card veio conferir.
+    #
+    # A direcao e ASSIMETRICA de proposito. Super-rejeitar torna o EDGE facil demais e
+    # bloqueia. Sub-rejeitar e conservador, nao bloqueia, e vira a marca de PISO no MDS --
+    # que e a outra metade da correcao do card.
+    if cal.get("ic_taxa") and cal["ic_taxa"][0] > ALFA_TETO_PORTAO:
+        return {"classe": "INCONCLUSIVO",
+                "motivo": (f"instrumento descalibrado: o controle nulo direto rejeitou "
+                           f"{cal['rejeicoes']} de {cal['M']} paineis SEM sinal "
+                           f"(taxa {cal['taxa']}, IC {cal['ic_taxa']}), e o piso desse IC "
+                           f"passa de {ALFA_TETO_PORTAO} -- o dobro do alfa nominal")}
     if b["ic_bloco"][0] > 0 and b["psr"]["psr"] > 0.95 and a["reality_check"]["p_valor"] <= 0.05:
         return {"classe": "EDGE",
                 "motivo": (f"IC-bloco {b['ic_bloco']} > 0, PSR {b['psr']['psr']} > 0,95, "
@@ -749,7 +1002,8 @@ def _veredito(res):
     return {"classe": "SEM_EVIDENCIA",
             "motivo": (f"IC-bloco {b['ic_bloco']} inclui 0 ou PSR {b['psr']['psr']} <= 0,95 "
                        f"ou RC p = {a['reality_check']['p_valor']} > 0,05"),
-            "nao_exclui": b["ic_sharpe_anualizado"], "mds": b["mds"]}
+            "nao_exclui": b["ic_sharpe_anualizado"], "mds": b["mds"],
+            "mds_piso": b.get("mds_piso")}
 
 
 def sensibilidade(res):
@@ -762,13 +1016,21 @@ def sensibilidade(res):
     """
     por_cfg = res["por_cfg"]
     n_trials = res["n_trials"]
-    fora = {"criterio": [], "modo": [], "block": []}
+    fora = {"criterio": [], "modo": [], "atribuir": [], "block": []}
     for c in CRITERIOS:
         r = _nucleo(por_cfg, **{**PADRAO, "criterio": c})
         fora["criterio"].append((c, _resumo_variante(r, n_trials)))
     for m in MODOS:
         r = _nucleo(por_cfg, **{**PADRAO, "modo": m})
         fora["modo"].append((m, _resumo_variante(r, n_trials)))
+    # `atribuir` so entra aqui depois que o gerador passou a gravar `ts_saida`. Enquanto o
+    # campo faltava, "saida" nem era rodavel; agora que e, ele NAO vira default em silencio --
+    # vira linha de diagnostico ao lado de "entrada", que e onde a revisao (F3/`ITEM1` §3.3)
+    # pode ser conferida sem que o veredito passe a depender da escolha.
+    if _tem_ts_saida(por_cfg):
+        for at in ATRIBUIR:
+            r = _nucleo(por_cfg, **{**PADRAO, "atribuir": at})
+            fora["atribuir"].append((at, _resumo_variante(r, n_trials)))
     base = _nucleo(por_cfg, **PADRAO)
     for bl in BLOCKS:
         s = base["serie_oos"]
@@ -790,38 +1052,120 @@ def _resumo_variante(r, n_trials):
             else round(sharpe_anualizado(s), 2)}
 
 
-def controle_nulo(res, M=200, seed=42):
-    """[F9, PARCIAL] Nulo empirico do pipeline: permuta em blocos a serie diaria de CADA
-    config -- preservando autocorrelacao e o alinhamento entre configs -- e faz a estatistica
-    do BLOCO A rodar M vezes sobre painel sem sinal.
+def controle_nulo(res, M=M_CONTROLE_NULO, seed=42, alfa=0.05, n_boot=N_BOOT_CONTROLE):
+    """[F9] Alfa EFETIVO do BLOCO A sobre ESTES dados: permuta em blocos a serie diaria de
+    cada config -- preservando autocorrelacao, o alinhamento entre configs e, o que mais
+    importa, a MARGINAL --, centra, e faz o Reality Check rodar M vezes sobre painel sem
+    sinal. Cobre selecao, agregacao diaria, Reality Check e o proprio veredito.
 
-    O que isto cobre: selecao, agregacao diaria, Reality Check e o proprio veredito. Se o
-    Reality Check estiver calibrado, os p-valores destes M paineis sao ~uniformes e a taxa de
-    rejeicao a 5% fica na banda binomial.
+    **[Q-7] O que a investigacao achou, e nao era o que o card supunha.**
 
-    O que isto NAO cobre, e a distincao e o ponto: a revisao pede M geradores de SINAL
-    aleatorio passando pelo pipeline INTEIRO, o que validaria tambem `scoring.pontuar`, o
-    modelo de custo e o pooling de moedas. Isso exige injetar uma funcao de sinal dentro do
-    laco de `backtest_plataforma.backtest_ativo`, que nao aceita uma -- e esse arquivo e
-    territorio do `T-EDGE`. Alem do territorio, ha custo: uma passada do grid leva ~13 min, e
-    M=200 passadas nao cabem numa rodada. Fica registrado como divida, nao como feito.
+    A rodada do [Q-1] deu `taxa de rejeicao a 5% = 0,01` contra uma banda impressa como texto,
+    e ninguem comparou os dois numeros. Comparando -- e depois procurando a causa com o
+    controle DIRETO (`controle_nulo_direto`, paineis gerados de DGP conhecido, M=600 cada):
+
+    | marginal do painel nulo     | RC, controle DIRETO    | Hansen SPA, direto     |
+    |-----------------------------|------------------------|------------------------|
+    | normal                      | 0,030-0,053            | 0,049 [0,035 ; 0,066]  |
+    | cauda pesada + 20% de zeros | **0,0025 [0 ; 0,009]**  | **0,0000 [0 ; 0,005]** |
+
+    (paineis com a forma do `matriz_is` real -- T=900, K=6, correlacao 0,95 --, entre 800 e
+    1.200 paineis por celula; a faixa da linha "normal" e a dispersao entre sementes e cobre o
+    nominal de 0,05.)
+
+    A sub-rejeicao e REAL e a causa e a **forma da marginal**, nao as tres suspeitas do card:
+
+      * nao e o `p = (1+#)/(B+1)` [F5] -- ele esta presente igual na linha "normal", que fica
+        compativel com o nominal. Se o `+1` empurrasse o p para cima o bastante para importar,
+        a marginal normal cairia junto;
+      * nao e `block=5` -- idem: o mesmo `block` roda nas duas linhas;
+      * `M=200` e pequeno, mas isso e imprecisao, nao vies: com 2 rejeicoes o IC exato vai de
+        0,001 a 0,036, e a decisao tem de respeitar essa largura -- e respeita, ver `_veredito`.
+
+    O mecanismo ja estava escrito neste arquivo, em `spa_hansen`, [F15]: *"o RC toma o maximo
+    de medias BRUTAS, entao a config que mais opera tem mais variancia e domina o maximo,
+    inflando o quantil nulo"*. Quantil nulo inflado = sub-rejeicao. Numa serie diaria de P&L
+    -- zerada na maioria dos dias, truncada em `-valor` a esquerda e com cauda longa a direita
+    -- essa inflacao e grande. O que ninguem tinha feito era ligar esse comentario ao numero
+    do controle nulo.
+
+    **E a estudentizacao NAO conserta**: na mesma marginal o SPA rejeitou 0 de 800, ainda mais
+    longe do nominal que o RC, porque o denominador dele tambem e inflado pela cauda. Entao
+    "trocar RC por SPA" nao e a saida, e registrar isso poupa o proximo card a descoberta.
+
+    **E ha um degrau a mais, que muda como este numero deve ser lido.** Rodando ESTE controle
+    (o aninhado) sobre um painel sorteado daquele mesmo DGP de cauda pesada, ele devolve
+    0,040 -- perto do nominal, enquanto o controle direto, sobre o mesmo DGP, devolve 0,0025.
+    Os dois discordam por uma razao estrutural: aqui os dois niveis usam a MESMA distribuicao
+    empirica, entao o erro do bootstrap aparece nos dois lados e se cancela. **Este controle e
+    cego para a propria falha.** Consequencia para a leitura: o 0,01 medido sobre o dado real
+    e uma estimativa OTIMISTA do alfa efetivo -- o valor verdadeiro tende a ser ainda menor, e
+    portanto o PISO do MDS calculado com ele e um piso frouxo.
+
+    Isso nao o desqualifica como insumo do portao: e a unica medida que se pode fazer com o
+    dado real (o controle direto precisa de um DGP inventado), e ela erra para o lado que
+    torna a guarda mais dificil de disparar, que e o lado permitido.
+
+    **E "frouxo" tem de vir com o tamanho da frouxidao, que e DESCONHECIDO -- essa parte
+    tambem e entrega.** O card do [Q-7] fez a conta com alfa = 0,01 e concluiu que o MDS de
+    1,576 viraria ~1,92, deixando 4% de folga ate o `MDS_LIMITE = 2,0`. Duas coisas derrubam
+    essa tranquilidade:
+
+      * a conta com o `mds_sharpe` DESTE arquivo nao da 1,92 e sim **2,008** -- a razao entre
+        alfa 0,01 e alfa 0,05 e 1,274, nao ~1,22 (`test_mds_vira_PISO_quando_o_teste_sub_rejeita`
+        fixa os dois numeros). Ja com o alfa OTIMISTA o MDS encosta do OUTRO lado do limite: a
+        folga nao cai para 4%, ela deixa de existir;
+      * e o alfa verdadeiro e MENOR que 0,01. Quanto menor, ninguem sabe. O controle direto
+        sobre um DGP com aquela marginal deu 0,0025, uma ordem de grandeza abaixo -- mas esse
+        DGP e uma caricatura escolhida a mao, e tratar o numero dele como medida do dado real
+        seria trocar um chute por outro.
+
+    O que se pode afirmar, entao, e so isto: **o MDS reportado e um piso, o piso e frouxo, e a
+    distancia ate o valor verdadeiro nao foi medida.** Fechar essa distancia exige o controle
+    nulo COMPLETO do F9 -- M geradores de sinal aleatorio pelo pipeline inteiro --, que
+    continua pendente por relogio. Quem escrever o veredito do M4 escreve isso, e nao a folga.
+
+    **Consequencia, e ela e a metade que o card acertou:** o MDS e calculado supondo alfa
+    nominal 0,05. Com alfa efetivo menor o poder real e menor e o minimo detectavel e MAIOR --
+    **o MDS reportado e um PISO**, e o relatorio passa a dizer isso na linha dele.
+
+    **Cada um dos M paineis e um embaralhamento INDEPENDENTE do painel real**, centrado pela
+    media do real -- nao M reamostragens de um painel intermediario. A distincao custou uma
+    tentativa errada nesta sessao e vale escrever: centrar por uma media que nao e a da
+    distribuicao que gerou o painel deixa drift residual no nulo, e o Reality Check o detecta
+    corretamente -- a taxa de rejeicao explodiu para 0,225 num painel gaussiano. O painel nulo
+    tem de ser sorteado do dado e centrado pelo dado, uma vez so. Como os M sorteios sao
+    independentes entre si, a banda binomial vale.
+
+    O que continua NAO coberto (a divida original do F9): M geradores de SINAL aleatorio
+    passando pelo pipeline INTEIRO, o que validaria tambem `scoring.pontuar`, o modelo de custo
+    e o pooling de moedas. O bloqueio de territorio caiu -- `backtest_ativo` aceita `sinal_fn`
+    desde o [P1-10] --, o que resta e relogio: uma passada do grid leva ~13 min e M=200
+    passadas nao cabem numa rodada. Fica registrado como divida, nao como feito.
     """
-    matriz = res["matriz_is"]
+    matriz = res["matriz_is"] if isinstance(res, dict) and "matriz_is" in res else res
     cfgs = list(matriz)
     M0 = np.asarray([matriz[c] for c in cfgs], dtype=float)
     T = M0.shape[1]
+    medias = M0.mean(axis=1)
     rng = np.random.default_rng(seed)
     ps = []
     for _ in range(M):
         idx = block_bootstrap_idx(T, block=PADRAO["block"], rng=rng)
-        emb = {c: (M0[k][idx] - M0[k].mean()).tolist() for k, c in enumerate(cfgs)}
-        ps.append(reality_check(emb, n_boot=200, block=PADRAO["block"],
+        emb = {c: (M0[k][idx] - medias[k]).tolist() for k, c in enumerate(cfgs)}
+        ps.append(reality_check(emb, n_boot=n_boot, block=PADRAO["block"],
                                 seed=int(rng.integers(1, 10 ** 9)))["p_valor"])
     ps = np.asarray(ps)
-    return {"M": M, "taxa_rejeicao_5pct": round(float((ps <= 0.05).mean()), 4),
-            "media_p": round(float(ps.mean()), 4),
-            "ks_max": round(float(np.abs(np.sort(ps) -
-                                         (np.arange(1, M + 1) / M)).max()), 4)}
+    rej = int((ps <= alfa).sum())
+    fora = classificar_calibracao(rej, len(ps), alfa)
+    fora.update({"taxa_rejeicao_5pct": round(float((ps <= alfa).mean()), 4),
+                 "alfa_efetivo": fora["taxa"],
+                 "media_p": round(float(ps.mean()), 4),
+                 "ks_max": round(float(np.abs(np.sort(ps) -
+                                              (np.arange(1, len(ps) + 1) / len(ps))).max()), 4),
+                 "ks_critico": round(1.36 / math.sqrt(len(ps)), 4) if len(ps) else None,
+                 "n_boot": n_boot})
+    return fora
 
 
 # ============================ a estrategia de tendencia ============================
@@ -829,43 +1173,73 @@ def _chave(g):
     return (g["min_conv"], g["adx_min"])
 
 
-def gerador_tendencia(dfs, estrategia, funding_8h):
+def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
     """Fabrica um `gerar_trades(cfg)` causal para a estrategia da plataforma.
 
     Causal por construcao: `backtest_ativo` pontua no candle FECHADO i e executa no open de
     i+1, e os canais usam `.shift(1)` -- nada olha para a frente. E o que autoriza gerar a
     timeline inteira uma vez e fatiar depois.
+
+    `saida_kw` [P1-10] escolhe a POLITICA DE SAIDA (`saida`, `trailing_dist`,
+    `trailing_k_atr`). Ele nao toca em nada da entrada: os portoes de conviccao, ADX e
+    n_fatores continuam os mesmos nas tres politicas, que e o que mantem a comparacao com um
+    fator so.
     """
+    kw = dict(saida_kw or {})
+
     def gerar(cfg):
         mc, ax = cfg
         tr = []
         for c in COINS:
             try:
                 tr += backtest_ativo(c, mc, VALOR, LEV, estrategia=estrategia, df=dfs[c],
-                                     adx_min=ax, funding_8h=funding_8h)
+                                     adx_min=ax, funding_8h=funding_8h, **kw)
             except Exception:
                 pass
         return tr
     return gerar
 
 
-def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_contraste=True):
+# [P1-10] As politicas que o card manda comparar, na mesma regua e nas mesmas janelas.
+#
+# A e a do backtest e NUNCA rodou ao vivo. B e o que gerou o historico local
+# (`auto_fechar_saida=1` com `trailing_ativo=0`). C e o default de HOJE (`db.py:95-96`), e a
+# quarta linha e o item 3 do card: a mesma politica C com a distancia em unidade de ATR, para
+# que a saida deixe de ser cega a volatilidade do ativo e a alavancagem.
+POLITICAS_M4 = (
+    ("A stop+flip de regime", {"saida": "regime"}),
+    ("B auto-saida", {"saida": "auto"}),
+    ("C trailing 2% fixo", {"saida": "trailing", "trailing_dist": 0.02}),
+    ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0}),
+)
+
+
+def baixar_paineis():
+    """As 12 moedas, preparadas uma vez. Separado porque a comparacao de politicas roda quatro
+    walk-forwards sobre EXATAMENTE os mesmos dados -- baixar de novo por politica nao seria so
+    lento, seria outra janela se a rodada virasse o dia."""
+    print(f"baixando {len(COINS)} moedas ({TF}, {DIAS}d)...", flush=True)
+    return {c: scoring.preparar(dados.baixar_ohlcv(c, TF, dias=DIAS)) for c in COINS}
+
+
+def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_contraste=True,
+                           saida_kw=None, dfs=None, rotulo_extra=""):
     """Roda a regua na estrategia da plataforma e imprime. Mantem `python -m pesquisa.validacao`
     fazendo o que fazia -- so que sob o instrumento novo."""
-    print(f"baixando {len(COINS)} moedas ({TF}, {DIAS}d)...", flush=True)
-    dfs = {c: scoring.preparar(dados.baixar_ohlcv(c, TF, dias=DIAS)) for c in COINS}
+    dfs = dfs if dfs is not None else baixar_paineis()
     grid = [_chave(g) for g in GRID]
+    rot = f"{estrategia} | {TF} {DIAS}d | {LEV}x{rotulo_extra}"
 
     print(f"rodando {len(grid)} configs x {len(COINS)} moedas...", flush=True)
-    res = walk_forward(gerador_tendencia(dfs, estrategia, funding_8h), grid,
-                       n_trials=N_TRIALS, rotulo=f"{estrategia} | {TF} {DIAS}d | {LEV}x")
+    res = walk_forward(gerador_tendencia(dfs, estrategia, funding_8h, saida_kw), grid,
+                       n_trials=N_TRIALS, rotulo=rot)
     relatorio(res)
 
     if com_contraste and funding_8h:
         # [P2-10] MESMO walk-forward com funding zerado -- que e o que este script media antes,
         # por usar o default do backtest_ativo. A diferenca e o carry que a pesquisa nao pagava.
         print("\nrodando o contraste sem funding...", flush=True)
-        r0 = walk_forward(gerador_tendencia(dfs, estrategia, 0.0), grid,
+        r0 = walk_forward(gerador_tendencia(dfs, estrategia, 0.0, saida_kw), grid,
                           n_trials=N_TRIALS, rotulo="funding 0")
         p1 = sum(t["pnl"] for t in res["oos"])
         p0 = sum(t["pnl"] for t in r0["oos"])
@@ -875,6 +1249,63 @@ def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_co
               f"{funding_8h * 100:.4f}%/8h  x  R${p0:+.0f} com funding 0")
         print(f"  -> efeito do carry no P&L OOS: R${p1 - p0:+.0f} -- {lado}.")
     return res
+
+
+def comparar_politicas(politicas=POLITICAS_M4, funding_8h=FUNDING_8H, dfs=None):
+    """[P1-10] A x B x C na MESMA regua, nas MESMAS janelas, sobre os MESMOS dados.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao politicas
+
+    O contraste de funding do [P2-10] fica FORA daqui de proposito: ele dobra o tempo de cada
+    politica e mede outra coisa (o carry), que ja esta registrado para a politica A. Aqui o
+    unico fator que varia e a saida.
+
+    A tabela final e comparativa; o veredito de cada politica sai do relatorio dela, sob o
+    `PADRAO` travado. Nao existe "a melhor politica pelo P&L": P&L nao e criterio nesta casa
+    ([F3]) e a coluna esta na tabela como diagnostico, ao lado do que decide.
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+    fora = []
+    for nome, kw in politicas:
+        print(f"\n{'=' * 78}\nPOLITICA: {nome}   {kw}\n{'=' * 78}", flush=True)
+        r = walk_forward_tendencia(funding_8h=funding_8h, com_contraste=False,
+                                   saida_kw=kw, dfs=dfs, rotulo_extra=f" | saida: {nome}")
+        fora.append((nome, kw, r))
+    relatorio_politicas(fora)
+    return fora
+
+
+def relatorio_politicas(resultados):
+    """A tabela que o `VEREDITO-M4.md` cola. Uma linha por politica, o veredito na ultima
+    coluna -- porque tabela sem veredito nao e resposta ([P1-10], criterio de aceite 4)."""
+    print(f"\n{'=' * 110}")
+    print("COMPARACAO DE POLITICAS DE SAIDA -- mesma regua, mesmas janelas, mesmos dados "
+          "[P1-10]")
+    print("=" * 110)
+    print(f"{'politica':<24}{'trades':>7}{'win%':>7}{'PnL OOS':>10}{'Sharpe an.':>11}"
+          f"{'IC95% Sharpe':>22}{'DSR':>8}{'MDS':>7}  veredito")
+    for nome, _kw, r in resultados:
+        if "erro" in r:
+            print(f"{nome:<24}{'--':>7}  {r['erro']}")
+            continue
+        b, a = r["bloco_b"], r["bloco_a"]
+        so = stats([t["pnl"] for t in r["oos"]])
+        piso = " (piso)" if b.get("mds_piso") else ""
+        print(f"{nome:<24}{so['n']:>7}{so['win']:>7.1f}{so['pnl']:>+10.0f}"
+              f"{str(b['sharpe_anualizado']):>11}{str(b['ic_sharpe_anualizado']):>22}"
+              f"{a['dsr_melhor_is']['dsr']:>8}{b['mds']:>7}{piso}  {r['veredito']['classe']}")
+    print("\nmotivos de saida por politica (o que de fato fechou os trades):")
+    for nome, _kw, r in resultados:
+        if "erro" in r:
+            continue
+        conta = {}
+        for t in r["oos"]:
+            conta[t["motivo"]] = conta.get(t["motivo"], 0) + 1
+        linha = " | ".join(f"{k}: {v}" for k, v in sorted(conta.items(), key=lambda x: -x[1]))
+        print(f"   {nome:<24} {linha}")
+    print("\nO P&L esta na tabela como DIAGNOSTICO. O que decide e o veredito da ultima "
+          "coluna,\nemitido sob o PADRAO travado -- soma bruta de P&L favorece quem mais "
+          "opera [F3].")
 
 
 # ============================ relatorio ============================
@@ -897,6 +1328,14 @@ def relatorio(res):
           f"atribuir={p['atribuir']} block={p['block']} n_boot={p['n_boot']} seed={p['seed']}")
     print(f"purga: {'ATIVA' if res['purga_ativa'] else 'INATIVA -- ' + res['purga_motivo']}")
     print(f"n_trials = {res['n_trials']} (PISO CONTADO, nao estimativa)")
+    cal = res.get("calibracao")
+    if cal:
+        bb = cal["banda"]
+        print(f"calibracao [Q-7]: o controle nulo rejeitou {cal['rejeicoes']}/{cal['M']} "
+              f"paineis sem sinal (taxa {cal['taxa']}) -> {cal['classe']}")
+        print(f"   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, {bb['conf']:.0%}): "
+              f"[{bb['k_lo']} ; {bb['k_hi']}] rejeicoes = [{bb['taxa_lo']} ; {bb['taxa_hi']}] "
+              f"| IC da taxa medida: {cal['ic_taxa']}")
 
     print(f"\n{'fold':>5}  {'config (conv/adx)':>18}  {'trades':>7}  {'pnl OOS':>9}")
     for f, cfg, n, pn in res["por_fold"]:
@@ -940,8 +1379,20 @@ def relatorio(res):
     print(f"   PSR (sem deflacao, SR*=0): {b['psr']['psr']}  (sr/dia = {b['psr']['sr']})")
     print(f"   Sharpe ANUALIZADO: {b['sharpe_anualizado']}   IC95% (bloco): "
           f"{b['ic_sharpe_anualizado']}")
+    piso = b.get("mds_piso")
+    marca = " -- e um PISO" if piso else ""
     print(f"   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, "
-          f"T={b['T']}): {b['mds']}")
+          f"T={b['T']}): {b['mds']}{marca}")
+    if piso:
+        # [Q-7] So aparece quando o controle nulo mediu sub-rejeicao. O MDS e calculado com
+        # o alfa NOMINAL; com alfa efetivo menor o poder real e menor e o minimo detectavel e
+        # MAIOR. Reportar so o nominal seria publicar poder que o teste nao tem.
+        cl = res["calibracao"]
+        print(f"     -> alfa efetivo medido {cl['alfa_efetivo']} (nao 0,05), IC {cl['ic_taxa']}: "
+              f"com ele o MDS vale {piso}; com a ponta MENOS exigente do IC, "
+              f"{b.get('mds_piso_min')}. Limite = {MDS_LIMITE}.")
+        print(f"        O numero da linha acima e um PISO -- e o portao le "
+              f"{b.get('mds_piso_min')}, para nao bloquear por imprecisao do diagnostico.")
     print(f"     -> comparacao de poder: T=180 dias daria MDS {round(mds_sharpe(180), 2)}; "
           f"T=1095 daria {round(mds_sharpe(1095), 2)}. [F6]")
     c = b["concentracao"]
@@ -967,8 +1418,39 @@ def relatorio(res):
         ne = v.get("nao_exclui")
         if ne and ne[1] is not None:
             print(f"   IC95% do Sharpe anualizado: [{ne[0]} ; {ne[1]}].")
-            print(f"   O teste NAO exclui edges de Sharpe ate {ne[1]} -- MDS = {v['mds']}. "
+            piso = v.get("mds_piso")
+            print(f"   O teste NAO exclui edges de Sharpe ate {ne[1]} -- MDS = {v['mds']}"
+                  f"{f' (PISO; com o alfa efetivo medido, {piso})' if piso else ''}. "
                   f"Ausencia de evidencia nao e evidencia de ausencia. [F7]")
+
+
+def relatorio_controle_nulo(cal, causa=None):
+    """[F9 / Q-7] O alfa efetivo desta rodada, e -- quando pedida -- a exibicao da CAUSA.
+
+    `cal` e o controle nao-parametrico (`controle_nulo`), que preserva a marginal real e por
+    isso responde "qual o alfa aqui". `causa` e a tabela do controle gerado
+    (`controle_nulo_direto`) trocando SO a forma da marginal, que e o que identifica o
+    culpado. Os dois juntos porque separados um vira numero sem explicacao e o outro vira
+    explicacao sem numero.
+    """
+    b = cal["banda"]
+    print("")
+    print("-- CONTROLE NULO do pipeline (parcial -- ver docstring de controle_nulo) [F9] --")
+    print(f"   M={cal['M']} paineis embaralhados por blocos, independentes entre si, "
+          f"n_boot={cal['n_boot']}")
+    print(f"   rejeicao a 5%: {cal['rejeicoes']}/{cal['M']} = {cal['taxa']}  ->  {cal['classe']}")
+    print(f"   banda CALCULADA (binomial exata, {b['conf']:.0%}): [{b['k_lo']} ; {b['k_hi']}] "
+          f"rejeicoes = [{b['taxa_lo']} ; {b['taxa_hi']}] | IC da taxa: {cal['ic_taxa']}")
+    print(f"   media dos p = {cal['media_p']} (uniforme -> 0,5) | desvio maximo da CDF "
+          f"uniforme = {cal['ks_max']} (critico 1,36/sqrt(M) = {cal['ks_critico']})")
+    if causa:
+        print("   [Q-7] a CAUSA, por controle gerado -- so a marginal muda, tudo o mais fica:")
+        for forma, c in causa:
+            print(f"         marginal {forma:>8}: {c['rejeicoes']}/{c['M']} = {c['taxa']}  "
+                  f"({c['classe']})")
+        print("         O maximo de medias BRUTAS sobre cauda pesada infla o quantil nulo --")
+        print("         e o mecanismo que [F15] ja descrevia em `spa_hansen`. Nao e o `+1` do")
+        print("         p-valor nem o `block=5`: os dois estao presentes na linha 'normal'.")
 
 
 def relatorio_sensibilidade(sens):
@@ -983,18 +1465,24 @@ def relatorio_sensibilidade(sens):
         if r:
             print(f"   {nome:>14}  {r['trades']:>7}  {r['pnl']:>+8.0f}  "
                   f"{str(r['ic_bloco']):>20}  {r['psr']:>6}  {str(r['sharpe_anual']):>10}")
+    for nome, r in sens.get("atribuir", []):
+        if r:
+            print(f"   {('atrib=' + nome):>14}  {r['trades']:>7}  {r['pnl']:>+8.0f}  "
+                  f"{str(r['ic_bloco']):>20}  {r['psr']:>6}  {str(r['sharpe_anual']):>10}")
+    if not sens.get("atribuir"):
+        print("   atribuir: nao rodado -- os trades deste gerador nao trazem `ts_saida`")
     print(f"\n   {'block':>14}  {'IC95% da media/dia':>24}   (block=1 E o iid) [F18]")
     for bl, ic in sens["block"]:
         print(f"   {bl:>14}  {str(ic):>24}")
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "politicas":
+        comparar_politicas()                          # [P1-10] A x B x C, mesma regua
+        sys.exit(0)
     r = walk_forward_tendencia("tendencia")
     if "erro" not in r:
         relatorio_sensibilidade(sensibilidade(r))
-        print("\n-- CONTROLE NULO do pipeline (parcial -- ver docstring de controle_nulo) [F9] --")
-        cn = controle_nulo(r, M=200)
-        print(f"   M={cn['M']} paineis embaralhados por blocos | taxa de rejeicao a 5% = "
-              f"{cn['taxa_rejeicao_5pct']} (banda binomial [0,02 ; 0,09])")
-        print(f"   media dos p = {cn['media_p']} (uniforme -> 0,5) | desvio maximo da CDF "
-              f"uniforme = {cn['ks_max']}")
+        causa = [(f, controle_nulo_direto(r["matriz_is"], M=200, seed=7, dgp=f))
+                 for f in ("normal", "pesada")]
+        relatorio_controle_nulo(r["calibracao"], causa)

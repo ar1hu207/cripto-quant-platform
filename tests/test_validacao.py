@@ -27,8 +27,10 @@ louvor. O que define teste calibrado e UNIFORMIDADE dos p-valores, e e isso que
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
+from pesquisa import backtest_plataforma as B
 from pesquisa import validacao as V
 
 DIA = V.DIA_MS
@@ -560,3 +562,598 @@ def test_constantes_registradas():
     assert V.T_EFETIVO_MINIMO == 100
     assert V.PPA == 365
     assert V.PADRAO["seed"] == 42
+
+
+# ============================ o motor de backtest: `ts_saida` ============================
+# Estas provas nao sao da regua: sao do gerador que alimenta a regua
+# (`pesquisa/backtest_plataforma.backtest_ativo`). Moram aqui porque o campo que elas provam
+# -- `ts_saida` -- so existe para a purga de borda de fold, que e da regua. Rodam offline
+# porque o sinal e INJETADO (`sinal_fn`): sem isso, um `df` teria de disparar o `scoring` E
+# andar pela trajetoria que o teste quer, e o teste passaria a provar o scoring.
+TF_MS = 3_600_000
+
+
+def df_sintetico(closes, highs=None, lows=None, opens=None, tf_ms=TF_MS):
+    """`df` minimo que `backtest_ativo` consome: OHLC, timestamp, volume e `bb_mid`."""
+    n = len(closes)
+    return pd.DataFrame({
+        "timestamp": [T0 + i * tf_ms for i in range(n)],
+        "open": list(opens or closes), "high": list(highs or closes),
+        "low": list(lows or closes), "close": list(closes),
+        "volume": [1.0] * n, "bb_mid": list(closes),
+    })
+
+
+def sinal_em(indices, direcao=1, stop_dist=0.03, conv=99.0, adx=40.0):
+    """Gerador de sinal que dispara SO nos indices pedidos -- o resto do df fica mudo."""
+    alvo = set(indices)
+
+    def fn(df, i):
+        if i not in alvo:
+            return None
+        return {"direcao": direcao, "conviccao": conv, "adx": adx, "n_fatores": 3,
+                "stop_dist": stop_dist, "tipo": "tendencia"}
+    return fn
+
+
+def test_backtest_grava_ts_saida_no_FIM_do_candle_de_saida():
+    """A divida que a onda 1 deixou dentro do `T-EDGE`: sem `ts_saida` a purga desliga
+    sozinha e o vazamento de borda de fold segue presente e nao medido -- empurrando o
+    resultado para CIMA, contra a conclusao negativa.
+
+    O carimbo e o FIM do candle de saida, nao o comeco: e o instante em que o desfecho deixou
+    de ser incerto. Saida por stop dispara em algum ponto INTERNO do candle e o backtest nao
+    sabe qual -- carimbar o comeco afirmaria um instante nao observado, e purgaria de MENOS.
+    """
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0                                    # fura o stop de 3% no candle 65
+    df = df_sintetico(precos, lows=lows)
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]))
+    assert len(tr) == 1
+    t = tr[0]
+    assert t["motivo"] == "stop"
+    assert t["ts"] == T0 + 61 * TF_MS                  # fill no OPEN do candle seguinte
+    assert t["ts_saida"] == T0 + 65 * TF_MS + TF_MS    # FIM do candle de saida
+    assert t["ts_saida"] > t["ts"]
+
+
+def test_ts_saida_existe_em_todo_trade_e_nunca_precede_a_entrada():
+    """Vale para saida por regime tambem, que fecha em `closes[i]` e nao em nivel intrabar."""
+    precos = [100.0] * 62 + [101.0] * 8
+    df = df_sintetico(precos)
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
+                          sinal_fn=sinal_em([60], direcao=1))
+    # o sinal so dispara em 60; nos candles seguintes `fn` devolve None -> nao ha flip, a
+    # posicao atravessa o df inteiro e o trade nao fecha
+    assert tr == []
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
+                          sinal_fn=sinal_em([60, 64], direcao=1))
+    assert len(tr) == 0                                 # mesma direcao em 64: nao e flip
+    def fn(df_, i):
+        if i == 60:
+            return {"direcao": 1, "conviccao": 99.0, "adx": 40.0, "n_fatores": 3,
+                    "stop_dist": 0.03, "tipo": "tendencia"}
+        if i == 64:
+            return {"direcao": -1, "conviccao": 99.0, "adx": 40.0, "n_fatores": 3,
+                    "stop_dist": 0.03, "tipo": "tendencia"}
+        return None
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn)
+    assert len(tr) == 1 and tr[0]["motivo"] == "regime"
+    assert tr[0]["ts_saida"] == T0 + 64 * TF_MS + TF_MS
+    assert all(t["ts_saida"] >= t["ts"] for t in tr)
+
+
+def test_purga_fica_ATIVA_com_os_trades_do_motor_de_verdade():
+    """O contraste com `test_purga_desliga_sozinha_e_avisa_quando_falta_ts_saida`: aquele
+    prova que a regua nao MENTE quando o campo falta; este prova que o campo passou a vir."""
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df_sintetico(precos, lows=lows),
+                          sinal_fn=sinal_em([60]))
+    assert V._tem_ts_saida({("c",): tr}) is True
+
+
+def test_sensibilidade_roda_atribuir_so_quando_ha_ts_saida():
+    """[F3] `atribuir='saida'` virou possivel com o `ts_saida`, e mesmo assim NAO virou o
+    `PADRAO`: ele aparece como variante de diagnostico, ao lado de 'entrada'. Trocar o
+    criterio travado do veredito e decisao de dono, nao efeito colateral de um campo novo."""
+    assert V.PADRAO["atribuir"] == "entrada"
+    sem = V.sensibilidade(_res_sintetico(mu=0.0, seed=3, n_dias=300))
+    assert sem["atribuir"] == []                        # gerador sintetico nao grava ts_saida
+
+    pnls = serie_ar1(300, 0.0, seed=4)
+    saidas = [T0 + (i + 2) * DIA for i in range(300)]
+    por_cfg = {(50, 22): trades_diarios(pnls, ts_saida=saidas)}
+    res = V.walk_forward(gerador_constante(por_cfg), list(por_cfg), n_trials=100)
+    com = V.sensibilidade(res)
+    assert [nome for nome, _ in com["atribuir"]] == ["entrada", "saida"]
+    assert all(r is not None for _, r in com["atribuir"])
+
+
+def test_duracao_da_barra_sai_do_df_e_nao_do_default_de_tf():
+    """A causa: `tfh` vinha de `TF_MAPA[tf]`, e `tf` tem default (`"15m"`). Quem passa um `df`
+    pronto nao precisa passar `tf` -- e `validacao.gerador_tendencia` nao passava, com candles
+    de 1h. A barra valia 0,25h para um df de 1h, entao o funding do `[P2-10]` era cobrado por
+    UM QUARTO do hold real. A DIRECAO do erro segue o sinal do funding liquido do periodo --
+    net-LONG paga 1/4 e o P&L sai alto, net-SHORT recebe 1/4 e o P&L sai baixo --, entao o que
+    o teste fixa e a MAGNITUDE (4x), que essa sim nao depende do periodo.
+
+    Aqui o df tem passo de 1h e `tf` fica no default errado de proposito. Se a duracao voltar
+    a sair do default, `ts_saida` anda 15 min por barra e o funding volta a ser 1/4."""
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0
+    df = df_sintetico(precos, lows=lows)               # passo de 1h nos timestamps
+    assert B.TF == "15m"                               # o default que enganava
+    t_medido = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                                funding_8h=0.001)[0]
+    t_default = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                                 funding_8h=0.001, tf_horas=0.25)[0]   # o valor antigo
+    # entrada no open da barra 61, saida no FIM da barra 65 -> 5 barras de distancia
+    assert t_medido["ts_saida"] - t_medido["ts"] == 5 * TF_MS          # barras de 1h
+    # com a duracao errada, os timestamps do df continuam de 1h mas a "barra" vale 15 min:
+    # o carimbo de saida cai 45 min ANTES do fechamento real -- purga de menos, e em silencio
+    assert t_default["ts_saida"] - t_default["ts"] == 4 * TF_MS + 900_000
+    # funding e LINEAR no tempo de hold: 4x o hold, 4x o carry pago pelo LONG
+    carry_medido = t_default["pnl"] - t_medido["pnl"]
+    carry_default = (t_default["pnl"] - B.backtest_ativo(
+        "X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]), funding_8h=0.0,
+        tf_horas=0.25)[0]["pnl"]) * -1
+    assert carry_medido == pytest.approx(3 * carry_default, rel=1e-9)
+
+
+def test_tf_horas_explicito_vence_a_medicao():
+    """Quem declara, declarou -- a medicao e o conserto do ESQUECIMENTO, nao um veto."""
+    df = df_sintetico([100.0] * 70)
+    assert B._horas_por_barra(df, 4.0, "15m") == 4.0
+    assert B._horas_por_barra(df, None, "15m") == pytest.approx(1.0)
+    assert B._horas_por_barra(df.iloc[:1], None, "15m") == 0.25      # sem passo: cai no mapa
+
+
+# ============================ calibracao [Q-7] ============================
+def matriz_correlacionada(T=900, K=6, rho=0.95, seed=9, sd=10.0):
+    """Painel com a forma do `matriz_is` real: K configs muito correlacionadas, T dias."""
+    rng = np.random.default_rng(seed)
+    F = rng.standard_normal(T)
+    return {("c", k): (sd * (np.sqrt(rho) * F + np.sqrt(1 - rho) * rng.standard_normal(T))).tolist()
+            for k in range(K)}
+
+
+def test_banda_binomial_e_calculada_e_o_literal_antigo_estava_errado():
+    """[Q-7] item 1. A banda era uma STRING no print. A rodada do [Q-1] imprimiu
+    "taxa de rejeicao a 5% = 0.01 (banda binomial [0,02 ; 0,09])": o valor medido ja estava
+    fora da banda que a propria linha anunciava, e nada no codigo comparou os dois. Aqui ela
+    e conta -- e a conta mostra que o literal errava tambem o limite de cima."""
+    b = V.banda_binomial(200, 0.05)
+    assert (b["k_lo"], b["k_hi"]) == (4, 16)
+    assert (b["taxa_lo"], b["taxa_hi"]) == (0.02, 0.08)      # o literal dizia 0,09
+    assert V._binom_cdf(3, 200, 0.05) <= 0.025 < V._binom_cdf(4, 200, 0.05)
+    assert V.banda_binomial(0, 0.05)["k_lo"] == 0            # borda: M=0 nao explode
+
+
+def test_classificacao_da_banda_nos_tres_casos():
+    """O criterio de aceite do card: os TRES casos, em codigo, mais as duas bordas."""
+    assert V.classificar_calibracao(2, 200)["classe"] == "FORA DA BANDA (abaixo)"
+    assert V.classificar_calibracao(4, 200)["classe"] == "CALIBRADO"      # borda inferior
+    assert V.classificar_calibracao(10, 200)["classe"] == "CALIBRADO"
+    assert V.classificar_calibracao(16, 200)["classe"] == "CALIBRADO"     # borda superior
+    assert V.classificar_calibracao(30, 200)["classe"] == "FORA DA BANDA (acima)"
+    # o IC exato da taxa medida e largo: M=200 nao separa alfa 0,001 de alfa 0,035, e essa
+    # imprecisao faz parte do diagnostico -- e ela que impede o alfa medido de virar aritmetica
+    lo, hi = V.classificar_calibracao(2, 200)["ic_taxa"]
+    assert lo < 0.002 and 0.03 < hi < 0.05
+
+
+def test_a_causa_da_sub_rejeicao_e_a_MARGINAL_nao_as_suspeitas_do_card():
+    """[Q-7] item 3 -- a INVESTIGACAO, e ela desmente duas das tres suspeitas do card.
+
+    O controle DIRETO gera paineis de um DGP conhecido e troca SO a forma da marginal. Tudo o
+    mais fica igual: o mesmo `reality_check`, o mesmo `p = (1+#)/(B+1)`, o mesmo `block=5`, o
+    mesmo M. Se a sub-rejeicao viesse do `+1` ou do `block`, a linha "normal" cairia junto --
+    e ela nao cai: fica DENTRO da banda. A de cauda pesada cai uma ordem de grandeza.
+
+    Quem derruba o tamanho e a marginal de P&L diario -- maioria dos dias zerada, truncada em
+    `-valor` a esquerda, cauda longa a direita. O mecanismo ja estava escrito em `spa_hansen`
+    [F15]: o RC toma o maximo de medias BRUTAS, e cauda pesada infla o quantil nulo.
+    """
+    m = matriz_correlacionada()
+    normal = V.controle_nulo_direto(m, M=200, seed=101, dgp="normal")
+    pesada = V.controle_nulo_direto(m, M=200, seed=101, dgp="pesada")
+    banda = V.banda_binomial(200, 0.05)
+    assert normal["classe"] == "CALIBRADO", normal["taxa"]
+    assert pesada["classe"] == "FORA DA BANDA (abaixo)", pesada["taxa"]
+    assert pesada["taxa"] < banda["taxa_lo"] <= normal["taxa"], (pesada["taxa"], normal["taxa"])
+    assert pesada["taxa"] * 3 < normal["taxa"], (pesada["taxa"], normal["taxa"])
+
+
+def test_a_estudentizacao_do_SPA_nao_conserta_e_registrar_isso_poupa_o_proximo_card():
+    """A saida obvia seria "troque o RC pelo SPA, que e estudentizado". Medido: na mesma
+    marginal de cauda pesada o SPA rejeita MENOS que o RC, porque o denominador dele tambem e
+    inflado pela cauda."""
+    m = matriz_correlacionada(T=600, K=6, seed=11)
+    par = V._params_do_painel(m)
+    rng = np.random.default_rng(31)
+    rc, spa = [], []
+    for _ in range(200):
+        X = V._painel_nulo(rng, par, "pesada")
+        painel = {k: X[k].tolist() for k in range(par["K"])}
+        sd = int(rng.integers(1, 10 ** 9))
+        rc.append(V.reality_check(painel, n_boot=200, block=5, seed=sd)["p_valor"])
+        spa.append(V.spa_hansen(painel, n_boot=200, block=5, seed=sd)["p_valor"])
+    t_rc = float((np.asarray(rc) <= 0.05).mean())
+    t_spa = float((np.asarray(spa) <= 0.05).mean())
+    assert t_spa <= t_rc, (t_spa, t_rc)
+    assert t_rc < V.banda_binomial(200, 0.05)["taxa_lo"], t_rc
+
+
+def test_controle_nulo_e_cego_para_a_propria_falha():
+    """O degrau que muda como o 0,01 do dado real deve ser lido.
+
+    Sobre um painel sorteado do DGP de cauda pesada, o controle DIRETO da 0,0025 e este aqui
+    da ~0,04 -- perto do nominal. Os dois discordam por razao estrutural: no aninhado os dois
+    niveis usam a MESMA distribuicao empirica, entao o erro do bootstrap entra dos dois lados
+    e se cancela. Ele nao consegue ver a propria falha, e por isso o alfa efetivo que ele mede
+    e uma estimativa OTIMISTA -- o piso do MDS que sai dela e um piso frouxo.
+    """
+    m = matriz_correlacionada(T=900, K=6, rho=0.95, seed=9)
+    par = V._params_do_painel(m)
+    X = V._painel_nulo(np.random.default_rng(3), par, "pesada")
+    painel = {("c", k): X[k].tolist() for k in range(par["K"])}
+    aninhado = V.controle_nulo(painel, M=300, seed=11)
+    direto = V.controle_nulo_direto(painel, M=300, seed=11, dgp="pesada")
+    assert direto["taxa"] < aninhado["taxa"], (direto["taxa"], aninhado["taxa"])
+    assert direto["classe"] == "FORA DA BANDA (abaixo)"
+    assert aninhado["classe"] == "CALIBRADO"          # cego: nao acusa o que o direto acusa
+
+
+def test_cada_painel_nulo_e_um_sorteio_independente_do_painel_real():
+    """Centrar por uma media que nao e a da distribuicao que gerou o painel deixa drift
+    residual no nulo, e o Reality Check o detecta corretamente -- medido, a taxa foi a 0,225
+    num painel gaussiano. O painel nulo e sorteado do dado e centrado pelo dado, uma vez so."""
+    m = matriz_correlacionada(T=500, K=3, seed=17)
+    cn = V.controle_nulo(m, M=200, seed=5)
+    assert cn["classe"] == "CALIBRADO", cn["taxa"]
+    import inspect
+    assert "n_bases" not in inspect.signature(V.controle_nulo).parameters
+
+
+def test_controle_nulo_direto_le_os_momentos_do_painel():
+    par = V._params_do_painel({("a",): serie_ar1(500, 0.4, seed=11),
+                               ("b",): serie_ar1(500, 0.4, seed=12)})
+    assert par["K"] == 2 and par["T"] == 500
+    assert 0.0 <= par["rho"] <= 1.0
+    assert par["phi"] == pytest.approx(0.4, abs=0.15)
+    cal = V.controle_nulo_direto({("a",): serie_ar1(400, 0.0, seed=13)}, M=20, seed=5)
+    assert cal["dgp"]["T"] == 400 and cal["dgp"]["K"] == 1
+    assert cal["dgp"]["forma"] == "normal"
+    assert cal["alfa_efetivo"] == cal["taxa"]
+
+
+def test_o_portao_de_calibracao_bloqueia_para_CIMA_por_MATERIALIDADE():
+    """[Q-7] item 2, a decisao registrada e a assimetria dela.
+
+    Super-rejeitar torna a condicao de EDGE facil demais -- ela le o Reality Check --, entao
+    bloqueia. Mas o gatilho e MATERIALIDADE, nao significancia: o tamanho real do RC medido
+    sobre 2.400 paineis normais e 0,0604, acima do nominal, entao uma banda de 95% centrada em
+    0,05 acusaria 17+/200 com probabilidade 0,099. Portao que bloqueia uma rodada honesta a
+    cada dez vira ruido, e portao que dispara por ruido e desligado por quem tem pressa.
+    """
+    base = _res_sintetico(mu=0.0, seed=21, n_dias=1000)
+    assert base["bloco_b"]["mds"] < V.MDS_LIMITE                 # ha poder: o portao de MDS cala
+
+    acima = dict(base)
+    acima["calibracao"] = V.classificar_calibracao(60, 200)      # taxa 0,30
+    v = V._veredito(acima)
+    assert v["classe"] == "INCONCLUSIVO" and "descalibrado" in v["motivo"]
+
+    quase = dict(base)
+    quase["calibracao"] = V.classificar_calibracao(17, 200)      # FORA DA BANDA (acima)...
+    assert quase["calibracao"]["classe"] == "FORA DA BANDA (acima)"
+    assert quase["calibracao"]["ic_taxa"][0] < V.ALFA_TETO_PORTAO
+    assert V._veredito(quase)["classe"] == base["veredito"]["classe"]   # ...e NAO bloqueia
+    assert V.ALFA_TETO_PORTAO == 0.10
+
+
+def test_mds_vira_PISO_quando_o_teste_sub_rejeita():
+    """[Q-7] item 4. O MDS e calculado com alfa NOMINAL; com alfa efetivo menor o poder real e
+    menor e o minimo detectavel e MAIOR. Publicar so o nominal seria publicar poder que o teste
+    nao tem. Aqui, a aritmetica que o card pediu, com o `mds_sharpe` de verdade."""
+    assert V.mds_sharpe(908, alfa=0.01) > V.mds_sharpe(908, alfa=0.05)
+    assert V.mds_sharpe(908, alfa=0.05) == pytest.approx(1.576, abs=0.002)
+    # o card estimou "~22%" pela formula da matriz; pelo `mds_sharpe` a razao e ~27,4%, e
+    # 1,576 x 1,274 = 2,008 -- o OUTRO lado do MDS_LIMITE, nao "a folga cai para 4%"
+    razao = V.mds_sharpe(908, alfa=0.01) / V.mds_sharpe(908, alfa=0.05)
+    assert razao == pytest.approx(1.274, abs=0.005)
+    assert V.mds_sharpe(908, alfa=0.01) > V.MDS_LIMITE
+
+
+def test_o_portao_de_poder_le_o_PISO_mas_pela_ponta_menos_exigente_do_IC():
+    """A outra metade da assimetria. Sub-rejeicao nao bloqueia por si; ela corrige o MDS, e o
+    portao le o piso calculado com o alfa no TOPO do IC -- o piso menos exigente compativel com
+    a imprecisao do diagnostico. Assim a guarda so dispara quando a largura do IC nao pode
+    explicar o achado, e nunca por um M pequeno demais."""
+    res = _res_sintetico(mu=0.0, seed=23, n_dias=1000)
+    b = res["bloco_b"]
+    T = b["T"]
+
+    # 2 rejeicoes em 200: alfa 0,01, IC [0,0012 ; 0,0357]
+    cal = V.classificar_calibracao(2, 200)
+    forjado = dict(res)
+    forjado["calibracao"] = cal
+    forjado["bloco_b"] = dict(b)
+    forjado["bloco_b"]["mds_piso"] = round(V.mds_sharpe(T, alfa=cal["taxa"]), 3)
+    forjado["bloco_b"]["mds_piso_min"] = round(V.mds_sharpe(T, alfa=cal["ic_taxa"][1]), 3)
+    assert forjado["bloco_b"]["mds_piso"] > forjado["bloco_b"]["mds_piso_min"]
+    # com T grande o piso menos exigente nao passa do limite -> o veredito NAO vira
+    assert forjado["bloco_b"]["mds_piso_min"] < V.MDS_LIMITE
+    assert V._veredito(forjado)["classe"] == res["veredito"]["classe"]
+
+    # ja um piso que nem no topo do IC cabe no limite bloqueia, e o motivo cita o PISO
+    duro = dict(forjado)
+    duro["bloco_b"] = dict(forjado["bloco_b"])
+    duro["bloco_b"]["mds_piso_min"] = V.MDS_LIMITE + 0.01
+    v = V._veredito(duro)
+    assert v["classe"] == "INCONCLUSIVO" and "PISO" in v["motivo"]
+
+
+def test_calibracao_entra_no_resultado_e_no_relatorio(capsys):
+    res = _res_sintetico(mu=0.0, seed=31, n_dias=300)
+    assert res["calibracao"]["M"] == V.M_CONTROLE_NULO
+    assert "mds_piso" in res["bloco_b"] and "mds_piso_min" in res["bloco_b"]
+    V.relatorio(res)
+    out = capsys.readouterr().out
+    assert "calibracao [Q-7]" in out
+    assert "banda de aceitacao CALCULADA" in out
+    assert res["calibracao"]["classe"] in out
+
+
+def test_relatorio_do_controle_nulo_imprime_o_alfa_e_a_causa(capsys):
+    res = _res_sintetico(mu=0.0, seed=41, n_dias=300)
+    causa = [(f, V.controle_nulo_direto(res["matriz_is"], M=20, seed=7, dgp=f))
+             for f in ("normal", "pesada")]
+    V.relatorio_controle_nulo(res["calibracao"], causa)
+    out = capsys.readouterr().out
+    assert "banda CALCULADA" in out and "a CAUSA" in out
+    assert "marginal   normal" in out and "marginal   pesada" in out
+    assert "F15" in out
+
+
+def test_m_calibracao_menor_alarga_a_banda_em_vez_de_desligar_a_guarda():
+    """Nao ha bandeira para desligar a calibracao -- so como medir com menos paineis. E menos
+    paineis alargam a banda, que e a consequencia certa: diagnostico impreciso reclama menos,
+    nunca mais. (CLAUDE.md §2: a guarda so protege se nao houver como desliga-la.)"""
+    assert V.banda_binomial(20, 0.05)["taxa_hi"] > V.banda_binomial(400, 0.05)["taxa_hi"]
+    assert V.ic_clopper_pearson(1, 20)[1] > V.ic_clopper_pearson(20, 400)[1]
+    import inspect
+    assinatura = inspect.signature(V.walk_forward).parameters
+    assert "m_calibracao" in assinatura
+    assert not any(n.startswith("sem_") or n == "calibrar" for n in assinatura)
+
+
+# ================= as politicas de saida A x B x C [P1-10] =================
+# O veredito central do projeto mediu a politica A -- stop 3xATR ou flip de regime -- e o
+# sistema ao vivo NUNCA operou A. Estas provas fixam, com trajetoria conhecida, o que cada
+# politica fecha e quando. Rodam offline pelo `sinal_fn`.
+def df_com_indicadores(closes, highs=None, lows=None, rsi=None, ema_r=None, ema_l=None,
+                       atr=None, tf_ms=TF_MS):
+    """`df_sintetico` mais as colunas que a politica B (gestor de saida) e o trailing em ATR
+    consomem. Sem valor passado, os indicadores ficam neutros: nao disparam nada."""
+    df = df_sintetico(closes, highs=highs, lows=lows, tf_ms=tf_ms)
+    n = len(closes)
+    df["rsi"] = list(rsi) if rsi is not None else [50.0] * n
+    df["ema_r"] = list(ema_r) if ema_r is not None else list(closes)
+    df["ema_l"] = list(ema_l) if ema_l is not None else list(closes)
+    df["atr"] = list(atr) if atr is not None else [1.0] * n
+    return df
+
+
+def _um_trade(df, saida, **kw):
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                          saida=saida, **kw)
+    assert len(tr) == 1, (saida, tr)
+    return tr[0]
+
+
+def test_politica_invalida_recusa_em_vez_de_cair_no_default():
+    """Errar o nome da politica nao pode virar 'rodou a A e ninguem viu' -- num card cujo
+    produto e a COMPARACAO entre as tres, isso e o pior modo de falha possivel."""
+    with pytest.raises(ValueError, match="saida deve ser"):
+        B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores([100.0] * 70),
+                         sinal_fn=sinal_em([60]), saida="trailling")
+
+
+def test_A_fecha_no_flip_de_regime_e_B_e_C_nao_herdam_esse_flip():
+    """O flip de regime NAO existe no sistema vivo: nada em `simulador.atualizar()` nem em
+    `autotrader.auto_executar()` fecha por inversao do scoring. Herda-lo em B e C faria as
+    tres politicas compartilharem uma saida que so a A tem, e a comparacao mediria menos
+    diferenca do que existe."""
+    df = df_com_indicadores([100.0] * 70)
+
+    def fn(_df, i):
+        if i in (60, 64):
+            return {"direcao": 1 if i == 60 else -1, "conviccao": 99.0, "adx": 40.0,
+                    "n_fatores": 3, "stop_dist": 0.03, "tipo": "tendencia"}
+        return None
+
+    a = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="regime")
+    assert [t["motivo"] for t in a] == ["regime"]
+    for pol in ("auto", "trailing"):
+        assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida=pol) == []
+
+
+def test_C_trailing_sobe_o_stop_atras_do_preco_e_fecha_EM_LUCRO():
+    """A trajetoria: sobe 6% e volta. Com A o stop fixo de 3% nunca e tocado e a posicao
+    segue aberta; com C o stop subiu para 4% acima da entrada (pico 6% menos 2%) e a queda o
+    encontra -- fechando com LUCRO, e com o motivo `trailing`, que e o mesmo nome que
+    `simulador._fecha_stop` grava no banco vivo."""
+    precos = [100.0] * 62 + [106.0] * 3 + [100.5] * 5
+    highs = list(precos)
+    lows = list(precos)
+    lows[65] = 100.5                                    # a volta acontece no candle 65
+    df = df_com_indicadores(precos, highs=highs, lows=lows)
+
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                            saida="regime") == []       # A: stop fixo de 3% nao e tocado
+    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    assert t["motivo"] == "trailing"
+    assert t["pnl"] > 0
+    assert t["ts_saida"] == T0 + 65 * TF_MS + TF_MS
+
+
+def test_C_so_arma_o_trailing_depois_do_lucro_passar_da_distancia():
+    """Paridade com `simulador._marcar_uma`: o stop so comeca a subir depois de o preco passar
+    de `entrada*(1+trailing_dist)`. Subida de 1% com trailing de 2% nao arma nada, e o stop
+    continua sendo o de 3xATR da entrada -- ou seja, o trade fecha em PERDA, nao em lucro."""
+    precos = [100.0] * 62 + [101.0] * 3 + [96.0] * 5
+    lows = list(precos)
+    lows[65] = 96.0
+    df = df_com_indicadores(precos, lows=lows)
+    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    assert t["motivo"] == "stop"                        # nunca armou: e o stop de entrada
+    assert t["pnl"] < 0
+
+
+def test_C_o_stop_do_trailing_so_se_move_para_o_candle_SEGUINTE():
+    """A ordem dentro do candle e decisao, nao detalhe. Subir o stop com o topo do candle e so
+    entao perguntar se o fundo do MESMO candle o furou supoe que o topo veio antes -- o OHLC
+    nao diz isso. Aqui topo e fundo estao no mesmo candle: o trailing NAO fecha nele.
+
+    O efeito e conservador: C trava menos lucro do que o vivo, que faz poll a cada 15 s."""
+    precos = [100.0] * 63 + [106.0] * 7
+    highs = list(precos)
+    lows = list(precos)
+    highs[63] = 108.0                                   # topo e fundo no MESMO candle
+    lows[63] = 100.0                                    # o fundo furaria o stop pos-trailing
+    df = df_com_indicadores(precos, highs=highs, lows=lows)
+    tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                          saida="trailing", trailing_dist=0.02)
+    assert tr == []                                     # nao fechou dentro do candle do pico
+    # ...mas o stop ficou armado em 108*0,98 = 105,84, e o candle SEGUINTE o encontra
+    lows2 = list(lows)
+    lows2[64] = 100.0
+    df2 = df_com_indicadores(precos, highs=highs, lows=lows2)
+    t = _um_trade(df2, "trailing", trailing_dist=0.02)
+    assert t["motivo"] == "trailing" and t["pnl"] > 0
+    assert t["ts_saida"] == T0 + 64 * TF_MS + TF_MS
+
+
+def test_C_em_k_ATR_e_o_item_3_do_card_distancia_em_unidade_do_ATR():
+    """`trailing_dist=2%` e fixo em espaco-preco: cego ao ATR (a entrada usa stop 3xATR e a
+    saida ignora a volatilidade do ativo) e cego a alavancagem (2% de preco = 4% de ROE a 2x,
+    40% a 20x). Com `trailing_k_atr=k` a distancia vira k*ATR/preco, medida NA ENTRADA.
+
+    Aqui o ATR e 5 no candle da entrada: k=1 da 5% de distancia, mais larga que os 2% fixos --
+    entao o mesmo repique que fechava a de 2% NAO fecha a de k*ATR."""
+    precos = [100.0] * 62 + [106.0] * 3 + [102.5] * 5
+    lows = list(precos)
+    lows[65] = 102.5
+    df = df_com_indicadores(precos, lows=lows, atr=[5.0] * len(precos))
+    t2 = _um_trade(df, "trailing", trailing_dist=0.02)
+    assert t2["motivo"] == "trailing"                   # 2%: stop em 106*0,98 = 103,88 -> bate
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                            saida="trailing", trailing_k_atr=1.0) == []   # 5%: 100,7 -> nao bate
+
+
+def test_B_fecha_em_reversao_COM_lucro_e_nao_fecha_sem_lucro():
+    """Paridade com `autotrader.auto_executar` passo 1: fecha quando o gestor de saida devolve
+    nivel 'forte' ou 'lucro', que e reversao COM ROE acima de 1%. Sem lucro o nivel vira
+    'risco' e o bot ao vivo NAO fecha -- so avisa."""
+    n = 70
+    rsi = [50.0] * n
+    rsi[63], rsi[64] = 70.0, 65.0                       # RSI revertendo do topo no candle 64
+
+    com_lucro = [100.0] * 62 + [101.0] * 8              # +1% de preco = +10% de ROE a 10x
+    t = _um_trade(df_com_indicadores(com_lucro, rsi=rsi), "auto")
+    assert t["motivo"] == "auto-saida" and t["pnl"] > 0
+    assert t["ts_saida"] == T0 + 64 * TF_MS + TF_MS
+
+    sem_lucro = [100.0] * 62 + [99.9] * 8               # ROE negativo: nivel 'risco', nao fecha
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores(sem_lucro, rsi=rsi),
+                            sinal_fn=sinal_em([60]), saida="auto") == []
+
+
+def test_B_reconhece_os_tres_gatilhos_do_gestor_de_saida_ao_vivo():
+    """Os mesmos tres de `signal_engine.py:133-146`, um a um. O quarto -- fluxo do book -- nao
+    existe em historico OHLCV; ele so ACRESCENTA motivos, entao B aqui fecha MENOS que a viva
+    e fica mais perto de A do que a de verdade. O vies e contra a diferenca entre politicas,
+    que e contra o proprio achado deste card."""
+    n = 70
+    base = [100.0] * 62 + [101.0] * 2 + [100.9] * 6      # +0,9% no fim = ROE ~ +8% a 10x
+    neutro = df_com_indicadores(base)
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=neutro, sinal_fn=sinal_em([60]),
+                            saida="auto") == []          # nenhum gatilho: nao fecha
+
+    rsi = [50.0] * n
+    rsi[63], rsi[64] = 70.0, 65.0
+    assert _um_trade(df_com_indicadores(base, rsi=rsi), "auto")["motivo"] == "auto-saida"
+
+    ema_r = list(base)
+    ema_r[64] = 100.95                                   # close cruza a EMA20 para BAIXO
+    assert _um_trade(df_com_indicadores(base, ema_r=ema_r), "auto")["motivo"] == "auto-saida"
+
+    ema_l = list(base)
+    ema_l[64] = 110.0                                    # ema_r < ema_l: tendencia virou
+    assert _um_trade(df_com_indicadores(base, ema_l=ema_l), "auto")["motivo"] == "auto-saida"
+
+
+def test_B_no_warmup_do_indicador_nao_fecha_igual_ao_vivo():
+    """`avaliar_saida` devolve None quando RSI/EMA sao NaN, e o auto-trader nao fecha nada.
+    Aqui o mesmo: NaN nao pode virar 'sem sinal de reversao' por acidente nem gatilho por
+    comparacao com NaN."""
+    n = 70
+    base = [100.0] * 62 + [101.0] * 8
+    rsi = [float("nan")] * n
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores(base, rsi=rsi),
+                            sinal_fn=sinal_em([60]), saida="auto") == []
+
+
+def test_as_tres_politicas_dao_saidas_DIFERENTES_na_mesma_trajetoria():
+    """O que a comparacao A x B x C precisa que seja verdade para significar alguma coisa: na
+    MESMA trajetoria e com o MESMO sinal de entrada, as tres fecham em candles diferentes, por
+    motivos diferentes e com P&L diferente."""
+    n = 74
+    precos = [100.0] * 62 + [106.0] * 3 + [101.0] * 9
+    lows = list(precos)
+    lows[65] = 101.0
+    rsi = [50.0] * n
+    rsi[63], rsi[64] = 70.0, 65.0                       # reversao do topo no 64 -> B fecha ali
+
+    def fn(_df, i):
+        if i in (60, 68):
+            return {"direcao": 1 if i == 60 else -1, "conviccao": 99.0, "adx": 40.0,
+                    "n_fatores": 3, "stop_dist": 0.03, "tipo": "tendencia"}
+        return None
+
+    df = df_com_indicadores(precos, lows=lows, rsi=rsi)
+    saidas = {}
+    for pol in B.POLITICAS:
+        tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida=pol)
+        assert len(tr) == 1, (pol, tr)
+        saidas[pol] = (tr[0]["motivo"], tr[0]["ts_saida"], round(tr[0]["pnl"], 4))
+    assert saidas["auto"][1] < saidas["trailing"][1] < saidas["regime"][1]
+    assert len({m for m, _, _ in saidas.values()}) == 3
+    assert len({p for _, _, p in saidas.values()}) == 3
+
+
+def test_o_ROE_da_politica_B_e_a_conta_do_simulador_inclusive_o_teto_na_margem():
+    """`_roe` tem de ser a MESMA conta de `simulador._pnl` -- alavancada, com as duas pernas de
+    taxa sobre o nocional de entrada e a perda travada na margem. Se divergisse, B fecharia em
+    ROE que o vivo nao reconheceria."""
+    pos = {"d": 1, "e": 100.0}
+    assert B._roe(pos, 101.0, 100, 10, 0.0) == pytest.approx(10.0)
+    assert B._roe(pos, 101.0, 100, 10, 0.0005) == pytest.approx(10.0 - 1.0)
+    assert B._roe(pos, 50.0, 100, 10, 0.0) == pytest.approx(-100.0)      # teto na margem
+    assert B._roe({"d": -1, "e": 100.0}, 99.0, 100, 10, 0.0) == pytest.approx(10.0)
+
+
+def test_a_politica_nao_muda_a_paridade_de_entrada():
+    """Os portoes de entrada sao os mesmos nas tres: conviccao, ADX e n_fatores. A politica
+    escolhe COMO se sai, nunca QUANDO se entra -- se mudasse, a comparacao teria dois fatores
+    e nenhum deles ficaria isolado."""
+    df = df_com_indicadores([100.0] * 70)
+    fraco = lambda _df, i: (sinal_em([60], adx=10.0)(_df, i))
+    for pol in B.POLITICAS:
+        assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fraco,
+                                saida=pol, adx_min=25) == []
