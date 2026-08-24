@@ -203,6 +203,114 @@ apertar guarda pode; afrouxar, só o dono).
 
 ---
 
+## 7. A régua respondeu — e a resposta não autoriza trocar o default
+
+Rodado em 2026-08-24, 94,9 min, saída completa em `VARREDURA-GEOMETRIA-2026-08-24.log`:
+
+```bash
+python -m pesquisa.validacao geometria
+```
+
+Grade: `min_conv`(3) × `adx_min`(2) × `k`∈{1, 2, 3, 4} × `sd_min`∈{0%, 1%, 2%, 4%} = **96
+configs**, 12 moedas, 1.095 dias de 1h. `n_trials = 550`. O baseline foi **re-medido na mesma
+janela**, não citado do `VEREDITO-M4.md`.
+
+| | baseline `C trailing 2% fixo` | varredura `k×ATR + piso sd` |
+|---|---:|---:|
+| configs na grade | 6 | 96 |
+| `n_trials` declarado | 100 | 550 |
+| trades OOS | 5.342 | 2.780 |
+| win% | 61,2 | 47,6 |
+| P&L OOS | +5.040 | +3.426 |
+| **Sharpe anualizado** | **0,645** | **0,412** |
+| IC95% do Sharpe | (−0,714 ; 1,824) | (−1,016 ; 1,649) |
+| PSR | 0,854 | 0,748 |
+| DSR (melhor IS) | 0,0625 | 0,0065 |
+| Reality Check p | 0,2014 | 0,4148 |
+| SPA p | 0,2309 | 0,5037 |
+| calibração [Q-7] | 12/200 (0,06) CALIBRADO | 8/200 (0,04) CALIBRADO |
+| concentração: maior fold | 0,56 do total | **1,03 do total** |
+| **veredito** | **SEM EVIDÊNCIA DE EDGE** | **SEM EVIDÊNCIA DE EDGE** |
+
+**Controle de reprodutibilidade:** o baseline re-medido hoje bateu com o do `VEREDITO-M4.md`
+(5.342 trades, win 61,2%, P&L +5.040, Sharpe 0,645, IC idêntico) — a janela andou um dia e o
+resultado não andou. O instrumento está estável; a comparação abaixo é entre políticas, não
+entre rodadas.
+
+### 7.1 O que o TREINO escolheu, que é a pergunta que a §7.3 do M4 fez
+
+| fold | config escolhida | P&L OOS |
+|---:|---|---:|
+| 1 | (65, 25, **k=4,0**, **sd_min=0%**) | +1.172 |
+| 2 | (65, 25, **k=4,0**, **sd_min=0%**) | +1.303 |
+| 3 | (65, 22, k=1,0, sd_min=4%) | −1.006 |
+| 4 | (55, 22, **k=4,0**, **sd_min=0%**) | +3.512 |
+| 5 | (50, 22, **k=4,0**, **sd_min=0%**) | −1.554 |
+
+Duas respostas, e nenhuma é a que o card esperava:
+
+**(a) O piso de custo não foi escolhido.** `sd_min = 0%` em 4 dos 5 folds. Dado o direito de
+usar o piso do `[Q-9]`, o treino recusou. A hipótese nula que a grade carregava de propósito
+**sobreviveu** — e isso vale como resposta, não como falha da rodada. Leitura provável: com
+`min_conv` alto (65 nos folds 1-2) o portão de convicção já elimina a maior parte dos sinais de
+stop curto, e o piso separado passa a cobrar oportunidade sem entregar o que já foi entregue.
+`sd_min` e `min_conv` estão medindo coisa parecida.
+
+**(b) `k = 4,0` é o TETO da grade, escolhido em 4 dos 5 folds.** Isto é um *boundary hit*: o
+ótimo pode estar fora da grade, e **a rodada não resolveu a pergunta do `k`** — só a moveu.
+Reportar "o treino escolheu k=4" sem dizer que 4 era o máximo disponível seria dizer que a
+grade respondeu quando ela bateu na parede.
+
+E a direção do boundary hit é o achado que menos se esperava: `k` maior = trailing mais
+**largo** = trailing que interfere menos, no limite deixando o stop de entrada correr sozinho.
+**O treino, com a escolha livre, está fugindo do trailing.** O limite dessa direção é a
+política **A** do M4 (stop sem trailing), que já foi medida: Sharpe **0,124**, DSR 0,0099 — pior
+que as duas desta tabela. A comparação não é limpa (A também fecha por flip de regime, C não),
+então isto é indício, não prova. Mas indica que a direção que o treino persegue já foi
+explorada no extremo e não tem nada lá: a superfície é plana e ruidosa, não uma encosta.
+
+### 7.2 Por que o placar pior NÃO derruba o argumento de unidade
+
+A varredura pontuou abaixo do baseline em tudo. Ler isso como "o 2% fixo é melhor" seria errado
+por três razões, e as três já estavam escritas antes dos números:
+
+1. **A maior parte do gap do DSR é o preço declarado da grade maior.** `n_trials` foi de 100
+   para 550 porque a busca cresceu 16×. Na tabela de sensibilidade que o próprio relatório
+   imprime, a varredura a `n_trials=100` daria DSR **0,0276** em vez de 0,0065. O DSR não caiu
+   só porque a política é pior — caiu porque a rodada pagou por ter procurado mais.
+2. **Os IC95% de Sharpe se sobrepõem quase inteiros** — (−1,016 ; 1,649) contra
+   (−0,714 ; 1,824). A ordenação **não é uma diferença demonstrada**. É a mesma ressalva da §7.3
+   do M4, e ela vale igual quando o resultado desagrada.
+3. **O argumento da §7.3 nunca foi de performance.** `trailing_dist=2%` mede coisa diferente em
+   cada ativo e em cada alavancagem, e isso é verdade sob qualquer placar. O que a rodada
+   entrega é que **trocar por `k×ATR` também não compra performance** — some-se ao fato de que
+   ela não custa nada, e a troca vira decisão de higiene, não de retorno.
+
+### 7.3 O que esta rodada autoriza, e o que não
+
+**Não autoriza trocar o default.** Duas políticas `SEM_EVIDÊNCIA`, IC sobrepostos, e a
+concentração da varredura piorou de forma material: **um único fold responde por 1,03 do lucro
+total** (o fold 4, +3.512 contra +3.426 do agregado), contra 0,56 no baseline. Um resultado que
+mora inteiro numa dobra não é base para mexer no que roda com dinheiro — nem fictício.
+
+**Não autoriza o piso do `[Q-9]` como está.** O treino recusou. O card não morre — o que morre é
+a versão dele que fixa `sd_min` por decreto. Se o piso voltar, volta como o que a §2 deste
+documento diz que ele é: uma declaração de custo do dono, aplicada **sabendo** que o
+walk-forward não a escolheu sozinha.
+
+**O que fica de pé, e é o produto desta rodada:**
+
+- O pré-requisito que a §7.3 do `VEREDITO-M4` deixou nomeado — *"um `k` varrido no grid é
+  pré-requisito de qualquer proposta de troca"* — **foi rodado**, e devolveu boundary hit. A
+  próxima grade de `k` tem de subir o teto, e a §7.1 diz para onde ela aponta.
+- A faixa doente da §1 é real e continua real: ela é aritmética de produção, não estatística de
+  backtest. O que a régua diz é que **consertá-la não paga em Sharpe** — que é exatamente o que
+  a §6 previu antes de medir.
+- Os defeitos §3 (o cap mudo) e §4 (`ret_pct` bruto) **não dependem desta rodada** e seguem
+  válidos: nenhum dos dois é sobre performance.
+
+---
+
 ## Reprodução
 
 De dentro da VM, via `az vm run-command --scripts @script.sh`:
