@@ -311,6 +311,146 @@ walk-forward não a escolheu sozinha.
 
 ---
 
+## 8. A pergunta do dono que mudou o rumo: "ele acerta, mas não sabe quando tirar"
+
+Observação do dono, depois da §7: *"o bot acerta a maioria dos trades, mas não sabe quando
+tirar — o que era um lucro bom acaba se perdendo."* Testável, e testada: MFE (*Maximum
+Favorable Excursion*) dos 47 trades, com os candles de **1 minuto** da janela em que cada
+posição ficou aberta.
+
+### 8.1 A percepção estava certa, e a §0 também
+
+| | |
+|---|---:|
+| trades que **em algum momento** estiveram no lucro (líq. de taxa) | **41 / 47 = 87,2%** |
+| trades que **fecharam** no lucro | 21 / 47 = 44,7% |
+
+As duas leituras são verdadeiras e medem coisas diferentes. O motor **entra bem** em quase 9 de
+cada 10 trades; ele não fica com o dinheiro. Isso reconcilia a §0 (que dizia "a assimetria
+existe") com a percepção de quem olha o painel.
+
+**20 trades foram de lucro a prejuízo:** estavam **+R$230** somados e fecharam **−R$399**.
+
+⚠️ **A soma dos picos (R$1.550) NÃO é um alvo.** Sair no topo de todo trade é retrovisor —
+nenhuma regra alcança. Registrar "perdemos R$1.240" seria construir uma referência impossível e
+depois cobrar o sistema por não alcançá-la. O número que decide é o dos 20 que viraram: ali não
+se trata de pegar o topo, e sim de não devolver ganho que já existia.
+
+### 8.2 A causa — e ela é o espelho exato da §1
+
+**19 dos 20 nunca tiveram o trailing armado.** Ele só arma em `+trailing_dist` de **PREÇO**
+(2%); abaixo disso a proteção é **zero** e o stop segue 3×ATR abaixo da entrada. Como o lucro
+que o operador vê é **ROE** (= preço × alavancagem), o limiar em preço vira um limiar em ROE que
+**escala com a alavancagem**:
+
+| lev | ROE totalmente desprotegido |
+|---:|---:|
+| 3x | 6% |
+| 10x | 20% |
+| 14x | 28% |
+| 20x | **40%** |
+
+```
+#38 NEAR  14x  pico +23,56% ROE = só 1,68% de preço (faltou 0,32pp) -> fechou -27,59%  -R$47,04
+#39 UNI   15x  pico +21,27% ROE = só 1,42% de preço (faltou 0,58pp) -> fechou -30,20%  -R$47,00
+#40 FIL   11x  pico +17,24% ROE = só 1,57% de preço (faltou 0,43pp) -> fechou -21,29%  -R$14,80
+#28 APT   15x  pico  +6,94% ROE = só 0,46% de preço                 -> fechou -57,87%  -R$40,52
+```
+
+O efeito é perverso na direção que mais dói: **convicção alta ⇒ alavancagem alta ⇒ mais ROE sem
+proteção.** O sistema desprotege exatamente os trades em que mais confia. É o espelho do
+`alvo_roe=5` que a §7.3 do `VEREDITO-M4.md` já apontou (fixo em ROE, a 20x dispara com 0,25% de
+preço = ruído): **um knob cego à alavancagem para cada lado, nenhum dos dois escolhido — os dois
+herdados.**
+
+---
+
+## 9. A régua vinha medindo um sistema que não é o que roda
+
+Rodado em 2026-08-24; saídas literais em `MEDICAO-ZERO-A-ZERO-2026-08-24.md`.
+
+O card `[Q-11]` propôs a guarda `be_em_R` (zero-a-zero disparado em múltiplo de R, e não em
+preço nem em ROE — mesma correção de unidade da §1 aplicada ao outro parâmetro). Medi-la exigiu
+o `[Q-10]` antes: **a régua roda `LEV` fixo em 10x e a produção roda 2x–20x por convicção**, e o
+defeito que a guarda ataca *é* a interação entre alavancagem e limiar. A 10x fixo o limiar é 20%
+de ROE para todo mundo, uniforme, e a patologia some — **nenhuma rodada anterior poderia
+tê-la encontrado.**
+
+### 9.1 A guarda não passou, e o diagnóstico por braço diz por quê
+
+```
+be_em_R   trades      PnL    vezes que o zero-a-zero ARMOU
+None      33989    +24045              0
+0.5       36841    +21284           5737     <- age muito, resultado PIOR
+1.0       34313    +23518            725
+1.5       34033    +24331            138     <- quase não arma
+```
+
+**Quanto mais a guarda age, pior o resultado.** O braço que "venceu" (1,5R) armou 138 vezes em
+34.033 trades — 0,4%: venceu por ser quase indistinguível de não existir. E é **teto da grade**,
+mais um *boundary hit*, na mesma direção de sempre — o treino quer a guarda agindo o mínimo. No
+fold 1 ele escolheu `None`, sem guarda nenhuma.
+
+A ressalva escrita no card **antes** de medir (*"proteger cedo também mata trade que mergulha e
+volta"*) era o risco real, e ela se confirmou: as mesmas oscilações que viram prejuízo são as que
+viram lucro grande. O `be_em_R=None` estava na grade como hipótese nula e **sobreviveu de novo**
+— terceira vez no dia, depois do `sd_min` e do `k`.
+
+### 9.2 O contraste de atribuição, e o que ele revelou
+
+A rodada da grade mudou **dois** fatores ao mesmo tempo (guarda + alavancagem), então ela não
+atribui nada. O contraste isola: braço `be_em_R=None` sozinho, mesmas 6 configs de entrada do
+baseline da §7, mesma política, mesma janela — **único fator diferente: `lev_modo`.**
+
+| | Sharpe | IC95% | PSR | RC p | folds + | maior fold |
+|---|---:|---:|---:|---:|---:|---:|
+| lev **fixo 10x** (baseline §7) | 0,645 | (−0,714 ; 1,824) | 0,854 | 0,2014 | 3/5 | 0,56 |
+| lev **convicção**, sem guarda | **0,976** | (−0,353 ; 2,074) | **0,954** | 0,1404 | **4/5** | **0,41** |
+| lev convicção + grade de guarda | 0,985 | (−0,345 ; 2,081) | 0,9557 | 0,1434 | 4/5 | 0,41 |
+
+**A alavancagem responde por +0,331 de Sharpe. O zero-a-zero, por +0,009.**
+
+E o ponto que reorganiza tudo: **2x–20x por convicção é o que a produção JÁ RODA**
+(`auto_lev_modo=conviccao`, `auto_lev_min=2`, `auto_lev_max=20`, na config do banco). Ou seja, os
+vereditos anteriores — inclusive o `SEM EVIDÊNCIA DE EDGE` do `VEREDITO-M4.md` sobre a política
+`C trailing`, que é o **produto declarado deste projeto** — foram emitidos sobre uma
+configuração que ninguém executa.
+
+### 9.3 O que isso NÃO é
+
+**Não é edge encontrado.** Medido no objeto certo, o veredito é o mesmo:
+
+```
+=> VEREDITO: SEM EVIDENCIA DE EDGE
+   IC95% do Sharpe anualizado: [-0,353 ; 2,074]   <- ainda inclui o zero
+   Reality Check p = 0,1404                        <- longe de 0,05
+```
+
+O portão é **conjunção** (IC sem o zero **e** PSR > 0,95 **e** RC p < 0,05). Passou um dos três.
+A conclusão do projeto **não muda** — o que muda é que a margem encolheu e agora está medida
+sobre o que de fato executa.
+
+**E não é um efeito de tamanho.** `pnl = valor · lev · (move − 2·taxa)` é *exatamente*
+proporcional à alavancagem: escalar tudo por um fator constante não move o Sharpe em nada. O que
+move é a **variação** — em particular o cap geométrico do `[P1-11]`, que corta a alavancagem
+quando o stop é largo. Na prática isso é **dimensionamento por volatilidade**: posição menor no
+setup mais volátil. É efeito de gestão de risco, não de previsão — e é a única explicação
+compatível com a álgebra acima.
+
+### 9.4 O que fica
+
+- **Card novo, e é o mais importante do dia:** re-emitir o veredito do M4 sobre a configuração
+  de produção. Não para buscar um número melhor — para que o `SEM EVIDÊNCIA` do projeto passe a
+  descrever o sistema que existe. Enquanto isso não for feito, o `VEREDITO-M4.md` e o
+  `README.md` afirmam algo verdadeiro sobre um objeto que não é o nosso.
+- **`[Q-11]` fecha como medido e reprovado**, com o mecanismo registrado. A ideia não era ruim —
+  ela é derrubada por um fato que só o dado tem.
+- **`[Q-10]` fecha como aceito**: foi ele que tornou visível a diferença entre régua e produção.
+- A §8.2 (limiar cego à alavancagem) **segue de pé como defeito**, mesmo com a guarda reprovada:
+  é incoerência de unidade, não proposta de performance — igual à §1.
+
+---
+
 ## Reprodução
 
 De dentro da VM, via `az vm run-command --scripts @script.sh`:
