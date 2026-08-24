@@ -660,6 +660,36 @@ prospectivamente quanto ele distorce o que foi medido — e ele **não fecha nes
   em 2026-08-24**.
 * O card fica em 🔍 Validando; o relatório comparativo é da matriz quando a amostra fechar.
 
+#### Medição de 2026-08-24 03:44 UTC — **a amostra ainda NÃO fechou**
+
+A §4h do `PLANO-EXECUCAO-2026-08-20.md` previa que ela chegaria *"em 2026-08-24, sozinha"*. Chegou
+perto e não chegou: o critério de `db.relatorio_fluxo` é **≥100 em CADA grupo**, e o banco está em
+**97 que passaram / 88 rejeitados**. Faltam **3 e 12**.
+
+```
+passou:    n=97  alvo=40  stop=56  aberto=1   win=41.7%   ret_1h=-0.353  ret_4h=-0.290  ret_24h=-1.677  fluxo_medio=42.4
+rejeitado: n=88  alvo=29  stop=58  aberto=1   win=33.3%   ret_1h=-0.491  ret_4h=-0.343  ret_24h=-1.657  fluxo_medio=57.1
+delta_win=+8.4 p.p.   z=1.16   p=0.246
+veredito: amostra insuficiente (97 passaram / 88 rejeitados; o card pede >=100 de cada)
+```
+
+**O job está saudável — o gargalo é mercado, não processamento.** `marcar_desfechos` drena
+`DESFECHOS_POR_SCAN = 6` por varredura (`signal_engine.py:223`) e há 1.334 sinais sem desfecho,
+o que à primeira vista parece uma fila represada. Não é: desses, apenas **3 já venceram** as 24h e
+esperam o job. O resto ainda não completou o horário. O serviço está `active` desde
+2026-08-23 16:52. A vazão observada é de ~4 a 18 rejeições marcadas por hora, então as 12 que
+faltam são **algumas horas**, não dias.
+
+⚠️ **O número preliminar acima não autoriza conclusão, e a direção dele é tentadora.** O delta de
+**+8,4 p.p.** favorece o portão, mas `p = 0,246` — não se distingue de ruído, e o próprio
+`relatorio_fluxo` recusa emitir veredito abaixo de 100. Citar o +8,4 como se fosse resultado seria
+exatamente o erro que o `c8b4593` teve de desfazer neste documento.
+
+O que **já** dá para observar sem depender do corte: **os dois grupos têm retorno médio negativo em
+todos os três horizontes**, e praticamente idêntico em 24h (−1,68% contra −1,66%). Seja qual for o
+veredito do portão, a população de sinais que ele filtra tem deriva negativa dos dois lados — o que
+é coerente com o `SEM EVIDÊNCIA DE EDGE` da §3.1 e não depende de a amostra fechar.
+
 **O que o `[Q-4]` dá ao `[P1-10]` é ressalva, não insumo.** O veredito das políticas não depende
 dele. O que ele responde é *quanto* o portão de fluxo desloca o que foi medido — e a direção do
 efeito no P&L é **desconhecida** hoje (é literalmente o que o `[Q-5]` declara no limite (b)). Até
@@ -810,6 +840,39 @@ essa label **não fecha sem humano assinando**, e o auditor automático roda os 
 E vale a regra que está no `CLAUDE.md` §2, porque ela decide o caso de dúvida: **apertar guarda
 pode; afrouxar, só o dono.** Trocar a política de saída do vivo não é apertar nem afrouxar uma
 guarda — é trocar a estratégia. Sobe.
+
+
+### 8.1 A assinatura, com data — 2026-08-24
+
+**O dono assinou a segunda ponta do item 4 do aceite: manter o default, verificando em operação
+real.** Registrado com as palavras dele: *"vou averiguar tudo em prova real, conforme o robô
+trabalha. Vou auditar o trabalho dele."*
+
+O que isso decide, exatamente:
+
+* **O default de saída do vivo NÃO muda.** `trailing_ativo=1` (`db.py:95`) continua sendo o que
+  roda — a política `C`, medida nesta rodada em 5.342 trades OOS e **sem evidência de edge**.
+* **A decisão é consciente e está documentada**, que é literalmente o que o `[P1-10]` pede como
+  alternativa a decidir pelo resultado. Não é omissão nem adiamento.
+* **O motivo declarado é verificação prospectiva**, e ele **não é o mesmo** que a §7.2 tinha
+  escrito. A §7.2 recomendava manter por *continuidade da série*; o dono manteve para **auditar o
+  comportamento do robô em operação real**. As duas apontam para a mesma ação e não para a mesma
+  coisa: continuidade é argumento de não-desperdiçar, auditoria em produção é argumento de
+  **colher mais evidência**. Fica escrito o motivo real, porque é ele que diz o que faria a
+  decisão mudar.
+
+**O que essa assinatura NÃO cobre**, e portanto continua aberto:
+
+* O `[Q-4]` — amostra ainda incompleta em 24/08 (ver §5 e a nota abaixo). Assinar o `[P1-10]` não
+  fecha o `[Q-4]`: são perguntas diferentes.
+* A §7.3 (trocar `trailing_dist` por `trailing_k_atr`) — segue como recomendação escrita e não
+  assinada. Manter o default **é** manter o `trailing_dist=2%` fixo, com a incoerência de unidade
+  que a §7.3 descreve.
+* O card `[P1-12]`, que a auditoria abriu e que **não** é do M4 fechar.
+
+**A condição de revisão, que a auditoria prospectiva impõe por si:** se a operação real produzir
+comportamento fora do que esta rodada mediu, a decisão de manter foi tomada **sob a evidência
+desta tabela** e volta à mesa. O número contra o qual auditar está na §3.1.
 
 ---
 
