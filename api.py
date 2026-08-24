@@ -28,6 +28,7 @@ import mercado
 import dca
 import autotrader
 from logbot import log
+from versao import VERSAO
 
 POLL_ATUALIZAR = 15   # marca posições a cada 15s
 INTERVALO_SCAN = 60   # [P2-15] scan de sinais a cada 60s, por RELÓGIO (ver _scan_devido)
@@ -136,7 +137,7 @@ DASH_PASS = os.environ.get("DASH_PASS", "")
 # abertos para qualquer um em produção: a guarda que recusa acesso externo sem DASH_PASS
 # só protege se não houver como desligá-la. Sem senha, o backend atende só loopback.
 # Com senha, /docs e /openapi.json somem — mapa da API não é coisa de deploy público.
-app = FastAPI(title="Cripto Bot API", version="0.3", lifespan=lifespan,
+app = FastAPI(title="Cripto Bot API", version=VERSAO, lifespan=lifespan,
               docs_url=None if DASH_PASS else "/docs",
               redoc_url=None if DASH_PASS else "/redoc",
               openapi_url=None if DASH_PASS else "/openapi.json")
@@ -547,7 +548,7 @@ COMMIT = _commit_em_producao()
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "versao": "0.3", "commit": COMMIT}
+    return {"status": "ok", "versao": VERSAO, "commit": COMMIT}
 
 
 @app.get("/status")
@@ -1082,8 +1083,11 @@ def _prova_api():
     # ---------- [P2-3] /health responde QUAL commit esta rodando
     print("  [P2-3] /health =", health())
     h = health()
-    check("/health continua com status e versao (sem regressao)",
-          h["status"] == "ok" and h["versao"] == "0.3", str(h))
+    # a auto-checagem confere que a versao VEM DA FONTE UNICA -- nunca que ela vale um
+    # numero especifico. Cravar o numero aqui foi o que transformou "esqueci de subir a
+    # versao" em "nao pode subir a versao" (ver `versao.py`).
+    check("/health continua com status e versao, e a versao vem de versao.VERSAO",
+          h["status"] == "ok" and h["versao"] == VERSAO, str(h))
     check("/health devolve o commit", "commit" in h)
     check("o commit vem do valor lido no import, nao de um subprocesso por requisicao",
           h["commit"] is COMMIT)

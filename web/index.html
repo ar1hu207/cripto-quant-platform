@@ -885,7 +885,12 @@ function gateSacode(){ const c=$g('gate-form');
 async function gateSaude(){ const s=$g('gate-status'), t=$g('gate-status-txt');
   try{
     const j=await (await fetch(API+'/health',{cache:'no-store'})).json();
-    s.className='gate-status up'; t.textContent='backend online · v'+j.versao;
+    // versao E commit, os dois. A versao diz o que o sistema E; o commit diz qual codigo esta
+    // RODANDO -- e os dois nao andam juntos, porque a main avanca e o deploy e ato deliberado
+    // (CLAUDE.md 5). Mostrar so a versao foi o que deixou o painel anunciar v0.3 por meses.
+    // Commit ausente e declarado como tal: 'sem git' nunca vira string parecida com um sha.
+    const sha=j.commit?(' · '+String(j.commit).slice(0,7)):' · sem git';
+    s.className='gate-status up'; t.textContent='backend online · v'+j.versao+sha;
   }catch{ s.className='gate-status down'; t.textContent='backend sem resposta'; } }
 
 // 429 = throttle do backend (15 senhas erradas bloqueiam o IP). Trava o botão e conta o
