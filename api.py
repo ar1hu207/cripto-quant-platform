@@ -588,6 +588,10 @@ def status():
     return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
             "funding": simulador.funding_medicao,
             "caps_geometria": autotrader.CAPS_GEOMETRIA,
+            # [P2-39] o teto de TAMANHO, ao lado do teto de ALAVANCAGEM. Os dois capam, e
+            # capavam — só que este capava calado. Publicado do mesmo jeito e pela mesma
+            # razão: quem lê `total` alto contra `ciclos` decide, e a decisão é do dono.
+            "caps_tamanho": autotrader.CAPS_TAMANHO,
             "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 

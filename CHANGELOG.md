@@ -58,11 +58,24 @@ Versionamento nasce, e o dia da investigação do motor entra no registro.
 - `INVESTIGACAO-MOTOR-2026-08-24.md` (§1–§9) e as saídas literais das três rodadas em
   `VARREDURA-GEOMETRIA-2026-08-24.md` e `MEDICAO-ZERO-A-ZERO-2026-08-24.md`.
 
+### Corrigido
+- **`P2-40`** — `trades.ret_pct_liq`: coluna nova com o retorno **líquido** (`pnl / margem`).
+  `ret_pct` continua sendo o **bruto** (`move × lev`), com o nome do que é. Duas colunas em vez
+  de trocar o significado de uma: as linhas já gravadas significam exatamente "ROE bruto", e
+  reescrevê-las viraria duas séries coladas com o mesmo nome. Mesmo padrão do `P2-10`, que deu
+  coluna própria ao funding. **Não muda comportamento** — muda o que o diário registra.
+- **`P2-39`** — `autotrader.CAPS_TAMANHO`, publicado no `/status` ao lado do `caps_geometria`.
+  O cap `auto_max_valor_frac` continua exatamente onde estava; ele só deixou de agir calado.
+  Registra `risco_pedido`, `risco_efetivo` e `perda_de_risco` (a fração do risco configurado
+  que o teto comeu). **Não aperta nem afrouxa guarda nenhuma** — há teste fixando que
+  `_tamanho` devolve o mesmo número de antes.
+
 ### Defeitos abertos e registrados (não corrigidos nesta versão)
 - Trailing em % de preço contra stop em ATR — na faixa `sd` 1–2% o trade não tem ramo vencedor.
 - Trailing só arma em +2% de **preço**, e em ROE isso escala com a alavancagem (40% a 20x).
-- `auto_max_valor_frac` desliga o alvo de risco em silêncio (risco realizado varia ~600×).
-- `ret_pct` gravado bruto enquanto `pnl_reais` é líquido.
+
+Os dois são incoerência de unidade e seguem válidos como diagnóstico. Os remédios testados em
+24/08 (`Q-8`, `Q-9`, `Q-11`) **não passaram pela régua**, então nenhum default mudou.
 
 ---
 

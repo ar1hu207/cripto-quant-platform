@@ -212,7 +212,8 @@ def _migrar(c):
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER")],
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
-                            ("risco_inicial", "REAL"), ("funding", "REAL")]}
+                            ("risco_inicial", "REAL"), ("funding", "REAL"),
+                            ("ret_pct_liq", "REAL")]}
     for tabela, novas in faltantes.items():
         existentes = {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}
         for nome, tipo in novas:
