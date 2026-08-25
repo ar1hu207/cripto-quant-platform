@@ -49,11 +49,39 @@ Para a barra `i`, com a série de open interest alinhada pela regra da Fase 1
 
 ```
 d_oi(i)   = sum_open_interest(i) − sum_open_interest(i−1)
-direcao   = +1 (LONG) ou −1 (SHORT), a que o scoring já decidiu
-concorda  = (d_oi(i) * direcao) > 0
+concorda  = d_oi(i) > 0
 ```
 
-Nada de limiar, nada de janela, nada de suavização. **Uma diferença e um sinal.** Três motivos:
+> ### ⚠️ EMENDA — 2026-08-25, ANTES da rodada, com zero resultado visto
+>
+> **A versão original desta seção estava mecanicamente errada, e a correção está aqui em vez
+> de reescrita em silêncio.** Eu havia escrito `concorda = (d_oi * direcao) > 0`.
+>
+> **Por que está errado.** O open interest sobe quando **posição nova é aberta**, e todo
+> contrato tem um comprado e um vendido — logo o OI **não tem lado**. Quem tem lado é o
+> preço, e a direção do preço já é a direção do sinal. Então:
+>
+> | preço | OI | o que é | o sinal está |
+> |---|---|---|---|
+> | sobe | sobe | longs novos | confirmado |
+> | cai | sobe | shorts novos | confirmado |
+> | sobe | cai | short se cobrindo | não confirmado |
+> | cai | cai | long liquidando | não confirmado |
+>
+> Confirmação é `d_oi > 0` nos dois sentidos. A fórmula antiga, num SHORT, exigia OI
+> **caindo** — exatamente o desmonte que a hipótese quer rejeitar. Ficaria invertida em
+> metade dos trades.
+>
+> **Quem pegou, e quando.** `test_a_confirmacao_independe_da_direcao`, escrito para separar
+> justamente as duas fórmulas pelo lado SHORT, que é onde elas discordam. Pegou **antes de a
+> régua rodar**: nenhum resultado de edge tinha sido produzido, e nenhuma unidade de
+> `n_trials` tinha sido gasta. É correção de definição, não escolha pós-fato.
+>
+> **O que isso NÃO autoriza.** A emenda é de mecânica, não de conveniência. Depois de a régua
+> rodar, nenhuma linha deste documento se mexe — nem esta.
+
+Nada de limiar, nada de janela, nada de suavização, e **nenhuma referência à direção**. Uma
+diferença e um sinal. Três motivos:
 
 - **lookback de uma barra** passa folgado no teto de paridade de 14 dias (§4 do plano) — o bot
   ao vivo consegue calcular isso com uma chamada ao REST;
@@ -77,7 +105,7 @@ Quatro modos de `oi_modo`, e o primeiro é a **hipótese nula**:
 | `oi_modo` | o que faz |
 |---|---|
 | `"off"` | **nula** — o open interest não é consultado. É a estratégia de hoje, sem mudança. |
-| `"concorda"` | recusa o sinal cujo `d_oi` discorda da direção |
+| `"concorda"` | recusa o sinal quando `d_oi <= 0` (desmonte de posição) |
 | `"concorda_tend"` | idem, mas só quando `adx >= adx_min` (em tendência); fora disso passa |
 | `"peso"` | não recusa: soma `+10` de convicção quando concorda, `−10` quando discorda |
 

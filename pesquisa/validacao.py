@@ -1269,7 +1269,7 @@ def _init_worker(dfs, funding_8h):
     _DFS_W, _FUNDING_W = dfs, funding_8h
 
 
-def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None):
+def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None, alvo=None):
     """Pre-computa `{cfg: trades}` em processos. NAO muda estatistica nenhuma: `walk_forward`
     chama o gerador uma vez por config e fatia depois (o contrato de causalidade dele), entao
     calcular as mesmas configs em paralelo devolve exatamente os mesmos trades. E so tempo de
@@ -1279,7 +1279,7 @@ def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None):
     out, feito = {}, 0
     with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
                                 initargs=(dfs, funding_8h)) as pool:
-        for cfg, tr in pool.map(_trades_geo, grid):
+        for cfg, tr in pool.map(alvo or _trades_geo, grid):
             out[cfg] = tr
             feito += 1
             print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
@@ -1473,6 +1473,92 @@ def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H):
         fora.append((nome, kw, r))
     relatorio_politicas(fora)
     return fora
+
+
+# ---------------------------------------------------------------------------
+# [Q-17] Divergencia open interest x preco -- a primeira informacao do projeto que NAO vem
+# do candle.
+#
+# A hipotese, a grade e o prognostico estao em `PRE-REGISTRO-Q17-OI-2026-08-25.md`, escritos
+# ANTES desta rodada existir. O que segue e a execucao do que aquele documento fixou, e nada
+# alem: nao ha varredura de limiar de `d_oi`, nem das outras colunas do dump. As razoes
+# long/short NAO reconciliam com o caminho ao vivo (medido: 40/287 e 28/287 dentro do
+# arredondamento) e estao barradas de decidir, independentemente do que a regua disser.
+#
+# `"off"` esta na grade como HIPOTESE NULA, mesmo padrao do [Q-9] e do [Q-11]: se o open
+# interest nao ajudar, o treino escolhe operar sem ele -- e isso e resposta, nao fracasso.
+GRID_OI_MODO = ("off", "concorda", "concorda_tend", "peso")
+GRID_OI = [(mc, ax, om) for mc in (50, 55, 65) for ax in (22, 25)
+           for om in GRID_OI_MODO]
+
+# [F10] Piso contado, CUMULATIVO. O piso do projeto estava em 820 (a rodada do [Q-12], hoje).
+# A parcela deste arquivo era GRID x N_FOLDS = 30; esta rodada faz 24 x 5 = 120.
+# 820 - 30 + 120 = 910, e arredondo para 940 absorvendo o baseline que roda junto. Piso maior
+# e DSR menor, que e a unica direcao em que este projeto aceita errar.
+N_TRIALS_OI = 940
+
+
+def _trades_oi(cfg):
+    """Uma config da grade do [Q-17] nas 12 moedas. Modulo-level por causa do
+    ProcessPoolExecutor no Windows (spawn)."""
+    mc, ax, om = cfg
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, saida="trailing",
+                                 trailing_dist=0.02, oi_modo=om)
+        except Exception:
+            pass
+    return cfg, tr
+
+
+def paineis_com_oi(dfs=None):
+    """Anexa o open interest a cada painel, UMA vez, antes da varredura.
+
+    Fica separado de `baixar_paineis` de proposito: toda rodada anterior a este card continua
+    chamando `baixar_paineis` e recebendo exatamente o painel que recebia, sem coluna nova e
+    sem download novo.
+    """
+    from pesquisa.backtest_plataforma import anexar_oi
+    dfs = dfs if dfs is not None else baixar_paineis()
+    print(f"anexando open interest a {len(dfs)} moedas...", flush=True)
+    saida = {}
+    for c, df in dfs.items():
+        d = anexar_oi(df, c, dias=DIAS)
+        n_ok = int(d["d_oi"].notna().sum())
+        print(f"  {c:10s} {n_ok}/{len(d)} barras com d_oi medido "
+              f"({100 * n_ok / max(1, len(d)):.1f}%)", flush=True)
+        saida[c] = d
+    return saida
+
+
+def varredura_oi(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-17] A regua sobre a grade de open interest, e o baseline na MESMA janela.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao oi
+
+    O baseline (`C trailing 2% fixo`) e RE-MEDIDO aqui em vez de citado do `VEREDITO-M4.md`:
+    aquele numero saiu de outra janela, e comparar Sharpe de datas diferentes e comparar duas
+    coisas com um fator a mais -- o fator seria o dia. Ele tambem roda sobre o painel COM a
+    coluna anexada, para que a unica diferenca entre baseline e varredura seja o `oi_modo`, e
+    nao o painel.
+    """
+    dfs = paineis_com_oi(dfs)
+
+    print(f"\n[baseline] C trailing 2% fixo — {len(GRID)} configs", flush=True)
+    base = walk_forward(gerador_tendencia(dfs, "tendencia", funding_8h,
+                                          {"saida": "trailing", "trailing_dist": 0.02}),
+                        [_chave(g) for g in GRID], n_trials=N_TRIALS_OI,
+                        rotulo=f"C trailing 2% fixo | {TF} {DIAS}d | {LEV}x")
+    relatorio(base)
+
+    print(f"\n[varredura Q-17] oi_modo — {len(GRID_OI)} configs", flush=True)
+    por_cfg = gerar_por_cfg_paralelo(GRID_OI, dfs, funding_8h, alvo=_trades_oi)
+    oi = walk_forward(lambda cfg: por_cfg[cfg], GRID_OI, n_trials=N_TRIALS_OI,
+                      rotulo=f"C trailing 2% + portao de OI | {TF} {DIAS}d | {LEV}x")
+    relatorio(oi)
+    return {"baseline": base, "oi": oi}
 
 
 def baixar_paineis():
@@ -1746,6 +1832,9 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "politicas-prod":
         comparar_politicas_producao()                 # [Q-12] as 4 politicas na config de producao
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "oi":
+        varredura_oi()                                # [Q-17] divergencia OI x preco
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "zeroazero":
         varredura_zero_a_zero()                       # [Q-11] stop zero-a-zero, lev por conviccao
