@@ -41,7 +41,12 @@ import pandas as pd
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "metricas")
 
-BASE_DUMP = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
+# O CDN, e nao o bucket S3 de origem. O bucket fica em ap-northeast-1 (Toquio) e daqui a
+# viagem custa caro: medido em 2026-08-25, 24 arquivos com 32 conexoes levaram 1,15 s pelo S3
+# contra 0,85 s pelo CDN -- extrapolado para os ~13.100 arquivos da janela da regua, 10,5 min
+# contra 7,8 min. O S3 continua sendo o unico que sabe LISTAR o bucket, mas este modulo so
+# baixa por chave exata, entao nao precisa de listagem.
+BASE_DUMP = "https://data.binance.vision"
 BASE_REST = "https://fapi.binance.com"
 
 MIN_MS = 60_000
@@ -252,11 +257,12 @@ def _para_frame(texto):
     return df.drop(columns=["create_time", "symbol"], errors="ignore")
 
 
-def baixar_metricas(par, dias=1095, usar_cache=True, trabalhadores=8, ate=None):
+def baixar_metricas(par, dias=1095, usar_cache=True, trabalhadores=32, ate=None):
     """Todos os buckets de 5 min de `dias` dias, um DataFrame ordenado por `timestamp`.
 
-    `trabalhadores` baixa em paralelo porque sao milhares de arquivos pequenos; o cache
-    imutavel faz a segunda chamada nao tocar a rede.
+    `trabalhadores` baixa em paralelo porque sao milhares de arquivos pequenos e o gargalo
+    e latencia, nao banda -- 32 foi medido em ~28 arquivos/s. O cache imutavel faz a segunda
+    chamada nao tocar a rede.
     """
     fim = ate or datetime.datetime.now(datetime.timezone.utc).date()
     simbolo = par_para_simbolo(par)
