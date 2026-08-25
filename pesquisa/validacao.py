@@ -1403,6 +1403,78 @@ def varredura_zero_a_zero(dfs=None, funding_8h=FUNDING_8H):
     return res
 
 
+# ---------------------------------------------------------------------------
+# [Q-12] As MESMAS quatro politicas do [P1-10], na configuracao que a PRODUCAO executa.
+#
+# O `POLITICAS_M4` acima roda sob `LEV` fixo (10x), porque era o unico modo que existia quando
+# o M4 foi medido. A producao roda `auto_lev_modo=conviccao`, 2x-20x. Entao o veredito
+# publicado -- inclusive o `SEM EVIDENCIA DE EDGE` sobre o `C trailing`, que e o PRODUTO
+# declarado deste projeto -- descreve uma configuracao que ninguem executa.
+#
+# Isto nao e caca a numero melhor. O contraste de 24/08 ja mostrou que corrigir o objeto NAO
+# muda o veredito (IC do Sharpe segue incluindo o zero, RC p = 0,1404). E sobre a afirmacao
+# publicada descrever o sistema que existe. Um projeto cujo produto e o "sem edge" honesto nao
+# pode ter o seu unico numero apontado para o objeto errado.
+#
+# So `lev_modo` muda em relacao ao `POLITICAS_M4`. As saidas sao as mesmas, linha por linha:
+# a comparacao entre as quatro continua com um fator so.
+POLITICAS_M4_PROD = tuple(
+    (f"{nome} [prod]", {**kw, "lev_modo": "conviccao"}) for nome, kw in POLITICAS_M4
+)
+
+# [F10] Piso contado, cumulativo no dia (ver N_TRIALS_ZAZ): 700 + 4 politicas x 6 configs x 5
+# folds = 820. A tabela de sensibilidade que o relatorio imprime SEMPRE recupera o DSR a
+# n_trials=100, que e o numero sob o qual o VEREDITO-M4 foi emitido -- entao subir o piso aqui
+# nao torna a comparacao com ele irrecuperavel, so a torna honesta por default.
+N_TRIALS_PROD = 820
+
+
+def _trades_pol(par):
+    """(politica, cfg) -> trades. Modulo-level por causa do ProcessPoolExecutor no Windows."""
+    (nome, kw), (mc, ax) = par
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, **kw)
+        except Exception:
+            pass
+    return nome, (mc, ax), tr
+
+
+def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-12] A x B x C x C-kATR na regua, sob a configuracao de PRODUCAO.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao politicas-prod
+    """
+    import concurrent.futures as cf
+    dfs = dfs if dfs is not None else baixar_paineis()
+    grid = [_chave(g) for g in GRID]
+    pares = [(pol, cfg) for pol in POLITICAS_M4_PROD for cfg in grid]
+    print(f"\n[Q-12] {len(POLITICAS_M4_PROD)} politicas x {len(grid)} configs = {len(pares)} "
+          f"rodadas, lev por conviccao", flush=True)
+
+    por_pol, feito = {}, 0
+    n = max(1, min(6, (os.cpu_count() or 2) - 2))
+    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                initargs=(dfs, funding_8h)) as pool:
+        for nome, cfg, tr in pool.map(_trades_pol, pares):
+            por_pol.setdefault(nome, {})[cfg] = tr
+            feito += 1
+            print(f"  [{feito}/{len(pares)}] {nome} {cfg} -> {len(tr)} trades", flush=True)
+
+    fora = []
+    for nome, kw in POLITICAS_M4_PROD:
+        print(f"\n{'=' * 78}\nPOLITICA: {nome}   {kw}\n{'=' * 78}", flush=True)
+        r = walk_forward(lambda cfg, _p=por_pol[nome]: _p[cfg], grid,
+                         n_trials=N_TRIALS_PROD,
+                         rotulo=f"tendencia | {TF} {DIAS}d | lev conviccao | saida: {nome}")
+        relatorio(r)
+        fora.append((nome, kw, r))
+    relatorio_politicas(fora)
+    return fora
+
+
 def baixar_paineis():
     """As 12 moedas, preparadas uma vez. Separado porque a comparacao de politicas roda quatro
     walk-forwards sobre EXATAMENTE os mesmos dados -- baixar de novo por politica nao seria so
@@ -1671,6 +1743,9 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "geometria":
         varredura_geometria()                         # [Q-8]/[Q-9] k e sd_min varridos no treino
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "politicas-prod":
+        comparar_politicas_producao()                 # [Q-12] as 4 politicas na config de producao
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "zeroazero":
         varredura_zero_a_zero()                       # [Q-11] stop zero-a-zero, lev por conviccao

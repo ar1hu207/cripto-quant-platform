@@ -44,6 +44,16 @@ Versionamento nasce, e o dia da investigação do motor entra no registro.
   ainda inclui o zero, RC p = 0,1404). Ver `Q-12`: o veredito publicado descreve uma
   configuração que ninguém executa.
 
+### Medido em 2026-08-25 (`Q-12`)
+- **As quatro políticas do M4 re-medidas sob a configuração de PRODUÇÃO** (`lev_modo="conviccao"`),
+  `n_trials=820`. **As quatro seguem `SEM EVIDÊNCIA DE EDGE`** e a ordenação entre elas não muda
+  (C 2% > C 3×ATR > A > B): a conclusão central do projeto sobrevive à correção do objeto.
+  As magnitudes mudam — `C trailing 2% fixo`, que é o que roda ao vivo, sai com Sharpe 0,976
+  contra 0,645 a 10x fixo. **As quatro melhoraram**, o que localiza o ganho no dimensionamento e
+  não na gestão da posição.
+- `VEREDITO-M4.md` e `README.md` ganham o adendo dizendo sob qual configuração os números
+  antigos falam. Silêncio não era opção.
+
 ### Documentado
 - `INVESTIGACAO-MOTOR-2026-08-24.md` (§1–§9) e as saídas literais das três rodadas em
   `VARREDURA-GEOMETRIA-2026-08-24.md` e `MEDICAO-ZERO-A-ZERO-2026-08-24.md`.

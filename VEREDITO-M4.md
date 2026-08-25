@@ -1,5 +1,36 @@
 # VEREDITO-M4 — a política de saída que está viva, medida pela régua corrigida
 
+> ## ⚠️ ADENDO 2026-08-25 — sobre QUAL configuração os números abaixo falam
+>
+> **Todos os números deste documento foram medidos com `LEV` fixo em 10x.** A produção roda
+> `auto_lev_modo=conviccao`, 2x–20x (`db.CONFIG_PADRAO`). Quando este veredito foi emitido, o
+> `backtest_ativo` não tinha modo de alavancagem variável — ele nasceu no `[Q-10]`, em
+> 2026-08-24 —, então a limitação não era escolha: era o instrumento que existia.
+>
+> **O `[Q-12]` re-mediu as quatro políticas sob a configuração de produção**
+> (`VEREDITO-M4-PRODUCAO-2026-08-25.md`; leitura em `INVESTIGACAO-MOTOR-2026-08-24.md` §10):
+>
+> | política | Sharpe aqui (10x fixo) | Sharpe em produção | veredito em produção |
+> |---|---:|---:|---|
+> | A stop+flip de regime | 0,124 | 0,176 | SEM_EVIDÊNCIA |
+> | B auto-saída | −1,018 | −0,408 | SEM_EVIDÊNCIA |
+> | C trailing 2% fixo | 0,645 | **0,976** | SEM_EVIDÊNCIA |
+> | C trailing 3×ATR | 0,436 | 0,825 | SEM_EVIDÊNCIA |
+>
+> **O que sobrevive:** o veredito. As quatro seguem `SEM EVIDÊNCIA DE EDGE` sob a configuração
+> real, e a **ordenação entre elas não muda** (C 2% > C 3×ATR > A > B). A conclusão central deste
+> documento está certa.
+>
+> **O que não sobrevive:** a magnitude. Cada número de Sharpe, PSR e DSR abaixo descreve uma
+> configuração que ninguém executa. Quem citar este documento tem de citar o Sharpe de
+> **produção**, não o desta página.
+>
+> **E as quatro melhoraram**, o que é achado próprio: o ganho não é de uma saída específica, é
+> sistemático — vem do **dimensionamento**, não da gestão da posição.
+>
+> A §7.3 abaixo segue de pé sem alteração: ela nunca foi argumento de performance, e o `[Q-8]`
+> varreu o `k` no treino em 24/08 e devolveu *boundary hit* — a pergunta do `k` continua aberta.
+
 > **Estado em 2026-08-24: os números chegaram e estão colados.** As quatro políticas rodaram e
 > as quatro saíram `SEM_EVIDENCIA DE EDGE`; a §7.2 aponta o Caso 1. A moldura abaixo fica como
 > foi escrita para que se possa conferir que ela é anterior aos números.

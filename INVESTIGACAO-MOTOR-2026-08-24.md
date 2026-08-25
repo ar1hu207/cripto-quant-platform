@@ -451,6 +451,87 @@ compatível com a álgebra acima.
 
 ---
 
+## 10. `[Q-12]` — o veredito re-emitido sobre a configuração que a produção executa
+
+Rodado em **2026-08-25**, 8,6 min. Saída literal em `VEREDITO-M4-PRODUCAO-2026-08-25.md`.
+
+```bash
+python -m pesquisa.validacao politicas-prod
+```
+
+As **mesmas quatro políticas** do `POLITICAS_M4`, na mesma régua, nas mesmas janelas e sobre os
+mesmos painéis. Único fator alterado: `lev_modo="conviccao"`. `n_trials = 820`.
+
+| política | trades | win% | P&L OOS | Sharpe an. | IC95% Sharpe | DSR | veredito |
+|---|---:|---:|---:|---:|---:|---:|---|
+| A stop+flip de regime | 2.158 | 28,2 | +902 | 0,176 | (−1,446 ; 1,446) | 0,0012 | SEM_EVIDÊNCIA |
+| B auto-saída | 5.925 | 61,4 | −2.454 | −0,408 | (−1,894 ; 0,786) | 0,0001 | SEM_EVIDÊNCIA |
+| **C trailing 2% fixo** | 5.434 | 61,6 | **+5.285** | **0,976** | (−0,353 ; 2,074) | 0,0253 | SEM_EVIDÊNCIA |
+| C trailing 3×ATR | 3.933 | 50,2 | +4.897 | 0,825 | (−0,634 ; 2,066) | 0,0261 | SEM_EVIDÊNCIA |
+
+### 10.1 O que muda em relação ao `VEREDITO-M4.md`
+
+Contra a tabela original (mesma régua, `LEV` fixo em 10x):
+
+| política | Sharpe a 10x fixo | Sharpe em produção | Δ |
+|---|---:|---:|---:|
+| A stop+flip | 0,124 | 0,176 | +0,05 |
+| B auto-saída | −1,018 | −0,408 | **+0,61** |
+| C trailing 2% | 0,645 | 0,976 | **+0,33** |
+| C trailing 3×ATR | 0,436 | 0,825 | **+0,39** |
+
+**As quatro melhoraram.** Isso é o achado desta seção, e é mais forte do que o de qualquer
+política isolada: o ganho **não é** de uma saída específica — é sistemático, e portanto vem do
+**dimensionamento**, não da gestão da posição. É a leitura da §9.3 confirmada num quarto ponto
+independente.
+
+**A ordenação entre as políticas não muda:** C 2% > C 3×ATR > A > B, igual ao M4. O
+`VEREDITO-M4.md` está **certo no que ordena** e estava medindo o objeto errado no que quantifica.
+
+**O DSR do `C trailing 2%` caiu (0,0602 → 0,0253) e isso não é piora:** o `n_trials` foi de 100
+para 820 (piso contado cumulativo do dia). A tabela de sensibilidade que o relatório imprime
+recupera o número a qualquer `n_trials` — a comparação com o M4 continua possível, ela só deixou
+de ser o default.
+
+### 10.2 O que NÃO muda, e é o que importa
+
+**As quatro continuam `SEM EVIDÊNCIA DE EDGE`.** Nenhum IC de Sharpe exclui o zero; o portão de
+conjunção não é vencido por nenhuma. **A conclusão central do projeto sobrevive à correção do
+objeto** — e agora ela descreve o sistema que existe, que era o ponto do card.
+
+Um detalhe que vale registrar: a política que **roda ao vivo** (`C trailing 2% fixo`) é a melhor
+das quatro sob a configuração de produção. Isso não a valida — `SEM_EVIDÊNCIA` é `SEM_EVIDÊNCIA`
+—, mas responde uma pergunta que estava aberta desde o `ITEM1` §8: o default vivo não é pior que
+as alternativas medidas. Ele é o topo de um conjunto que inteiro não demonstrou edge.
+
+**Controle de reprodutibilidade:** o `C trailing 2% [prod]` desta rodada bateu linha a linha com
+o contraste de atribuição de 24/08 (5.434 trades, win 61,6%, +5.285, Sharpe 0,976, IC idêntico),
+rodado por outro caminho de código. Terceira reprodução limpa do dia.
+
+### 10.3 Por que as três hipóteses de conserto não passaram — a leitura conjunta
+
+O `[Q-8]` (trailing em `k×ATR`), o `[Q-9]` (piso de custo) e o `[Q-11]` (zero-a-zero) foram
+medidos e nenhum passou. As três falharam nas **mesmas duas** condições do portão (IC incluindo
+o zero, Reality Check ≫ 0,05), e cada uma pelo seu caminho: o piso o treino **não escolheu**; o
+`k` foi ao **teto da grade**; o zero-a-zero **piora quanto mais age**.
+
+O fio comum: **as três mexem no que acontece DEPOIS da entrada.** Nenhuma altera se a entrada
+prevê direção. Uma regra de saída redistribui o formato da distribuição de resultados — troca
+muitos ganhos pequenos por poucos grandes, ou o contrário — mas não move o **centro** dela, a
+menos que exista estrutura explorável no caminho do preço. E toda regra que age, **custa**: cada
+acionamento é um round-trip a mais ou um trade cortado antes de mostrar o que era. Daí as três
+convergirem, independentemente, na mesma resposta: *aja o menos possível*.
+
+A §10.1 fecha o argumento pelo outro lado: **o único fator que moveu o número em todas as
+quatro políticas foi o tamanho da aposta, não a saída.**
+
+**E o contrapeso, que não pode ser omitido:** `MDS = 1,575`. Com 80% de poder a régua só detecta
+Sharpe ≥ ~1,6, e os IC vão até 1,4–2,1. Um edge real de Sharpe 1,0 seria **invisível** para este
+instrumento. "Não passou" é *não se provou*, nunca *provou-se inútil* — é o que a linha
+`ausência de evidência não é evidência de ausência` imprime em toda rodada.
+
+---
+
 ## Reprodução
 
 De dentro da VM, via `az vm run-command --scripts @script.sh`:
