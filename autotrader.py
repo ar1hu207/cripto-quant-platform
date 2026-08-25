@@ -47,6 +47,25 @@ FOLGA_LIQ = 0.8
 # não teria como somar os `res` já descartados. Quem for lê-lo lê `autotrader.CAPS_GEOMETRIA`.
 CAPS_GEOMETRIA = {"total": 0, "ultimo": None}
 
+# [P2-39] O gêmeo mudo do `CAPS_GEOMETRIA`, e por que ele precisava existir.
+#
+# `_tamanho` dimensiona por risco (`valor = risco_rs / (lev·sd)`) e depois aplica
+# `min(valor, banca·max_frac)`. Quando o stop é apertado o `valor` explode e o cap SEMPRE
+# morde — e o risco realizado despenca junto com ele. Medido em produção em 2026-08-24:
+# `risco_inicial` entre **R$0,14 e R$83,16** num sistema que declara `risco_por_trade = 3%`
+# (~R$39). Variação de ~600x, e nada no log dizia que o teto havia agido: o trade nascia com
+# nocional grande e risco ~zero, isto é, **só taxa**.
+#
+# Isto NÃO aperta nem afrouxa guarda nenhuma — o cap continua exatamente onde estava, e
+# `_tamanho` devolve o mesmo número que devolvia. O que muda é que ele para de agir em
+# silêncio. É a mesma lição do `[P1-11]`: enquanto o cap geométrico não tinha contador,
+# ninguém conseguia responder "quantas vezes isso já agiu?".
+#
+# `perda_de_risco` é a fração do risco pedido que o cap comeu (0 = não mordeu, 0,99 = o
+# trade ficou com 1% do risco configurado). É ela, e não o `total`, que diz se o cap está
+# sendo um teto ocasional ou o dimensionador de facto.
+CAPS_TAMANHO = {"total": 0, "ultimo": None}
+
 
 def _stop_dist(entrada, stop):
     """Distância relativa entrada→stop — a MESMA para o sizing e para a alavancagem.
@@ -112,7 +131,7 @@ def _alavancagem(cfg, conviccao, stop_dist=None, ativo=None):
     return _cap_geometrico(lev, stop_dist, ativo)            # [P1-11] a geometria vem por cima
 
 
-def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0):
+def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0, ativo=None):
     """Sizing por risco: valor tal que a perda-até-o-stop ~= banca*risco_frac.
     Capa em banca*max_frac. Retorna 0 (=pular o sinal) quando a banca não comporta o piso,
     quando o risco pedido não paga o piso, ou com banca morta (<=0).
@@ -131,6 +150,17 @@ def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0):
     valor = risco_rs / denom if denom > 0 else risco_rs
     if valor < min_valor:                       # [P2-8] piso: FILTRA o sinal, não infla o risco
         return 0.0
+    if valor > cap:                             # [P2-39] o cap vai morder: registra ANTES de aplicar
+        CAPS_TAMANHO["total"] += 1
+        CAPS_TAMANHO["ultimo"] = {
+            "ts": str(pd.Timestamp.now()), "ativo": ativo,
+            "valor_pedido": round(valor, 2), "valor_efetivo": round(cap, 2),
+            "risco_pedido": round(risco_rs, 2),
+            "risco_efetivo": round(cap * denom, 2),
+            # quanto do risco configurado o teto comeu. 0,99 = o trade ficou com 1% dele.
+            "perda_de_risco": round(1 - (cap / valor), 4)}
+        log(f"tamanho capado R${valor:.2f}->R${cap:.2f} por max_frac {ativo} "
+            f"(risco R${risco_rs:.2f}->R${cap * denom:.2f})")
     valor = min(valor, cap)                     # cap (>= min_valor, garantido acima)
     return round(valor, 2)
 
@@ -145,6 +175,7 @@ def auto_executar(saidas=None):
     res = {"ativo": True, "abertos": [], "fechados": [], "rejeitados": [],
            "caps_geometria": 0, "ts": str(pd.Timestamp.now())}
     caps_antes = CAPS_GEOMETRIA["total"]              # [P1-11] quantos caps ESTE ciclo produziu
+    capt_antes = CAPS_TAMANHO["total"]                # [P2-39] idem, para o teto de tamanho
 
     # 1) auto-fechar (scalp em reversão+lucro) — DESLIGADO quando o trailing está ativo:
     #    com trailing, deixamos o lucro correr e quem fecha o vencedor é o trailing stop, não o scalp.
@@ -230,7 +261,8 @@ def auto_executar(saidas=None):
         # então a garantia "liquidação atrás do stop" sobrevive ao preço de entrada ao vivo.
         stop_dist = _stop_dist(s["preco"], s["stop_sugerido"])
         lev = _alavancagem(cfg, s["conviccao"], stop_dist, s["ativo"])
-        valor = _tamanho(banca, risco_frac, lev, s["preco"], s["stop_sugerido"], max_frac)
+        valor = _tamanho(banca, risco_frac, lev, s["preco"], s["stop_sugerido"], max_frac,
+                         ativo=s["ativo"])
         if valor <= 0:                                    # banca não comporta: pula
             continue
         valor = min(valor, round(budget, 2))              # não passa do teto de margem restante
@@ -256,6 +288,7 @@ def auto_executar(saidas=None):
             continue
 
     res["caps_geometria"] = CAPS_GEOMETRIA["total"] - caps_antes
+    res["caps_tamanho"] = CAPS_TAMANHO["total"] - capt_antes
     if res["abertos"] or res["fechados"]:
         log(f"auto-trader: +{len(res['abertos'])} aberto(s), {len(res['fechados'])} fechado(s)")
     return res

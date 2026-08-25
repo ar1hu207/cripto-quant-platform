@@ -81,6 +81,35 @@ ALVO_ROE = 5.0
 ROE_MIN_LUCRO = 1.0
 TRAILING_DIST = 0.02
 
+# [Q-10] Transcricao do cap geometrico do `autotrader` ([P1-11]). Nao se importa `autotrader`
+# aqui de proposito: `pesquisa/` nao depende da plataforma viva (ele importaria `db` e
+# `simulador`), e os UNICOS modulos de raiz declarados compartilhados sao `scoring` e
+# `indicadores` (`CLAUDE.md` 0). O preco dessa fronteira e uma copia -- e o preco da copia e
+# pago por `test_Q10_lev_por_conviccao_e_transcricao_fiel_do_autotrader`, que importa os dois
+# lados e QUEBRA quando divergirem. Copia sem teste de pinagem e que vira divergencia silenciosa.
+FOLGA_LIQ = 0.8
+
+
+def _lev_conviccao(conv, lev_min, lev_max, conv_min, stop_dist):
+    """Alavancagem por conviccao + cap geometrico -- espelho de `autotrader._alavancagem`.
+
+    [Q-10] Existe porque a regua roda com `LEV` FIXO (10x em `validacao.py`) e a producao roda
+    de 2x a 20x pela conviccao. Todo achado que dependa da INTERACAO entre alavancagem e um
+    limiar fixo em preco e invisivel num backtest de alavancagem constante -- e foi exatamente
+    um desses que a medicao de MFE de 2026-08-24 encontrou: o trailing so arma em +2% de preco,
+    o que a 14x significa 28% de ROE sem protecao nenhuma.
+    """
+    frac = min(max((conv - conv_min) / max(100 - conv_min, 1), 0.0), 1.0)
+    lev = lev_min + frac * (lev_max - lev_min)
+    lev = float(max(lev_min, min(round(lev), lev_max)))
+    if stop_dist and stop_dist > 0:                     # cap geometrico: liquidacao ATRAS do stop
+        lev_geo = FOLGA_LIQ * LIQ_BUFFER / stop_dist
+        if lev_geo < lev:
+            capada = max(1.0, float(int(lev_geo)))      # trunca PARA BAIXO, como o [P1-11]
+            if capada < lev:
+                lev = capada
+    return lev
+
 
 def _sinais_reversao(d, i, closes, rsi, ema_r, ema_l):
     """Os gatilhos de reversao do gestor de saida ao vivo (`signal_engine.avaliar_saida`).
@@ -121,7 +150,8 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                    estrategia="tendencia", df=None, adx_min=25, adx_max_rev=22,
                    max_hold=20, taxa=TAXA, slip=0.0002, funding_8h=0.0, tf_horas=None,
                    sinal_fn=None, saida="regime", trailing_dist=TRAILING_DIST,
-                   trailing_k_atr=None, alvo_roe=ALVO_ROE):
+                   trailing_k_atr=None, alvo_roe=ALVO_ROE, sd_min=0.0,
+                   be_em_R=None, lev_modo="fixo", lev_min=2.0, lev_max=20.0, conv_min_lev=60.0):
     """Backtest com PARIDADE honesta: sinal no candle FECHADO i, execução no OPEN do
     candle SEGUINTE (i+1) + slippage. estrategia: 'tendencia' ou 'reversao' (alvo = volta à
     média + time-stop). df pré-carregado evita re-baixar.
@@ -155,6 +185,32 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     Com `trailing_k_atr=k` a distância vira `k·ATR/preço`, medida **na entrada** e fixa depois:
     coerente com o stop de entrada, e um número por trade, como o vivo. Recalculá-la a cada
     candle seria outra política, não a mesma em outra unidade.
+
+    **`sd_min` — o piso de distância do stop ([Q-9]).** Portão de CUSTO: recusa o sinal cujo
+    stop está tão perto que o round-trip come o risco (`taxa/risco = 2·taxa_lado/sd`). Default
+    `0.0` = desligado, para que nenhuma rodada anterior mude de resultado. O porquê completo
+    está no ponto do gate, junto do `continue`.
+
+    **`be_em_R` — o stop zero-a-zero ([Q-11]), e por que ele é medido em R e não em preço.**
+    A medição de MFE de 2026-08-24 (`INVESTIGACAO-MOTOR-2026-08-24.md` §8) mostrou que **19 dos
+    20 trades que foram de lucro a prejuízo nunca tiveram o trailing armado**: ele só arma em
+    `+trailing_dist` de PREÇO, e abaixo disso a proteção é zero. Como o lucro que o operador vê
+    é ROE (= preço × alavancagem), o limiar em preço vira um limiar em ROE que ESCALA com a
+    alavancagem — 2% de preço são 6% de ROE a 3x e **40% a 20x**. O sistema desprotege
+    exatamente os trades em que mais confia, porque convicção alta é alavancagem alta.
+
+    `be_em_R=r` move o stop para o zero-a-zero quando a excursão favorável atinge `r` vezes o
+    risco-até-o-stop inicial. Em R, e não em preço nem em ROE, porque R é a única unidade em
+    que o gatilho não muda de significado quando o ativo, a volatilidade ou a alavancagem
+    mudam — é a mesma correção de unidade da §1, aplicada ao outro parâmetro.
+
+    O zero-a-zero cobre a TAXA (`e·(1 ± 2·taxa)`), não o preço de entrada seco: parar em `e`
+    fecharia com `−2·taxa·valor·lev`, que não é zero a zero, é uma perda pequena com nome
+    bonito. O `move` que zera o P&L é `2·taxa`, e ele não depende da alavancagem.
+
+    **`lev_modo="conviccao"` ([Q-10]).** A régua roda `LEV` fixo e a produção roda 2x-20x pela
+    convicção; sem isto, medir `be_em_R` não responde nada, porque o defeito que ele ataca É a
+    interação entre alavancagem e limiar. Default `"fixo"` mantém toda rodada anterior idêntica.
 
     **`ts_saida`, e por que ele é o FECHAMENTO do candle de saída e não a abertura.**
     Cada trade grava o instante da entrada (`ts`, o open do candle i+1, que é o fill) e o
@@ -221,14 +277,34 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
             else:                                               # reversão: só mercado lateral
                 if p["adx"] > adx_max_rev or p["n_fatores"] < 2:
                     continue
+            # [Q-9] Piso de distância do stop — portão de CUSTO, não de estratégia.
+            #
+            # `taxa/risco = 2·taxa_lado/sd`: a fração do risco-até-o-stop que vira taxa não
+            # depende de tamanho, de alavancagem nem de edge, só de `sd`. Com `taxa=0,0005`,
+            # `sd=0,19%` (TRX 5m em produção, 2026-08-24) põe **53%** do risco na corretora
+            # antes de o mercado se mexer. O gate espelha o `_liq_antes_do_stop` do
+            # `simulador` ([P1-12]), que recusa a degeneração do outro lado — stop LONGE
+            # demais, atrás da liquidação. Perto demais é a mesma doença com o sinal trocado,
+            # e não tinha guarda nenhuma.
+            #
+            # Fica no `backtest_ativo` e não no `scoring` de propósito: `scoring` é a paridade
+            # com o vivo (`CLAUDE.md` §0) e mudar a pontuação mudaria o SINAL. Isto não muda o
+            # sinal — recusa executá-lo quando o custo do round-trip come o risco. Default 0,0
+            # = portão desligado, então nenhuma rodada anterior muda de resultado.
+            if sd_min and (p.get("stop_dist") or 0.0) < sd_min:
+                continue
             d = p["direcao"]
             e = opens[i + 1] * (1 + d * slip)                   # fill no OPEN do próximo candle + slippage
             # distância do trailing FIXADA na entrada: k×ATR/preço se pedido, senão o % fixo
             td = trailing_dist
             if trailing_k_atr and atrv is not None and atrv[i] == atrv[i] and e > 0:
                 td = trailing_k_atr * atrv[i] / e
+            lev_pos = (_lev_conviccao(p["conviccao"], lev_min, lev_max, conv_min_lev,
+                                      p["stop_dist"]) if lev_modo == "conviccao" else lev)
+            stop0 = e * (1 - d * p["stop_dist"])
             pos = dict(d=d, e=e, conv=p["conviccao"], i0=i + 1, ts=int(tss[i + 1]), td=td,
-                       stop=e * (1 - d * p["stop_dist"]), liq=e * (1 - d * (LIQ_BUFFER / lev)))
+                       stop=stop0, liq=e * (1 - d * (LIQ_BUFFER / lev_pos)), lev=lev_pos,
+                       risco=abs(e - stop0), be=None)
         else:
             d, saida_p, motivo = pos["d"], None, None
             hit_liq = (d == 1 and lows[i] <= pos["liq"]) or (d == -1 and highs[i] >= pos["liq"])
@@ -251,7 +327,7 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
             elif saida == "trailing":
                 pass                                            # só stop trailado e liquidação fecham
             elif saida == "auto":                               # B: reversão COM lucro (gestor de saída)
-                roe = _roe(pos, closes[i], valor, lev, taxa)
+                roe = _roe(pos, closes[i], valor, pos["lev"], taxa)
                 if _sinais_reversao(d, i, closes, rsi, ema_r, ema_l) and (
                         roe >= alvo_roe or roe > ROE_MIN_LUCRO):
                     saida_p, motivo = closes[i], "auto-saida"
@@ -259,18 +335,29 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                 p = fn(df, i)                                   # a MESMA fonte de sinal da entrada
                 if p and p["direcao"] != d:
                     saida_p, motivo = closes[i], "regime"
-            if saida_p is None and saida == "trailing":
-                # trailing DEPOIS da checagem: o stop só se move para o candle seguinte, porque
-                # o OHLC não diz se o topo veio antes ou depois do fundo dentro deste candle
-                if d == 1 and highs[i] >= pos["e"] * (1 + pos["td"]):
-                    pos["stop"] = max(pos["stop"], highs[i] * (1 - pos["td"]))
-                elif d == -1 and lows[i] <= pos["e"] * (1 - pos["td"]):
-                    pos["stop"] = min(pos["stop"], lows[i] * (1 + pos["td"]))
+            if saida_p is None:
+                # Movimentos de stop DEPOIS da checagem de saída: o stop só vale para o candle
+                # SEGUINTE, porque o OHLC não diz se o topo veio antes ou depois do fundo dentro
+                # deste candle. [Q-11] o zero-a-zero segue a MESMA regra -- se ele agisse no
+                # próprio candle, o backtest leria o extremo e decidiria com ele, que é
+                # look-ahead intrabar com outro nome.
+                if be_em_R and not pos["be"] and pos["risco"] > 0:
+                    ganho = (highs[i] - pos["e"]) if d == 1 else (pos["e"] - lows[i])
+                    if ganho >= be_em_R * pos["risco"]:
+                        be = pos["e"] * (1 + d * 2 * taxa)       # zero a zero COBRINDO a taxa
+                        pos["stop"] = max(pos["stop"], be) if d == 1 else min(pos["stop"], be)
+                        pos["be"] = be
+                if saida == "trailing":
+                    if d == 1 and highs[i] >= pos["e"] * (1 + pos["td"]):
+                        pos["stop"] = max(pos["stop"], highs[i] * (1 - pos["td"]))
+                    elif d == -1 and lows[i] <= pos["e"] * (1 - pos["td"]):
+                        pos["stop"] = min(pos["stop"], lows[i] * (1 + pos["td"]))
             if saida_p is not None:
+                lev_p = pos["lev"]
                 saida_fill = saida_p if motivo == "liquidacao" else saida_p * (1 - d * slip)  # liq = preço de liq (= live)
                 move = d * (saida_fill / pos["e"] - 1)
-                fcost = d * funding_8h * ((i - pos["i0"]) * tfh / 8) * (valor * lev)  # funding: LONG paga>0, SHORT recebe
-                pnl = max(valor * lev * move - 2 * taxa * valor * lev - fcost, -valor)
+                fcost = d * funding_8h * ((i - pos["i0"]) * tfh / 8) * (valor * lev_p)  # funding: LONG paga>0, SHORT recebe
+                pnl = max(valor * lev_p * move - 2 * taxa * valor * lev_p - fcost, -valor)
                 trades.append({"conv": pos["conv"], "pnl": pnl, "motivo": motivo,
                                "ts": pos["ts"], "ts_saida": int(tss[i]) + tf_ms})
                 pos = None
@@ -281,10 +368,20 @@ def _motivo_stop(pos):
     """'trailing' quando o stop já está em lucro, 'stop' quando não — a MESMA distinção que
     `simulador._fecha_stop` grava em `trades.motivo_saida`. Vale a pena manter o vocabulário
     igual: é o que permite comparar a tabela de motivos do backtest com a do banco vivo sem
-    tradução no meio."""
+    tradução no meio.
+
+    [Q-11] `zero-a-zero` é motivo PRÓPRIO, e não `trailing`. Os dois deixam o stop em lucro e
+    cairiam no mesmo balde, mas medem coisas opostas: `trailing` é lucro que correu e foi
+    travado atrás do pico; `zero-a-zero` é lucro que NÃO correu e virou empate. Somá-los
+    esconderia justamente o que o card veio contar — quantas vezes a guarda salvou um trade que
+    teria ido ao stop cheio."""
     d = pos["d"]
     em_lucro = (d == 1 and pos["stop"] >= pos["e"]) or (d == -1 and pos["stop"] <= pos["e"])
-    return "trailing" if em_lucro else "stop"
+    if not em_lucro:
+        return "stop"
+    if pos.get("be") and pos["stop"] == pos["be"]:     # não avançou além do zero-a-zero
+        return "zero-a-zero"
+    return "trailing"
 
 
 def relatorio(trades, valor, lev):

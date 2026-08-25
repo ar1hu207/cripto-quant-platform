@@ -276,12 +276,34 @@ def fechar(pos_id, motivo, preco_saida=None):
                           "WHERE id=? AND status='aberta'", (preco_saida, pnl, pos_id))
         if cur.rowcount != 1:                                  # outra thread fechou primeiro — não duplica
             return None
+        # [P2-40] DUAS colunas de retorno, e a distinção é o conserto.
+        #
+        # `ret_pct` sempre foi `move * lev * 100` — o retorno BRUTO, sem taxa e sem funding —
+        # enquanto `pnl_reais`, no mesmo INSERT, tem os dois. Quem lesse "ret_pct" como "o
+        # retorno do trade" lia um número que ninguém recebeu, e o erro tinha sinal FIXO:
+        # sempre para o lado bom. É a mesma doença que o [P2-18] curou no preço de fill
+        # (gatilho ≠ execução), sobrevivendo numa outra coluna.
+        #
+        # A correção NÃO é trocar o significado de `ret_pct`: as 47 linhas já gravadas em
+        # produção significam exatamente "ROE bruto", e reescrevê-las transformaria a série
+        # em duas séries coladas com o mesmo nome — pior que o defeito. Sobrecarregar a
+        # coluna também não: é o oposto do que o [P2-10] fez ao dar coluna PRÓPRIA ao
+        # funding em vez de embuti-lo, justamente para a medição ficar explícita.
+        #
+        # Então `ret_pct` fica sendo o bruto, com o nome do que é, e `ret_pct_liq` passa a
+        # gravar o que o operador recebe: `pnl / margem`. Vem do `pnl` já calculado, e não
+        # de uma segunda fórmula — duas contas para a mesma grandeza divergem um dia. E é
+        # exatamente derivável para o histórico (`pnl_reais / valor_reais`), então o
+        # backfill do `prova_p2_40` não inventa dado: recupera o que já estava lá.
+        ret_liq = (pnl / pos["valor_reais"] * 100) if pos["valor_reais"] else None
         con.execute("INSERT INTO trades(ativo,direcao,entrada,saida,valor_reais,alavancagem,"
-                    "ret_pct,pnl_reais,taxa,motivo_saida,aberto_em,fechado_em,conviccao,sinal_id,"
-                    "stop,risco_inicial,funding) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "ret_pct,ret_pct_liq,pnl_reais,taxa,motivo_saida,aberto_em,fechado_em,"
+                    "conviccao,sinal_id,stop,risco_inicial,funding) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pos["ativo"], pos["direcao"], pos["entrada"], preco_saida, pos["valor_reais"],
-                     pos["alavancagem"], move * pos["alavancagem"] * 100, pnl, taxa, motivo,
+                     pos["alavancagem"], move * pos["alavancagem"] * 100,
+                     round(ret_liq, 6) if ret_liq is not None else None,
+                     pnl, taxa, motivo,
                      pos["aberto_em"], fechado_em, pos["conviccao"], pos["sinal_id"],
                      pos["stop"], round(risco_ini, 4),
                      round(funding, 4) if funding is not None else None))

@@ -51,6 +51,7 @@ O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado
     -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
 import math
+import os
 import sys
 
 import numpy as np
@@ -1214,6 +1215,266 @@ POLITICAS_M4 = (
 )
 
 
+# ---------------------------------------------------------------------------
+# [Q-8]/[Q-9] A varredura de GEOMETRIA — o pre-requisito que a §7.3 do VEREDITO-M4 deixou
+# escrito e nao rodou.
+#
+# O que a §7.3 registrou: `C trailing 3xATR` ficou ABAIXO de `C trailing 2% fixo` (Sharpe
+# 0,436 x 0,645; DSR 0,0145 x 0,0602), e no mesmo paragrafo disse por que isso nao decide
+# nada -- *"o `k=3` usado aqui e o do smoke, NAO foi escolhido no treino, e a §7.3 sempre
+# disse que o `k` de producao sai do walk-forward. Um `k` varrido no grid e pre-requisito de
+# qualquer proposta de troca"*. Comparar um `k` arbitrario com um `trailing_dist` que TAMBEM
+# nunca foi escolhido no treino compara dois chutes, nao duas politicas.
+#
+# Entao `k` e `sd_min` entram na GRADE, e nao no rotulo da rodada: a escolha passa a acontecer
+# dentro do fold de TREINO de cada dobra, que e o unico lugar onde escolher parametro nao e
+# olhar o resultado. E o preco disso e pago na mesma moeda: a grade multiplica por 16 e o
+# `n_trials` sobe junto (ver `N_TRIALS_GEOMETRIA`).
+#
+# `sd_min=0.0` esta na grade DE PROPOSITO: e a hipotese nula do [Q-9]. Se o piso nao ajudar,
+# o treino escolhe 0,0 sozinho e a varredura devolve isso -- que e uma resposta, nao uma falha.
+GRID_GEO_K = (1.0, 2.0, 3.0, 4.0)          # trailing em k x ATR, a mesma unidade do stop
+GRID_GEO_SD = (0.0, 0.01, 0.02, 0.04)      # piso de distancia do stop; 0,0 = portao desligado
+GRID_GEOMETRIA = [(mc, ax, k, sd) for mc in (50, 55, 65) for ax in (22, 25)
+                  for k in GRID_GEO_K for sd in GRID_GEO_SD]
+
+# [F10] O piso contado, atualizado. O 100 do `N_TRIALS` contava `GRID x N_FOLDS = 30` deste
+# arquivo mais o snooping historico do projeto (~70). A grade da geometria e 96 configs, entao
+# a parcela deste arquivo passa de 30 para 96 x 5 = 480: 100 - 30 + 480 = 550. Declarar menos
+# seria pedir ao DSR que descontasse menos tentativas do que a rodada realmente fez.
+N_TRIALS_GEOMETRIA = 550
+
+
+def _trades_geo(cfg):
+    """Roda UMA config da grade de geometria nas 12 moedas. Modulo-level e sem `dfs` no
+    argumento porque e alvo de `ProcessPoolExecutor` no Windows (spawn): o painel viaja uma
+    vez por worker pelo `initializer`, nao uma vez por tarefa."""
+    mc, ax, k, sd = cfg
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, saida="trailing",
+                                 trailing_k_atr=k, sd_min=sd)
+        except Exception:
+            pass
+    return cfg, tr
+
+
+_DFS_W, _FUNDING_W = None, None
+
+
+def _init_worker(dfs, funding_8h):
+    global _DFS_W, _FUNDING_W
+    _DFS_W, _FUNDING_W = dfs, funding_8h
+
+
+def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None):
+    """Pre-computa `{cfg: trades}` em processos. NAO muda estatistica nenhuma: `walk_forward`
+    chama o gerador uma vez por config e fatia depois (o contrato de causalidade dele), entao
+    calcular as mesmas configs em paralelo devolve exatamente os mesmos trades. E so tempo de
+    parede -- 96 configs x ~2,5 min sequencial nao cabe numa sessao."""
+    import concurrent.futures as cf
+    n = n_workers or max(1, min(6, (os.cpu_count() or 2) - 2))
+    out, feito = {}, 0
+    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                initargs=(dfs, funding_8h)) as pool:
+        for cfg, tr in pool.map(_trades_geo, grid):
+            out[cfg] = tr
+            feito += 1
+            print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
+    return out
+
+
+def varredura_geometria(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-8]/[Q-9] A regua sobre a grade de geometria, e o baseline na MESMA janela.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao geometria
+
+    O baseline (`C trailing 2% fixo`, a politica que roda ao vivo hoje) e RE-MEDIDO aqui em vez
+    de citado do `VEREDITO-M4.md`: aquele numero saiu da janela de 2026-08-23 e esta rodada e
+    de outra data. Comparar Sharpe de janelas diferentes e comparar duas coisas com um fator a
+    mais, e o fator seria o dia.
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+
+    print(f"\n[baseline] C trailing 2% fixo — {len(GRID)} configs", flush=True)
+    base = walk_forward(gerador_tendencia(dfs, "tendencia", funding_8h,
+                                          {"saida": "trailing", "trailing_dist": 0.02}),
+                        [_chave(g) for g in GRID], n_trials=N_TRIALS,
+                        rotulo=f"C trailing 2% fixo | {TF} {DIAS}d | {LEV}x")
+    relatorio(base)
+
+    print(f"\n[varredura] k x sd_min — {len(GRID_GEOMETRIA)} configs", flush=True)
+    por_cfg = gerar_por_cfg_paralelo(GRID_GEOMETRIA, dfs, funding_8h)
+    geo = walk_forward(lambda cfg: por_cfg[cfg], GRID_GEOMETRIA,
+                       n_trials=N_TRIALS_GEOMETRIA,
+                       rotulo=f"C trailing kxATR + piso sd | {TF} {DIAS}d | {LEV}x")
+    relatorio(geo)
+    return {"baseline": base, "geometria": geo}
+
+
+# ---------------------------------------------------------------------------
+# [Q-11] O stop zero-a-zero, medido com ALAVANCAGEM POR CONVICCAO ([Q-10]).
+#
+# Por que esta rodada nao e mais uma varredura de saida. As anteriores mediram parametros de
+# saida com `LEV` FIXO em 10x, e o defeito que este card ataca E a interacao entre alavancagem
+# e um limiar fixo em preco: o trailing so arma em +2% de PRECO, e como o lucro que o operador
+# ve e ROE (= preco x alavancagem), o mesmo gatilho vale 6% de ROE a 3x e 40% a 20x. Num
+# backtest de alavancagem constante essa interacao NAO EXISTE -- e por isso nenhuma rodada
+# anterior poderia te-la encontrado. A medicao de MFE dos 47 trades de producao (2026-08-24)
+# encontrou: 19 dos 20 trades que foram de lucro a prejuizo nunca tiveram o trailing armado.
+#
+# `be_em_R = None` esta na grade como hipotese nula, mesmo padrao do [Q-9]: se a guarda nao
+# ajudar, o treino escolhe "sem guarda" sozinho.
+GRID_BE_R = (None, 0.5, 1.0, 1.5)
+GRID_ZAZ = [(mc, ax, be) for mc in (50, 55, 65) for ax in (22, 25) for be in GRID_BE_R]
+
+# [F10] Piso contado, CUMULATIVO no dia. A varredura de geometria ja gastou 480 tentativas
+# neste arquivo hoje (N_TRIALS_GEOMETRIA=550), e esta rodada acrescenta 24 x 5 = 120. Contar so
+# as proprias seria fingir que a busca comecou agora -- o data-snooping do dia e o mesmo dono
+# olhando o mesmo dado. 550 + 120 = 670. Na duvida o piso sobe: DSR menor e a direcao que
+# desfavorece quem esta medindo.
+N_TRIALS_ZAZ = 670
+
+
+def _trades_zaz(cfg):
+    """Uma config da grade do zero-a-zero, nas 12 moedas. Alvo de ProcessPoolExecutor."""
+    mc, ax, be = cfg
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, saida="trailing",
+                                 trailing_dist=0.02, be_em_R=be, lev_modo="conviccao")
+        except Exception:
+            pass
+    return cfg, tr
+
+
+def gerar_zaz_paralelo(grid, dfs, funding_8h, n_workers=None):
+    import concurrent.futures as cf
+    n = n_workers or max(1, min(6, (os.cpu_count() or 2) - 2))
+    out, feito = {}, 0
+    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                initargs=(dfs, funding_8h)) as pool:
+        for cfg, tr in pool.map(_trades_zaz, grid):
+            out[cfg] = tr
+            feito += 1
+            print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
+    return out
+
+
+def _diagnostico_por_braco(por_cfg):
+    """DIAGNOSTICO por valor de `be_em_R`, agregando as 6 configs de entrada de cada braco.
+
+    Nao e o veredito e nao decide nada -- o veredito sai do walk-forward, que escolhe no
+    TREINO. Isto existe para uma pergunta que o veredito nao responde: a guarda MUDA alguma
+    coisa? Uma guarda que nunca arma e uma guarda que arma e nao move o P&L sao fracassos
+    diferentes, e so a contagem de motivos separa os dois."""
+    print("\n-- DIAGNOSTICO por braco (in-sample, todas as configs de entrada somadas) --")
+    print(f"   {'be_em_R':>8} {'trades':>8} {'PnL':>10} {'zero-a-zero':>12} {'stop':>7} "
+          f"{'trailing':>9} {'liquid':>7}")
+    for be in GRID_BE_R:
+        tr = [t for cfg, lst in por_cfg.items() if cfg[2] == be for t in lst]
+        if not tr:
+            continue
+        m = {}
+        for t in tr:
+            m[t["motivo"]] = m.get(t["motivo"], 0) + 1
+        print(f"   {str(be):>8} {len(tr):>8} {sum(t['pnl'] for t in tr):>+10.0f} "
+              f"{m.get('zero-a-zero', 0):>12} {m.get('stop', 0):>7} {m.get('trailing', 0):>9} "
+              f"{m.get('liquidacao', 0):>7}")
+
+
+def varredura_zero_a_zero(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-11] A regua sobre a grade do stop zero-a-zero, com alavancagem por conviccao.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao zeroazero
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+    print(f"\n[zero-a-zero] be_em_R x entrada — {len(GRID_ZAZ)} configs, lev por conviccao",
+          flush=True)
+    por_cfg = gerar_zaz_paralelo(GRID_ZAZ, dfs, funding_8h)
+    _diagnostico_por_braco(por_cfg)
+    res = walk_forward(lambda cfg: por_cfg[cfg], GRID_ZAZ, n_trials=N_TRIALS_ZAZ,
+                       rotulo=f"C trailing 2% + zero-a-zero | lev conviccao | {TF} {DIAS}d")
+    relatorio(res)
+    return res
+
+
+# ---------------------------------------------------------------------------
+# [Q-12] As MESMAS quatro politicas do [P1-10], na configuracao que a PRODUCAO executa.
+#
+# O `POLITICAS_M4` acima roda sob `LEV` fixo (10x), porque era o unico modo que existia quando
+# o M4 foi medido. A producao roda `auto_lev_modo=conviccao`, 2x-20x. Entao o veredito
+# publicado -- inclusive o `SEM EVIDENCIA DE EDGE` sobre o `C trailing`, que e o PRODUTO
+# declarado deste projeto -- descreve uma configuracao que ninguem executa.
+#
+# Isto nao e caca a numero melhor. O contraste de 24/08 ja mostrou que corrigir o objeto NAO
+# muda o veredito (IC do Sharpe segue incluindo o zero, RC p = 0,1404). E sobre a afirmacao
+# publicada descrever o sistema que existe. Um projeto cujo produto e o "sem edge" honesto nao
+# pode ter o seu unico numero apontado para o objeto errado.
+#
+# So `lev_modo` muda em relacao ao `POLITICAS_M4`. As saidas sao as mesmas, linha por linha:
+# a comparacao entre as quatro continua com um fator so.
+POLITICAS_M4_PROD = tuple(
+    (f"{nome} [prod]", {**kw, "lev_modo": "conviccao"}) for nome, kw in POLITICAS_M4
+)
+
+# [F10] Piso contado, cumulativo no dia (ver N_TRIALS_ZAZ): 700 + 4 politicas x 6 configs x 5
+# folds = 820. A tabela de sensibilidade que o relatorio imprime SEMPRE recupera o DSR a
+# n_trials=100, que e o numero sob o qual o VEREDITO-M4 foi emitido -- entao subir o piso aqui
+# nao torna a comparacao com ele irrecuperavel, so a torna honesta por default.
+N_TRIALS_PROD = 820
+
+
+def _trades_pol(par):
+    """(politica, cfg) -> trades. Modulo-level por causa do ProcessPoolExecutor no Windows."""
+    (nome, kw), (mc, ax) = par
+    tr = []
+    for c in COINS:
+        try:
+            tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
+                                 adx_min=ax, funding_8h=_FUNDING_W, **kw)
+        except Exception:
+            pass
+    return nome, (mc, ax), tr
+
+
+def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-12] A x B x C x C-kATR na regua, sob a configuracao de PRODUCAO.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao politicas-prod
+    """
+    import concurrent.futures as cf
+    dfs = dfs if dfs is not None else baixar_paineis()
+    grid = [_chave(g) for g in GRID]
+    pares = [(pol, cfg) for pol in POLITICAS_M4_PROD for cfg in grid]
+    print(f"\n[Q-12] {len(POLITICAS_M4_PROD)} politicas x {len(grid)} configs = {len(pares)} "
+          f"rodadas, lev por conviccao", flush=True)
+
+    por_pol, feito = {}, 0
+    n = max(1, min(6, (os.cpu_count() or 2) - 2))
+    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                initargs=(dfs, funding_8h)) as pool:
+        for nome, cfg, tr in pool.map(_trades_pol, pares):
+            por_pol.setdefault(nome, {})[cfg] = tr
+            feito += 1
+            print(f"  [{feito}/{len(pares)}] {nome} {cfg} -> {len(tr)} trades", flush=True)
+
+    fora = []
+    for nome, kw in POLITICAS_M4_PROD:
+        print(f"\n{'=' * 78}\nPOLITICA: {nome}   {kw}\n{'=' * 78}", flush=True)
+        r = walk_forward(lambda cfg, _p=por_pol[nome]: _p[cfg], grid,
+                         n_trials=N_TRIALS_PROD,
+                         rotulo=f"tendencia | {TF} {DIAS}d | lev conviccao | saida: {nome}")
+        relatorio(r)
+        fora.append((nome, kw, r))
+    relatorio_politicas(fora)
+    return fora
+
+
 def baixar_paineis():
     """As 12 moedas, preparadas uma vez. Separado porque a comparacao de politicas roda quatro
     walk-forwards sobre EXATAMENTE os mesmos dados -- baixar de novo por politica nao seria so
@@ -1479,6 +1740,15 @@ def relatorio_sensibilidade(sens):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "politicas":
         comparar_politicas()                          # [P1-10] A x B x C, mesma regua
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "geometria":
+        varredura_geometria()                         # [Q-8]/[Q-9] k e sd_min varridos no treino
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "politicas-prod":
+        comparar_politicas_producao()                 # [Q-12] as 4 politicas na config de producao
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "zeroazero":
+        varredura_zero_a_zero()                       # [Q-11] stop zero-a-zero, lev por conviccao
         sys.exit(0)
     r = walk_forward_tendencia("tendencia")
     if "erro" not in r:

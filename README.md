@@ -22,6 +22,16 @@ só no passado, avaliados no futuro não-visto), **Deflated Sharpe Ratio** e boo
 **Não existe edge deployável.** Isso não é fracasso — é o resultado com maior valor econômico
 do projeto, obtido sem torrar banca real.
 
+> ⚠️ **A linha "Tendência" acima foi medida com alavancagem FIXA em 10x; a produção roda 2x–20x
+> por convicção.** O `[Q-12]` re-mediu as quatro políticas de saída sob a configuração real em
+> 2026-08-25 (`VEREDITO-M4-PRODUCAO-2026-08-25.md`; leitura em
+> `INVESTIGACAO-MOTOR-2026-08-24.md` §10). **O veredito não muda** — as quatro seguem sem
+> evidência de edge e a ordenação entre elas se mantém —, mas as magnitudes sim: a política que
+> roda ao vivo (`C trailing 2% fixo`) sai com **Sharpe 0,976** e **PSR 0,954** em produção,
+> contra 0,645 e 0,854 a 10x fixo, e o IC95% do Sharpe `(−0,353 ; 2,074)` **ainda inclui o
+> zero**. As quatro políticas melhoraram, o que localiza o ganho no **dimensionamento** e não na
+> gestão da posição. Quem citar números daqui tem de dizer sob qual configuração eles falam.
+
 > ⚠️ **A linha "Tendência" mudou de números no `[Q-1]`, e o número velho não era comparável.**
 > O registro anterior — *370 trades, PnL −R$807, DSR = 0,004* — saiu de uma régua com
 > `DIAS = 180`, DSR sobre a **lista de trades** e `n_trials = 30`. Ela media outra coisa, e
