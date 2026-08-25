@@ -1269,21 +1269,73 @@ def _init_worker(dfs, funding_8h):
     _DFS_W, _FUNDING_W = dfs, funding_8h
 
 
-def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None, alvo=None):
+def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None, alvo=None,
+                           checkpoint=None):
     """Pre-computa `{cfg: trades}` em processos. NAO muda estatistica nenhuma: `walk_forward`
     chama o gerador uma vez por config e fatia depois (o contrato de causalidade dele), entao
     calcular as mesmas configs em paralelo devolve exatamente os mesmos trades. E so tempo de
-    parede -- 96 configs x ~2,5 min sequencial nao cabe numa sessao."""
+    parede -- 96 configs x ~2,5 min sequencial nao cabe numa sessao.
+
+    **`checkpoint` grava cada config assim que ela sai, e a rodada seguinte pula o que ja
+    existe.** Isto conserta um problema que ja custou tempo duas vezes neste projeto: a
+    varredura e longa, e quando o processo morre no meio -- pressao de memoria, sessao
+    cortada, o que for -- TODAS as configs se perdem, inclusive as 22 que ja tinham rodado.
+    A rodada do [Q-17] em 2026-08-25 morreu em 22/24 sem uma linha de erro no log.
+
+    O reaproveitamento e seguro porque o conteudo e funcao pura de `(cfg, dfs, funding_8h)`:
+    mesma config sobre o mesmo painel devolve os mesmos trades. Mas "mesmo painel" e uma
+    premissa, e premissa nao verificada e como o cache do `dados.baixar_ohlcv` viraria uma
+    comparacao entre janelas diferentes -- entao o diretorio de checkpoint e responsabilidade
+    de quem chama, e trocar de janela pede diretorio novo. Por isso ele e OPCIONAL e nao
+    default: quem liga, declara.
+    """
     import concurrent.futures as cf
-    n = n_workers or max(1, min(6, (os.cpu_count() or 2) - 2))
+    import hashlib
+    import pickle
+
+    def _arq(cfg):
+        # `hashlib` e nao `hash()`: o hash embutido do Python e RANDOMIZADO por processo
+        # (PYTHONHASHSEED), entao o nome do arquivo mudaria a cada rodada e o checkpoint
+        # nunca reencontraria nada -- um cache que so escreve e nunca le, silenciosamente.
+        chave = hashlib.md5(repr(cfg).encode("utf-8")).hexdigest()[:16]
+        return os.path.join(checkpoint, f"cfg_{chave}.pkl")
+
     out, feito = {}, 0
-    with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
-                                initargs=(dfs, funding_8h)) as pool:
-        for cfg, tr in pool.map(alvo or _trades_geo, grid):
-            out[cfg] = tr
-            feito += 1
-            print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
-    return out
+    pendentes = list(grid)
+    if checkpoint:
+        os.makedirs(checkpoint, exist_ok=True)
+        restantes = []
+        for cfg in grid:
+            a = _arq(cfg)
+            if os.path.exists(a):
+                try:
+                    with open(a, "rb") as f:
+                        gravado, tr = pickle.load(f)
+                    if gravado == cfg:                     # confere o VALOR, nao so o nome
+                        out[cfg] = tr
+                        feito += 1
+                        print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades "
+                              f"(do checkpoint)", flush=True)
+                        continue
+                except Exception:
+                    pass                                   # checkpoint corrompido: recalcula
+            restantes.append(cfg)
+        pendentes = restantes
+
+    if pendentes:
+        n = n_workers or max(1, min(6, (os.cpu_count() or 2) - 2))
+        with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
+                                    initargs=(dfs, funding_8h)) as pool:
+            for cfg, tr in pool.map(alvo or _trades_geo, pendentes):
+                out[cfg] = tr
+                feito += 1
+                if checkpoint:
+                    tmp = _arq(cfg) + ".tmp"               # grava-e-renomeia: morte no meio da
+                    with open(tmp, "wb") as f:             # escrita nao deixa arquivo pela metade
+                        pickle.dump((cfg, tr), f)
+                    os.replace(tmp, _arq(cfg))
+                print(f"  [{feito}/{len(grid)}] {cfg} -> {len(tr)} trades", flush=True)
+    return {cfg: out[cfg] for cfg in grid if cfg in out}
 
 
 def varredura_geometria(dfs=None, funding_8h=FUNDING_8H):
@@ -1497,6 +1549,11 @@ GRID_OI = [(mc, ax, om) for mc in (50, 55, 65) for ax in (22, 25)
 # e DSR menor, que e a unica direcao em que este projeto aceita errar.
 N_TRIALS_OI = 940
 
+#: Onde a varredura do [Q-17] grava cada config assim que ela sai. Fica sob `dados_cache/`,
+#: que o `.gitignore` ja cobre -- e resultado intermediario de rodada, nao entregavel.
+CHECKPOINT_OI = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "dados_cache", "ckpt_q17_oi")
+
 
 def _trades_oi(cfg):
     """Uma config da grade do [Q-17] nas 12 moedas. Modulo-level por causa do
@@ -1554,7 +1611,8 @@ def varredura_oi(dfs=None, funding_8h=FUNDING_8H):
     relatorio(base)
 
     print(f"\n[varredura Q-17] oi_modo — {len(GRID_OI)} configs", flush=True)
-    por_cfg = gerar_por_cfg_paralelo(GRID_OI, dfs, funding_8h, alvo=_trades_oi)
+    por_cfg = gerar_por_cfg_paralelo(GRID_OI, dfs, funding_8h, alvo=_trades_oi,
+                                     checkpoint=CHECKPOINT_OI)
     oi = walk_forward(lambda cfg: por_cfg[cfg], GRID_OI, n_trials=N_TRIALS_OI,
                       rotulo=f"C trailing 2% + portao de OI | {TF} {DIAS}d | {LEV}x")
     relatorio(oi)

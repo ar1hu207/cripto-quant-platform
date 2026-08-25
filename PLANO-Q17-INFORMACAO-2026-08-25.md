@@ -95,6 +95,18 @@ São os mesmos quatro endpoints que o card lista, num arquivo só:
 `count_long_short_ratio` = `globalLongShortAccountRatio` · `sum_taker_long_short_vol_ratio` =
 `takerlongshortRatio`.
 
+> ### ⚠️ CORREÇÃO — 2026-08-25, depois da rodada
+>
+> A tabela acima usa **`MDS = 1,436`**, calculado com `T = 1095`. A rodada real mediu
+> **`MDS = 1,574`, com `T = 911`** (`VEREDITO-Q17-OI-2026-08-25.md` §6). A diferença é
+> legítima e eu deveria tê-la previsto: o `T` que alimenta o MDS é o da série **OOS**, que
+> começa em `bordas[1]` — cinco sextos da janela, porque o primeiro segmento é treino puro e
+> nunca chega a ser testado. `1095 × 5/6 ≈ 911`.
+>
+> **Nenhuma conclusão desta seção muda** (`1,574 < MDS_LIMITE = 2,0`, todas as fontes seguem
+> testáveis, e o ordenamento entre elas é idêntico), mas o número certo é 1,574 e a tabela
+> abaixo mostra os dois.
+
 **MDS por T** (a conta que o card pediu):
 
 | janela | T | MDS | veredito de poder |
@@ -102,7 +114,8 @@ São os mesmos quatro endpoints que o card lista, num arquivo só:
 | REST `futures/data` sozinho | 30 | 8,673 | não testável |
 | 180 dias (o instrumento que o `[F6]` aposentou) | 180 | 3,541 | não testável |
 | 365 dias | 365 | 2,486 | não testável |
-| **`DIAS=1095` — a régua de hoje** | **1095** | **1,436** | **testável** |
+| `DIAS=1095` nominal | 1095 | 1,436 | testável |
+| **T efetivo da série OOS — o que a rodada mediu** | **911** | **1,574** | **testável** |
 | janela comum do dump (2021-12-01) | 1729 | 1,142 | testável |
 | dump do BTC (2020-09-01) | 2185 | 1,016 | testável |
 | funding desde 2019 | 2463 | 0,957 | testável |
