@@ -5,12 +5,14 @@ FastAPI varre o mercado 24/7, propõe trades, e um auto-trader opcional abre e f
 Projeto AI-first: o desenvolvimento é feito por sessões de agente, e este arquivo é o contrato
 entre elas. Cada regra aqui nasceu de um erro real — as datas dizem quando doeu.
 
-**Honestidade é premissa, não bug a consertar.** O walk-forward + DSR já concluiu que **não
-existe edge deployável**, e o M4 estendeu a conclusão às quatro políticas de saída — inclusive
-à que o sistema executa ao vivo (`C trailing`: 5.342 trades OOS em 3 anos, Sharpe anualizado
-0,645, **DSR = 0,060**, `SEM EVIDÊNCIA DE EDGE`; ver `VEREDITO-M4.md` e `README.md`), e o
-auto-trader existe para *ver o "no edge" acontecer ao vivo dentro de guardas*, não para ganhar
-dinheiro (`autotrader.py:8-13`). Não "melhore" o resultado ruim: ele é o produto.
+**O objetivo é lucro; a honestidade é como se chega nele.** O walk-forward + DSR já concluiu
+que **não existe edge deployável no que está implementado**, e o M4 estendeu a conclusão às
+quatro políticas de saída — inclusive à que o sistema executa ao vivo (`C trailing`: 5.342
+trades OOS em 3 anos, Sharpe anualizado 0,645, **DSR = 0,060**, `SEM EVIDÊNCIA DE EDGE`; ver
+`VEREDITO-M4.md` e `README.md`). O auto-trader roda essa estratégia ao vivo dentro de guardas
+para *ver o "no edge" acontecer* (`autotrader.py:8-14`) — e é ela que sai do ar quando entrar
+sinal com evidência. **Não maquie o resultado ruim: não ajuste parâmetro até o backtest ficar
+bonito.** O medido é o piso da busca, não a meta dela.
 
 **Produção:** backend na VM Azure `vm-cripto-bot` (southafricanorth,
 `cripto-bot-24517.southafricanorth.cloudapp.azure.com`) · front no Vercel

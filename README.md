@@ -3,8 +3,10 @@
 Sistema de **paper trading** e validação de estratégias em cripto. Dinheiro fictício, sem chave
 de exchange, sem ordem real — só dados públicos da Binance via `ccxt`.
 
-O objetivo do projeto **não é** um robô lucrativo. É um instrumento honesto: um framework que
-mede estratégias com rigor estatístico e **mata as ruins antes que elas custem dinheiro real**.
+O objetivo é um sistema **lucrativo** — e a régua existe para que o lucro, quando vier, esteja
+atrás de evidência e não de sorte. Ela mede estratégias com rigor estatístico e **mata as ruins
+antes que elas custem dinheiro real**. Até hoje nenhuma estratégia medida passou: o veredito
+abaixo é o estado da busca, não o objetivo dela.
 
 ---
 
@@ -19,8 +21,9 @@ só no passado, avaliados no futuro não-visto), **Deflated Sharpe Ratio** e boo
 | Reversão à média (RSI + Bollinger) | ❌ breakeven | Melhor caso +R$73 in-sample / −R$76 OOS em ~1100 trades |
 | Funding arb (cash & carry) | ❌ não-deployável | +1,9%/ano líquido; versão *gated* fica negativa (4 pernas de taxa comem o funding) |
 
-**Não existe edge deployável.** Isso não é fracasso — é o resultado com maior valor econômico
-do projeto, obtido sem torrar banca real.
+**Não existe edge deployável — no que foi implementado até aqui.** Isso não é fracasso nem é o
+destino: é o que se sabe hoje, obtido sem torrar banca real. É o piso a partir do qual se procura
+sinal novo.
 
 > ⚠️ **A linha "Tendência" acima foi medida com alavancagem FIXA em 10x; a produção roda 2x–20x
 > por convicção.** O `[Q-12]` re-mediu as quatro políticas de saída sob a configuração real em

@@ -5,11 +5,13 @@ A cada ciclo do worker: pega os MELHORES sinais novos (maior convicção, ja pas
 pelos portões do scan), dimensiona pelo risco e ABRE a posição automaticamente; e
 fecha sozinho quando o gestor de saída aponta reversão com lucro.
 
-IMPORTANTE — honestidade: ja provamos (walk-forward + DSR ~0) que a estratégia de
-confluência NAO tem edge. O esperado aqui e o bot DERIVAR pra perda por causa de
-taxa + alavancagem. Isto NAO e pra ganhar dinheiro — e pra VER o "no edge" acontecer
-ao vivo. Roda dentro dos mesmos portões de risco (trava diária + teto de exposição),
-entao e um experimento CONTROLADO, nao um cassino sem freio.
+IMPORTANTE — o objetivo do projeto e LUCRO. A confluência técnica, que e o que este
+auto-trader executa, nao mostrou edge ate hoje (walk-forward + DSR ~0), entao o
+esperado AQUI e o bot DERIVAR pra perda por causa de taxa + alavancagem: rodar ao
+vivo dentro das guardas e como se ve isso acontecer — e e esta estratégia que sai do
+ar quando entrar sinal com evidência. Roda dentro dos mesmos portões de risco (trava
+diária + teto de exposição), entao e um experimento CONTROLADO, nao um cassino sem
+freio.
 
 Liga/desliga: config auto_trade = "1"/"0".
 """
