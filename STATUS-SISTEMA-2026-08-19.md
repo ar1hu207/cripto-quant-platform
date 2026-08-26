@@ -1,13 +1,58 @@
 # Status do sistema — investigação geral (2026-08-19)
 
 > Varredura de ponta a ponta: código, backend, worker, deploy, VM Azure, Caddy/TLS, front no Vercel,
-> banco, segredos e operação. Complementa a `AUDITORIA-SISTEMA.md` (junho, matemática/estratégia) —
-> aqui é o que está quebrado **agora, em produção**.
+> banco, segredos e operação. Complementa a `AUDITORIA-SISTEMA.md` (junho, matemática/estratégia).
 
-## Veredito em uma linha
+---
+
+# ⚠️ DOCUMENTO HISTÓRICO — NÃO descreve o sistema de hoje
+
+**Este relatório é uma fotografia de 2026-08-19.** Tudo que ele chama de "agora" era verdade
+naquela data e **não é mais**. Ele ficou público por uma semana afirmando que o backend estava
+aberto na internet, num repositório público, com o hostname de produção versionado em outros
+cinco documentos. Isso era um convite, não um relatório.
+
+**Estado verificado em 2026-08-26**, contra o host de produção:
+
+```
+GET  /              -> 401
+GET  /estado        -> 401
+GET  /docs          -> 401
+GET  /openapi.json  -> 401
+POST /reset         -> 401
+```
+
+| Item de 19/08 | Estado hoje | Onde conferir |
+|---|---|---|
+| **P0-1** backend aberto | ✅ **fechado.** A bandeira `PERMITIR_SEM_SENHA` **não existe mais no código** — foi removida, não desligada. Sem `DASH_PASS` o backend atende **só loopback**; com `DASH_PASS`, `/docs`, `/redoc` e `/openapi.json` deixam de existir. Há throttle por IP (15 falhas → 120 s) | `api.py:135-143`, `test_auth.py`, invariante no `CLAUDE.md` §2 |
+| **P0-2** Binance 451 | ✅ **fechado.** VM migrada para `southafricanorth` — a única região que a Azure Policy da assinatura permite E que a Binance não geo-bloqueia | `deploy/provisionar-azure.sh:8-14` |
+| **P1-1** falha de rede paralisa o ciclo | ✅ **fechado.** `try/except` **por posição** dentro do `for`, nunca em volta dele — virou invariante | `simulador.atualizar()`, `CLAUDE.md` §2 |
+| **P1-2** front descarta a credencial | ✅ **fechado.** Existe tela de login; o `removeItem('cbAuth')` só roda no logout e no tratamento de 401 | `web/index.html:953, 974` |
+| **P1-3** `/trades?limite` sem teto | ✅ **fechado.** `Query(50, ge=1, le=500)`; `/candles` em `le=1000` | `api.py:768, 774` |
+| **P1-4** `_amostrar()` não reduzia | ✅ **fechado.** Passo fracionário por `round(i*n/alvo)` | `api.py`, `_amostrar` |
+| **P1-5** `breadth()` contava antes de falhar | ✅ **fechado.** `continue` antes de qualquer contador | `mercado.py:64-69` |
+| **P2-1** sem rotação de log | ✅ **fechado.** `RotatingFileHandler`, 10 MB × 5 | `logbot.py:13` |
+| **P2-2** sem backup do banco | ✅ **fechado.** `cripto-backup.sh` na VM, e o **deploy aborta** se o backup falhar. Além disso o `POST /reset` passou a exigir `{"confirmar": "RESET"}` — POST solto não apaga nada | `deploy/atualizar.sh:30-35`, `api.py` `/reset` |
+| **P2-3** VM não era repositório git | ✅ **fechado** desde 22/08. `/health` devolve o commit rodando; rollback é `bash deploy/atualizar.sh <sha>` | `RUNBOOK-VM.md` |
+| **P2-4** comentário errado sobre região | ✅ **fechado.** O comentário agora explica as duas restrições e por que sobra uma região só | `deploy/provisionar-azure.sh:8-14` |
+| **P2-5** RAM apertada | ⏳ **ABERTO — é o único.** Espera decisão do dono sobre redimensionar a VM | — |
+| **P2-6** sem testes automatizados | ✅ **fechado.** 594 testes no `pytest`, rodados antes de mergear | `python -m pytest` |
+| **P2-7** `web/.gitignore` untracked | ✅ **fechado.** Versionado | `git ls-files web/` |
+
+**A lição que este documento passou a carregar:** relatório de segurança em repositório público
+envelhece para o lado errado. Enquanto a correção não sobe, ele é um mapa; depois que sobe e
+ninguém o carimba, ele vira uma mentira que soa autorizada. **Carimbe na hora do fix, não depois.**
+
+---
+
+## Veredito em uma linha — *como estava em 19/08/2026*
 
 A infraestrutura está de pé e saudável (VM rodando, TLS válido, Caddy ok, front no ar), mas o sistema
 **não faz nada e está aberto para qualquer um na internet**. Dois problemas P0 anulam o resto.
+
+> Daqui para baixo, tudo está no presente do dia 19/08 e **os dois P0 já foram corrigidos** — ver
+> a tabela de estado no topo. O texto original fica preservado porque o raciocínio é o valor: é
+> ele que explica por que a guarda de hoje foi desenhada sem bandeira de desligar.
 
 | Camada | Estado |
 |---|---|
@@ -21,30 +66,24 @@ A infraestrutura está de pé e saudável (VM rodando, TLS válido, Caddy ok, fr
 
 ---
 
-## 🔴 P0-1 — O backend está aberto para a internet inteira
+## ✅ P0-1 — O backend está aberto para a internet inteira · **CORRIGIDO**
 
-**Constatado ao vivo, sem nenhuma credencial:**
-
-```
-GET  /             -> 200 (painel completo)
-GET  /estado       -> 200 (banca, posições, trades, métricas)
-GET  /config       -> 200
-POST /auto         -> 200   <-- liga o bot, muda alavancagem até 20x
-POST /pular        -> 422   <-- passou pela auth, só faltou o body
-GET  /docs         -> 200   <-- mapa completo da API para quem achar o host
-GET  /openapi.json -> 200
-```
+> **Constatação ao vivo removida deste documento em 2026-08-26.** Ela listava, rota por rota, o
+> que respondia sem credencial — e o repositório é público. O achado está preservado; o mapa de
+> ataque não precisa estar. Hoje toda rota citada responde **401**.
 
 **Causa:** no `.env` da VM, `DASH_PASS=` está **vazio** e `PERMITIR_SEM_SENHA=1`. A guarda do
 [api.py:140-152](api.py#L140-L152) foi projetada para recusar acesso externo sem senha — mas o
 `PERMITIR_SEM_SENHA` a desliga por completo, e foi exatamente o que está setado em produção.
 
-**Impacto:** qualquer pessoa que descubra o hostname pode `POST /reset` (zera a banca e apaga todo o
-histórico de trades), `POST /panico` (fecha todas as posições), `POST /config` (muda risco, alavancagem,
-limite de perda) e `POST /auto` (liga o auto-trader). Hoje é dinheiro fictício — mas é o mesmo painel
-que um dia vai encostar em dinheiro de verdade, e o histórico de pesquisa já é perda real se apagado.
+**Impacto (em 19/08):** qualquer pessoa que descobrisse o hostname alcançava as rotas destrutivas
+e as de configuração. Era dinheiro fictício — mas é o mesmo painel que um dia encosta em dinheiro
+de verdade, e o histórico de pesquisa já é perda real se apagado.
 
-**Correção:**
+**Correção — aplicada, e mais forte do que o que este documento pediu:** a bandeira não foi
+desligada, foi **removida do código**, porque guarda que se desliga por variável de ambiente não é
+guarda. E o `/reset` ganhou confirmação explícita (`{"confirmar": "RESET"}`), que era o item 4
+abaixo. O que foi pedido em 19/08:
 
 1. Gerar uma senha forte, pôr em `DASH_PASS` e **remover** `PERMITIR_SEM_SENHA` do `.env`; `systemctl restart cripto-bot`.
 2. Corrigir o front antes disso (ver P1-2), senão a senha fica impraticável de usar.
@@ -162,7 +201,10 @@ antes de incrementar qualquer contador.
 
 ---
 
-## Ordem sugerida
+## Ordem sugerida — **executada; sobrou o P2-5**
+
+> Os cinco passos abaixo foram cumpridos. O único item deste relatório que continua aberto é o
+> **P2-5 (RAM)**, e ele não é trabalho parado: é decisão de custo que espera o dono.
 
 1. **P0-2 primeiro** (migrar a região) — sem dado de mercado, todo o resto é enfeite num sistema que não roda.
 2. **P1-2 depois** (front parando de apagar a credencial) — pré-requisito prático do próximo item.
