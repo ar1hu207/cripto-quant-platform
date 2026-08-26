@@ -149,6 +149,7 @@ def _roe(pos, preco, valor, lev, taxa):
 def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                    estrategia="tendencia", df=None, adx_min=25, adx_max_rev=22,
                    max_hold=20, taxa=TAXA, slip=0.0002, funding_8h=0.0, tf_horas=None,
+                   entrada="taker", maker_off=0.0, exec_stats=None,
                    sinal_fn=None, saida="regime", trailing_dist=TRAILING_DIST,
                    trailing_k_atr=None, alvo_roe=ALVO_ROE, sd_min=0.0,
                    be_em_R=None, lev_modo="fixo", lev_min=2.0, lev_max=20.0, conv_min_lev=60.0):
@@ -294,7 +295,31 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
             if sd_min and (p.get("stop_dist") or 0.0) < sd_min:
                 continue
             d = p["direcao"]
-            e = opens[i + 1] * (1 + d * slip)                   # fill no OPEN do próximo candle + slippage
+            if exec_stats is not None:
+                exec_stats["sinais"] = exec_stats.get("sinais", 0) + 1
+            if entrada == "maker":
+                # [CX-1] Ordem LIMITE post-only, `maker_off` MELHOR que o open, do nosso lado.
+                # Só existe trade se o preço vier até ela DENTRO do candle de execução; senão
+                # o sinal é PERDIDO (cancela, não vira taker) — é isso que separa a taxa de
+                # maker que se paga da que se deseja.
+                #
+                # `maker_off=0` é o LIMITE SUPERIOR do ganho, não uma execução: com o limite no
+                # próprio open, `low <= lim` é verdade por definição de OHLC (e `high >= lim`
+                # para o short), então o fill é 100% por construção da barra, não por
+                # comportamento do mercado. É exatamente a hipótese que a linha `maker 0,02%`
+                # do [Q-15] embutiu sem declarar. Ele entra na grade para que o teto apareça
+                # ao lado dos números que custam fill, e não sozinho.
+                #
+                # Sem `slip`: quem põe o preço não paga travessia de spread. O custo do maker
+                # não é slippage, é o trade que não aconteceu.
+                lim = opens[i + 1] * (1 - d * maker_off)
+                if (lows[i + 1] > lim) if d > 0 else (highs[i + 1] < lim):
+                    continue                                    # não encheu: sinal perdido
+                e = lim
+            else:
+                e = opens[i + 1] * (1 + d * slip)               # fill no OPEN do próximo candle + slippage
+            if exec_stats is not None:
+                exec_stats["preenchidos"] = exec_stats.get("preenchidos", 0) + 1
             # distância do trailing FIXADA na entrada: k×ATR/preço se pedido, senão o % fixo
             td = trailing_dist
             if trailing_k_atr and atrv is not None and atrv[i] == atrv[i] and e > 0:
