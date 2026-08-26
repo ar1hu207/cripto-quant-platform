@@ -26,8 +26,11 @@ funcionando.
 
 Rodar (da RAIZ do repo):
 
-    python -m pesquisa.validacao              # a politica A + o contraste de funding [P2-10]
-    python -m pesquisa.validacao politicas    # A x B x C na mesma regua [P1-10]
+    python -m pesquisa.validacao                 # a politica A + o contraste de funding [P2-10]
+    python -m pesquisa.validacao politicas       # A x B x C na mesma regua [P1-10]
+    python -m pesquisa.validacao politicas-prod  # as quatro na config de PRODUCAO [Q-12]
+    python -m pesquisa.validacao taxa            # o veredito a 0,05% / 0,02% / 0% [Q-15]
+    python -m pesquisa.validacao conviccao       # expectancia em R por faixa de conviccao [Q-13]
 
 ---
 De onde vem cada decisao. `ITEM1-VALIDACAO-RIGOROSA.md` (a proposta, jul/2026) e
@@ -1174,7 +1177,7 @@ def _chave(g):
     return (g["min_conv"], g["adx_min"])
 
 
-def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
+def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None, taxa=None):
     """Fabrica um `gerar_trades(cfg)` causal para a estrategia da plataforma.
 
     Causal por construcao: `backtest_ativo` pontua no candle FECHADO i e executa no open de
@@ -1185,8 +1188,15 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
     `trailing_k_atr`). Ele nao toca em nada da entrada: os portoes de conviccao, ADX e
     n_fatores continuam os mesmos nas tres politicas, que e o que mantem a comparacao com um
     fator so.
+
+    `taxa` [Q-15]: `None` = nao passa nada, e o `backtest_ativo` usa o `TAXA` dele (0,05%/lado,
+    taker, igual a plataforma). O sentinela existe para que o caminho default seja
+    BYTE-IDENTICO ao de antes deste card -- e a reproducao das rodadas publicadas nao dependa
+    de duas constantes continuarem iguais em dois arquivos.
     """
     kw = dict(saida_kw or {})
+    if taxa is not None:
+        kw["taxa"] = float(taxa)
 
     def gerar(cfg):
         mc, ax = cfg
@@ -1261,12 +1271,17 @@ def _trades_geo(cfg):
     return cfg, tr
 
 
-_DFS_W, _FUNDING_W = None, None
+_DFS_W, _FUNDING_W, _TAXA_W = None, None, None
 
 
-def _init_worker(dfs, funding_8h):
-    global _DFS_W, _FUNDING_W
-    _DFS_W, _FUNDING_W = dfs, funding_8h
+def _init_worker(dfs, funding_8h, taxa=None):
+    """[Q-15] `taxa` entra por `initargs`, nunca por closure: no Windows o
+    `ProcessPoolExecutor` usa *spawn*, o processo filho re-importa o modulo do zero e o
+    global dele nasce `None`. Uma `taxa` fechada num closure viaja por pickle da FUNCAO e
+    silenciosamente nao chega -- o filho roda no default e a rodada mede taker achando que
+    mede maker. Pago por `test_Q15_taxa_viaja_para_o_worker_do_pool`."""
+    global _DFS_W, _FUNDING_W, _TAXA_W
+    _DFS_W, _FUNDING_W, _TAXA_W = dfs, funding_8h, taxa
 
 
 def gerar_por_cfg_paralelo(grid, dfs, funding_8h, n_workers=None):
@@ -1432,6 +1447,9 @@ N_TRIALS_PROD = 820
 def _trades_pol(par):
     """(politica, cfg) -> trades. Modulo-level por causa do ProcessPoolExecutor no Windows."""
     (nome, kw), (mc, ax) = par
+    kw = dict(kw)
+    if _TAXA_W is not None:                                     # [Q-15] sentinela: ver `gerador_tendencia`
+        kw["taxa"] = _TAXA_W
     tr = []
     for c in COINS:
         try:
@@ -1442,7 +1460,9 @@ def _trades_pol(par):
     return nome, (mc, ax), tr
 
 
-def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H):
+def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H, taxa=None,
+                                politicas=POLITICAS_M4_PROD, n_trials=None, rotulo_extra="",
+                                tag="[Q-12]"):
     """[Q-12] A x B x C x C-kATR na regua, sob a configuracao de PRODUCAO.
 
     Rodar (da RAIZ do repo):  python -m pesquisa.validacao politicas-prod
@@ -1450,29 +1470,573 @@ def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H):
     import concurrent.futures as cf
     dfs = dfs if dfs is not None else baixar_paineis()
     grid = [_chave(g) for g in GRID]
-    pares = [(pol, cfg) for pol in POLITICAS_M4_PROD for cfg in grid]
-    print(f"\n[Q-12] {len(POLITICAS_M4_PROD)} politicas x {len(grid)} configs = {len(pares)} "
-          f"rodadas, lev por conviccao", flush=True)
+    pares = [(pol, cfg) for pol in politicas for cfg in grid]
+    print(f"\n{tag} {len(politicas)} politicas x {len(grid)} configs = {len(pares)} "
+          f"rodadas{rotulo_extra}", flush=True)
 
     por_pol, feito = {}, 0
     n = max(1, min(6, (os.cpu_count() or 2) - 2))
     with cf.ProcessPoolExecutor(max_workers=n, initializer=_init_worker,
-                                initargs=(dfs, funding_8h)) as pool:
+                                initargs=(dfs, funding_8h, taxa)) as pool:
         for nome, cfg, tr in pool.map(_trades_pol, pares):
             por_pol.setdefault(nome, {})[cfg] = tr
             feito += 1
             print(f"  [{feito}/{len(pares)}] {nome} {cfg} -> {len(tr)} trades", flush=True)
 
     fora = []
-    for nome, kw in POLITICAS_M4_PROD:
+    for nome, kw in politicas:
         print(f"\n{'=' * 78}\nPOLITICA: {nome}   {kw}\n{'=' * 78}", flush=True)
         r = walk_forward(lambda cfg, _p=por_pol[nome]: _p[cfg], grid,
-                         n_trials=N_TRIALS_PROD,
-                         rotulo=f"tendencia | {TF} {DIAS}d | lev conviccao | saida: {nome}")
+                         n_trials=n_trials or N_TRIALS_PROD,
+                         rotulo=f"tendencia | {TF} {DIAS}d | saida: {nome}{rotulo_extra}")
         relatorio(r)
         fora.append((nome, kw, r))
     relatorio_politicas(fora)
     return fora
+
+
+# ---------------------------------------------------------------------------
+# [Q-15] A SENSIBILIDADE do veredito ao unico termo do sistema com sinal conhecido.
+#
+# Ganho e incerto, perda e incerta, taxa e certa e negativa em todo trade. Producao pagou
+# R$66,01 em 48 trades = 18,5% do lucro bruto. E a taxa ja matou a unica estrategia que este
+# projeto mediu com sinal positivo: o `README.md` registra o funding arb como "+1,9%/ano
+# liquido; versao gated fica negativa (4 pernas de taxa comem o funding)" -- morreu por CUSTO,
+# nao por falta de edge.
+#
+# O `backtest_ativo` tem `taxa` como parametro desde a auditoria de junho e **nenhum chamador
+# da regua o passava**: `gerador_tendencia` e `_trades_pol` o omitiam, entao toda rodada
+# publicada deste projeto esta cravada em `TAXA = 0,0005` (taker). O parametro existia e estava
+# morto -- o mesmo defeito que o `[P2-10]` achou no `funding_8h`, e a correcao tem a mesma forma.
+#
+# ⚠️ **O que este card NAO decide, e isto vem ANTES dos numeros de proposito.** Ele mede a
+# sensibilidade do veredito ao custo. Ele NAO conclui "vamos operar maker". Ordem limite **nao
+# executa** quando o preco foge, e numa estrategia de rompimento isso perde exatamente os
+# movimentos que ela caca. O backtest sobre OHLCV **nao consegue** modelar probabilidade de
+# fill -- dizer que consegue seria inventar. Um veredito que vira a custo de maker abre uma
+# pergunta de engenharia com custo proprio; nao fecha uma.
+#
+# A altura em que os portoes estao HOJE, para que a leitura da rodada nao dependa de memoria
+# (`VEREDITO-M4-PRODUCAO-2026-08-25.md`, `C trailing 2% fixo`, a politica que roda ao vivo):
+# PSR 0,954 -- **ja passou** o portao de 0,95; IC95% da media/dia (-1,7808 ; 13,8669) -- inclui
+# o zero por 1,78; Reality Check p = 0,1404. O portao e conjuncao dos tres, e um dos tres ja
+# caiu. Este card nao e uma formalidade barata.
+TAXAS_Q15 = (0.0005, 0.0002, 0.0)          # taker de hoje · maker · piso teorico
+
+# [F10] Piso contado, cumulativo no dia: 820 (o do `politicas-prod`) + 3 taxas x 4 politicas x
+# 6 configs x 5 folds = 360. Declarar menos seria pedir ao DSR que descontasse menos tentativas
+# do que a rodada realmente fez. A tabela de sensibilidade que o relatorio sempre imprime
+# recupera o DSR a `n_trials=100` e a 820, entao a comparacao com o `VEREDITO-M4` e com o
+# `VEREDITO-M4-PRODUCAO` continua possivel -- ela so deixa de ser o default.
+N_TRIALS_TAXA = 1180
+
+
+def conta_de_taxa(trades):
+    """Quanto a corretora levou nesta lista de trades, em dinheiro.
+
+    Le o campo `taxa` que o trade grava, e nao recalcula a partir de uma constante: no modo
+    `conviccao` a alavancagem varia por trade, entao `n × 2 · TAXA · VALOR · LEV` esta errado.
+    Somar o que foi PAGO tambem e a unica forma de a conta nao mentir se um braco da varredura
+    tiver rodado com outra taxa -- que e exatamente o que esta rodada faz de proposito.
+
+    E o numero que torna CHECAVEL a estimativa registrada na moldura do card antes da rodada:
+    se a conta medida nao bater com a ordem de grandeza prevista, quem esta errado e o
+    encanamento, nao a previsao.
+    """
+    return sum(t["taxa"] for t in trades if "taxa" in t)
+
+
+def _assinatura_por_cfg(res):
+    """(cfg -> assinatura do CONJUNTO de trades), sem o P&L.
+
+    O objeto e `por_cfg` (linha do tempo inteira por config), NAO o `oos`: o conjunto OOS
+    depende de qual config cada fold escolheu, e essa escolha le P&L -- logo ele PODE mudar
+    com a taxa mesmo quando nenhum trade mudou. Comparar `oos` daria falso positivo.
+    """
+    return {cfg: tuple(sorted((t["ts"], t["ts_saida"], t["motivo"]) for t in tr))
+            for cfg, tr in res["por_cfg"].items()}
+
+
+def _invariancia_do_conjunto(por_taxa, le_taxa_na_saida=()):
+    """[Q-15] O portao de correcao mais forte desta rodada, e ele e de graca.
+
+    Com `sd_min = 0,0` (o portao de custo do `[Q-9]` fica DESLIGADO no `GRID`) e `be_em_R =
+    None` (o zero-a-zero do `[Q-11]` nao arma), a `taxa` entra na LOGICA DE SAIDA de uma
+    politica so: a `B auto-saida`, cujo gatilho le ROE (`backtest_plataforma._roe`, que
+    desconta `2·taxa·valor·lev`). Nas outras tres a taxa entra apenas na formula do `pnl`.
+
+    Disso segue uma previsao dura, que nao depende de nenhum resultado: **para `A`, `C 2%` e
+    `C 3xATR` o conjunto de trades tem de ser IDENTICO entre os bracos de taxa** -- mesmos
+    `ts`, mesmos `ts_saida`, mesmos motivos -- e so o `pnl` se desloca. Se mudar, a taxa
+    vazou para onde nao devia. E **para `B` tem de MUDAR** -- se nao mudar, a taxa nao chegou
+    ao `_roe` e o braco esta medindo o default.
+
+    Um teste que so pode passar quando o encanamento esta certo, e que falha nas duas direcoes.
+
+    `le_taxa_na_saida` vem do `kw` da politica (`saida == "auto"`), nunca do NOME dela:
+    nome e rotulo de relatorio e muda sem aviso, e um portao de correcao que depende de
+    prefixo de string para de valer no dia em que alguem renomeia a linha da tabela.
+    """
+    if len(por_taxa) < 2:
+        return []
+    le = set(le_taxa_na_saida)
+    base_taxa = sorted(por_taxa)[0]
+    fora = []
+    for nome in por_taxa[base_taxa]:
+        base = por_taxa[base_taxa][nome]
+        iguais = all(por_taxa[t].get(nome) == base for t in por_taxa if t != base_taxa)
+        fora.append((nome, iguais, nome not in le))
+    return fora
+
+
+def varredura_taxa(dfs=None, taxas=TAXAS_Q15, funding_8h=FUNDING_8H):
+    """[Q-15] A mesma regua, as mesmas janelas, os mesmos paineis -- variando SO a taxa.
+
+    Rodar (da RAIZ do repo):
+
+        python -m pesquisa.validacao taxa                  # os tres bracos (~26 min)
+        python -m pesquisa.validacao taxa 0.0005           # um braco so (~9 min)
+
+    O braco de UM valor existe para fumaca: rodar `0,0005` sozinho tem de REPRODUZIR o
+    `VEREDITO-M4-PRODUCAO-2026-08-25.md` linha por linha (`seed=42` travado). Descobrir que o
+    encanamento vazou depois de 26 minutos e pior do que descobrir depois de 9.
+
+    Os paineis sao baixados UMA vez e reusados nos tres bracos. Nao e so velocidade: o cache
+    de `pesquisa/dados.py` e nomeado com a data de HOJE, entao rodar um braco por invocacao
+    atravessando a meia-noite mede os primeiros numa janela e os ultimos em outra, e a
+    comparacao perde o objeto (§9 do `VEREDITO-M4.md`).
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+    fora, assinaturas, le_taxa = [], {}, set()
+    for t in taxas:
+        print(f"\n{'#' * 78}\n# [Q-15] TAXA = {t * 100:.3f}%/lado\n{'#' * 78}", flush=True)
+        r = comparar_politicas_producao(dfs=dfs, funding_8h=funding_8h, taxa=t,
+                                        n_trials=N_TRIALS_TAXA, tag="[Q-15]",
+                                        rotulo_extra=f" | taxa {t * 100:.3f}%/lado")
+        fora.append((t, r))
+        assinaturas[t] = {}
+        for nome, kw, res in r:
+            if kw.get("saida") == "auto":     # a unica cuja LOGICA de saida le taxa (`_roe`)
+                le_taxa.add(nome)
+            if "erro" not in res:
+                assinaturas[t][nome] = _assinatura_por_cfg(res)
+                # A varredura mantem os TRES bracos vivos, e o `politicas-prod` mantinha um:
+                # `por_cfg` sao ~360 MB de trades que ninguem mais le depois de assinados
+                # (o `relatorio` ja rodou dentro de `comparar_politicas_producao`, e a
+                # tabela abaixo le `oos`). Soltar aqui e a diferenca entre a rodada de 26
+                # min terminar e ela morrer de MemoryError no terceiro braco.
+                del res["por_cfg"]
+    relatorio_taxa(fora, assinaturas, le_taxa)
+    return fora
+
+
+def relatorio_taxa(fora, assinaturas=None, le_taxa_na_saida=()):
+    """A tabela que o `VEREDITO-TAXA` cola: uma linha por (taxa, politica), veredito na ponta."""
+    print(f"\n{'=' * 118}")
+    print("SENSIBILIDADE DO VEREDITO A TAXA -- mesma regua, mesmas janelas, mesmos paineis "
+          "[Q-15]")
+    print("=" * 118)
+    print(f"{'taxa/lado':>10}  {'politica':<24}{'trades':>7}{'win%':>7}{'PnL OOS':>10}"
+          f"{'conta de taxa':>15}{'Sharpe an.':>11}{'IC95% Sharpe':>22}{'PSR':>8}"
+          f"{'RC p':>8}  veredito")
+    for taxa, resultados in fora:
+        for nome, _kw, r in resultados:
+            if "erro" in r:
+                print(f"{taxa * 100:>9.3f}%  {nome:<24}{'--':>7}  {r['erro']}")
+                continue
+            b, a = r["bloco_b"], r["bloco_a"]
+            so = stats([t["pnl"] for t in r["oos"]])
+            print(f"{taxa * 100:>9.3f}%  {nome:<24}{so['n']:>7}{so['win']:>7.1f}"
+                  f"{so['pnl']:>+10.0f}{conta_de_taxa(r['oos']):>15,.0f}"
+                  f"{str(b['sharpe_anualizado']):>11}{str(b['ic_sharpe_anualizado']):>22}"
+                  f"{b['psr']['psr']:>8}{a['reality_check']['p_valor']:>8}  "
+                  f"{r['veredito']['classe']}")
+    print("\nA 'conta de taxa' e o que a corretora levou NO CONJUNTO OOS daquela linha "
+          "(sum 2*taxa*valor*lev).")
+    print("O portao e CONJUNCAO: IC-bloco da media/dia > 0  E  PSR > 0,95  E  RC p <= 0,05.")
+
+    if assinaturas:
+        print("\n-- invariancia do conjunto de trades entre os bracos de taxa (portao de "
+              "correcao) --")
+        linhas = _invariancia_do_conjunto(assinaturas, le_taxa_na_saida)
+        if not linhas:
+            # Cabecalho sem linha nenhuma se le como "o portao rodou e nao achou nada". Com um
+            # braco so ele NAO RODOU -- nao ha o que comparar. Dizer isso e a diferenca entre um
+            # relatorio honesto e um que passa a impressao de ter verificado.
+            print(f"   NAO SE APLICA: {len(assinaturas)} braco(s) de taxa. O portao compara "
+                  "bracos entre si e")
+            print("   precisa de pelo menos dois. Uma rodada de um braco so e fumaca de "
+                  "encanamento, nao prova.")
+            return
+        for nome, iguais, espera_igual in linhas:
+            veredito = "OK" if iguais == espera_igual else "*** FALHOU ***"
+            esperado = "identico" if espera_igual else "diferente (a taxa entra no ROE)"
+            medido = "identico" if iguais else "diferente"
+            print(f"   {nome:<24} esperado {esperado:<32} medido {medido:<10} {veredito}")
+        print("   Com `sd_min=0` e `be_em_R=None`, so a `B auto-saida` le taxa na logica de "
+              "saida.")
+        print("   Qualquer '*** FALHOU ***' acima invalida a rodada: e vazamento de "
+              "encanamento, nao resultado.")
+
+    print("\n⚠️  Este card mede a SENSIBILIDADE do veredito ao custo. Ele NAO autoriza operar "
+          "maker:")
+    print("   ordem limite nao executa quando o preco foge, e o backtest sobre OHLCV nao "
+          "modela")
+    print("   probabilidade de fill. Veredito que vira a custo de maker ABRE uma pergunta de "
+          "engenharia.")
+
+
+# ---------------------------------------------------------------------------
+# [Q-13] A conviccao preve acerto? E o pressuposto de TODO o resto.
+#
+# O dono pediu que o bot "entre em menos, mas nos mais certos, com a alavancagem e a banca
+# ideal". A frase inteira repousa num pressuposto: **que a conviccao preve acerto**. Se ela nao
+# preve, "os mais certos" nao existem, e escalar alavancagem por conviccao nao e gestao de
+# risco -- e ruido amplificado. O `autotrader._alavancagem` avisa isso desde a origem
+# (*"escalar pra cima na conviccao assume que conviccao preve acerto -- NAO comprovado"*) e
+# ninguem foi conferir. Este bloco e ir conferir.
+#
+# **A HIPOTESE NULA, e ela e PRE-REGISTRADA, nao inventada depois.** O
+# `INVESTIGACAO-MOTOR-2026-08-24.md` §9.3 ja respondeu isto por algebra, ao explicar de onde
+# vinha o +0,331 de Sharpe que a alavancagem por conviccao trouxe:
+#
+#   "pnl = valor · lev · (move − 2·taxa) e exatamente proporcional a alavancagem: escalar tudo
+#    por um fator constante nao move o Sharpe em nada. O que move e a VARIACAO -- em particular
+#    o cap geometrico do [P1-11], que corta a alavancagem quando o stop e largo. Na pratica
+#    isso e dimensionamento por volatilidade. E efeito de gestao de risco, nao de previsao."
+#
+#   => H0: a expectancia em R e PLANA nas faixas de conviccao; Spearman(conviccao, R) ~ 0.
+#
+# Isto torna o card um TESTE e nao uma pescaria: ele confirma ou derruba uma afirmacao que o
+# repositorio ja publicou. Se R ordenar, a §9.3 esta errada e existe sinal acionavel.
+#
+# **A REGRA DE LEITURA, tambem antes do numero.** "Monotonico" so vale com as DUAS condicoes:
+# (a) os IC das faixas nao se sobrepoem na ordem certa, e (b) Spearman com p <= 0,05 por
+# permutacao de blocos. Sem a regra escrita antes, qualquer tabela vira "parece que sobe".
+#
+# **Por que R, e nao win rate.** Win rate alto com R negativo e o modo de falha classico desta
+# casa: a politica `B auto-saida` acerta 61,4% e tem Sharpe −0,408 (`VEREDITO-M4-PRODUCAO`).
+# A coluna de win rate esta na tabela como DIAGNOSTICO -- ela existe para exibir a divergencia
+# com R, nunca para decidir.
+#
+# **A armadilha que faz o corte por `lev_modo` ser obrigatorio.** Em R a alavancagem CANCELA:
+# `pnl/R = (move − 2·taxa − fcost/(valor·lev)) / stop_dist`. Ela sobra em dois lugares e so
+# dois -- o piso `−valor` (que em R vale `−1/(lev·stop_dist)`) e o preco de liquidacao
+# (`e·(1 − d·0,9/lev)`, que a 20x fica a 4,5% da entrada). Os dois mordem EXATAMENTE onde a
+# conviccao e mais alta. Logo: medir so em `lev_modo="conviccao"` nao separa "a conviccao
+# preve" de "a conviccao liquida mais". Medir nos DOIS modos e comparar isola esse canal, que
+# e o unico por onde a alavancagem pode mover R.
+#
+# `n_trials` NAO sobe aqui, e a razao precisa ficar escrita: as faixas sao FIXAS (as mesmas de
+# `db.metricas().por_conviccao`) e nada e selecionado sobre elas -- isto e um corte de trades
+# que a rodada ja gerou, nao uma busca nova. O walk-forward re-rodado e a mesma busca ja
+# contada no 820 do `politicas-prod`. Cobrar tentativas por uma leitura que nao procurou nada
+# seria deflacionar o DSR por trabalho que ninguem fez.
+FAIXAS_CONV = (("0-40", 0, 40), ("40-60", 40, 60), ("60-80", 60, 80), ("80-100", 80, 101))
+
+# Piso de amostra por faixa. Abaixo dele a faixa entra na tabela (a contagem e informacao)
+# mas NAO ganha IC nem entra na leitura de monotonicidade: um IC de 12 trades agrupados em
+# 3 dias nao e um IC estreito, e um numero que nao se pode calcular. Ver `_ic_cluster_por_dia`.
+N_MIN_FAIXA = 30
+N_PERM_CONV = 2000
+N_TRIALS_CONV = N_TRIALS_PROD
+
+# A politica que roda ao vivo (`db.py:95-96`), que e o objeto do card. As outras tres nao
+# entram: o `[Q-13]` pergunta sobre a producao, e rodar as quatro custaria o dobro para
+# responder sobre sistemas que ninguem executa.
+POLITICA_VIVA = ("C trailing 2% fixo", {"saida": "trailing", "trailing_dist": 0.02})
+
+
+def _postos(x):
+    """Postos com media nos empates. A conviccao do `scoring` e grossa e empata muito; posto
+    por `argsort` simples inventaria ordem entre iguais e inflaria |rho|."""
+    a = np.asarray(x, dtype=float)
+    ordem = np.argsort(a, kind="mergesort")
+    postos = np.empty(a.size, dtype=float)
+    postos[ordem] = np.arange(1, a.size + 1, dtype=float)
+    vals = a[ordem]
+    i = 0
+    while i < vals.size:
+        j = i + 1
+        while j < vals.size and vals[j] == vals[i]:
+            j += 1
+        if j - i > 1:
+            postos[ordem[i:j]] = postos[ordem[i:j]].mean()
+        i = j
+    return postos
+
+
+def _indices_por_dia(ts, grade_cheia=False):
+    """(dias ordenados, lista de arrays de indices por dia). A unidade de reamostragem e o
+    DIA, nao o trade: 12 moedas correlacionadas operando na mesma barra nao sao 12 observacoes
+    independentes.
+
+    `grade_cheia=True` devolve TODOS os dias entre o primeiro e o ultimo, inclusive os sem
+    trade (array vazio). Isso importa para o bootstrap de BLOCO e nao para a permutacao:
+
+      * no bootstrap, um "bloco de 5" sobre a lista compactada de dias emenda dias que podem
+        estar a semanas de distancia no calendario. Ele diz que captura dependencia serial e
+        captura menos do que promete -- e errar para MENOS dependencia estreita o IC, que e o
+        lado que faz o resultado parecer mais forte do que e. Com a grade cheia o bloco e
+        contiguo no tempo de verdade, e o dia sem trade entra como `(soma 0, contagem 0)`, que
+        e neutro no estimador de razao.
+      * na permutacao, dia vazio nao tem indice para embaralhar e so custaria tempo.
+    """
+    dias = np.asarray(ts, dtype=np.int64) // DIA_MS
+    ordem = {}
+    for i, d in enumerate(dias):
+        ordem.setdefault(int(d), []).append(i)
+    if grade_cheia and ordem:
+        chaves = list(range(min(ordem), max(ordem) + 1))
+    else:
+        chaves = sorted(ordem)
+    vazio = np.empty(0, dtype=np.int64)
+    return chaves, [np.asarray(ordem[d], dtype=np.int64) if d in ordem else vazio
+                    for d in chaves]
+
+
+def spearman_p_blocos(convs, rs, ts, n_perm=None, seed=42):
+    """Spearman(conviccao, R) com p por PERMUTACAO DE DIAS.
+
+    [Q-1, item 1] O p tabelado (e o de qualquer permutacao iid) assume trades independentes.
+    Eles nao sao: 12 moedas correlacionadas, posicoes sobrepostas no tempo. Contar trade
+    correlacionado como observacao independente foi literalmente o defeito que o `[Q-1]`
+    consertou no DSR -- repeti-lo aqui seria trocar de instrumento e manter o erro.
+
+    A permutacao embaralha a ORDEM DOS DIAS e reconstroi a serie de R concatenando os blocos
+    diarios nessa ordem nova. Isso quebra o vinculo conviccao<->R ENTRE dias e preserva o
+    agrupamento DENTRO do dia, que e a estrutura de dependencia que existe.
+
+    p UNILATERAL: a hipotese do card e direcional ("conviccao mais alta -> R maior"), e um p
+    bicaudal gastaria poder testando a direcao que ninguem defende. [F5] p = (1+#)/(B+1).
+
+    `n_perm=None` resolve de `N_PERM_CONV` DENTRO da funcao, e nao no default: default e
+    avaliado uma vez, na definicao, e ai mexer na constante faria o relatorio imprimir um
+    numero de permutacoes diferente do que rodou. Sem medida nao ha `(0.0, 1.0)` -- e
+    `(None, None)`, pelo mesmo motivo de `_ic_cluster_por_dia`: sentinela com cara de
+    medicao e o defeito do [Q-7].
+    """
+    n_perm = int(n_perm or N_PERM_CONV)
+    if len(convs) < N_MIN_FAIXA:
+        return (None, None, len(convs))
+    pc, pr = _postos(convs), _postos(rs)
+    xc = pc - pc.mean()
+    yr = pr - pr.mean()
+    denom = np.sqrt((xc * xc).sum() * (yr * yr).sum())
+    if denom == 0:                                  # um dos lados e constante: sem ordem a medir
+        return (None, None, len(convs))
+    rho = float((xc * yr).sum() / denom)
+
+    _dias, blocos = _indices_por_dia(ts)
+    rng = np.random.default_rng(seed)
+    cont = 0
+    for _ in range(n_perm):
+        perm = np.concatenate([blocos[k] for k in rng.permutation(len(blocos))])
+        if float((xc * yr[perm]).sum() / denom) >= rho:
+            cont += 1
+    return (round(rho, 4), round(_p_bootstrap(cont, n_perm), 4), len(convs))
+
+
+def _ic_cluster_por_dia(rs, ts, n_boot=2000, block=5, seed=42):
+    """IC95% da expectancia em R (por TRADE), por bootstrap de blocos de DIAS.
+
+    Estimador de razao: cada replica reamostra blocos CIRCULARES de dias (a mesma maquina do
+    `block_bootstrap_idx`, o mesmo `block=5` do `PADRAO`) e devolve `soma dos R / numero de
+    trades` dos dias sorteados. Reamostrar TRADE seria o erro do `[F1]` com outra roupa; a
+    unidade que se pode tratar como (quase) trocavel aqui e o dia.
+
+    A grade e CHEIA (`grade_cheia=True`): todo dia do intervalo entra, inclusive o sem trade
+    nesta faixa. Sobre a lista compactada, um bloco de 5 emendaria dias distantes semanas no
+    calendario e capturaria menos dependencia do que promete -- estreitando o IC, que e o lado
+    que embeleza. Ver `_indices_por_dia`.
+
+    Devolve `(None, None)` -- e nao `(0.0, 0.0)` -- quando nao ha amostra. O sentinela numerico
+    era impresso ao lado da expectancia e se lia como "IC apertadissimo em zero", que e o
+    oposto de "nao deu para medir": o defeito do `[Q-7]` com outra roupa. Quem chama tem de
+    tratar o `None`.
+    """
+    if len(rs) < N_MIN_FAIXA:
+        return (None, None)
+    _dias, blocos = _indices_por_dia(ts, grade_cheia=True)
+    r = np.asarray(rs, dtype=float)
+    soma = np.asarray([r[b].sum() for b in blocos], dtype=float)
+    cont = np.asarray([b.size for b in blocos], dtype=float)
+    T = soma.size
+    if T < 5:
+        return (None, None)
+    rng = np.random.default_rng(seed)
+    idx = block_bootstrap_idx(T, block=block, rng=rng, n_amostras=n_boot)
+    num, den = soma[idx].sum(axis=1), cont[idx].sum(axis=1)
+    ok = den > 0
+    if not ok.any():
+        return (None, None)
+    medias = num[ok] / den[ok]
+    lo, hi = np.quantile(medias, [0.025, 0.975])
+    return (round(float(lo), 4), round(float(hi), 4))
+
+
+def _r_multiplos(trades):
+    """(conv, R, ts, motivo, lev, stop_dist) dos trades que TEM unidade de risco.
+
+    Trade com `risco_inicial` ausente ou zero sai da conta e a saida e publicada -- e o padrao
+    que o `[P2-36]` fixou no `db.metricas()`: ausente nao e zero, porque um zero falso entra
+    como trade que empatou e achata tudo para o lado que embeleza.
+    """
+    fora = []
+    for t in trades:
+        ri = t.get("risco_inicial")
+        if not ri:
+            continue
+        lev = t.get("lev") or 0.0
+        sd = (ri / (VALOR * lev)) if lev else 0.0
+        fora.append((t["conv"], t["pnl"] / ri, t["ts"], t["motivo"], lev, sd, t["pnl"]))
+    return fora
+
+
+def tabela_conviccao(trades, rotulo):
+    """A tabela do `[Q-13]`: expectancia em R por faixa de conviccao, com IC e mecanismo."""
+    linhas = _r_multiplos(trades)
+    n_sem = len(trades) - len(linhas)
+    print(f"\n-- [Q-13] expectancia em R por faixa de conviccao -- {rotulo} --")
+    if not linhas:
+        print("   nenhum trade com `risco_inicial` -- nada a medir")
+        return None
+    if n_sem:
+        print(f"   {n_sem} trade(s) SEM `risco_inicial` ficaram fora da conta "
+              f"(ausente nao e zero, [P2-36])")
+    print(f"   {'faixa':>8}{'n':>7}{'exp. R':>9}{'IC95% (bloco de dias)':>26}"
+          f"{'win%':>7}{'PnL':>10}{'lev med':>9}{'stop med':>10}{'%liq':>7}")
+    print("   " + "-" * 92)
+    fora = []
+    for nome, lo, hi in FAIXAS_CONV:
+        g = [l for l in linhas if lo <= l[0] < hi]
+        if not g:
+            print(f"   {nome:>8}{0:>7}   (sem trades nesta faixa)")
+            fora.append((nome, None))
+            continue
+        rs = [l[1] for l in g]
+        ts = [l[2] for l in g]
+        exp_r = sum(rs) / len(rs)
+        ic = _ic_cluster_por_dia(rs, ts)
+        win = sum(1 for l in g if l[1] > 0) / len(g) * 100
+        pnl = sum(l[6] for l in g)
+        lev_m = sum(l[4] for l in g) / len(g)
+        sd_m = sum(l[5] for l in g) / len(g)
+        liq = sum(1 for l in g if l[3] == "liquidacao") / len(g) * 100
+        txt_ic = str(ic) if ic[0] is not None else f"-- (n < {N_MIN_FAIXA})"
+        print(f"   {nome:>8}{len(g):>7}{exp_r:>+9.4f}{txt_ic:>26}{win:>7.1f}{pnl:>+10.0f}"
+              f"{lev_m:>9.2f}{sd_m * 100:>9.2f}%{liq:>7.1f}")
+        fora.append((nome, {"n": len(g), "exp_r": round(exp_r, 4), "ic": ic,
+                            "win": round(win, 1), "lev": round(lev_m, 2),
+                            "stop_dist": round(sd_m, 5), "pct_liq": round(liq, 1)}))
+
+    rho, p, n = spearman_p_blocos([l[0] for l in linhas], [l[1] for l in linhas],
+                                  [l[2] for l in linhas], n_perm=N_PERM_CONV)
+    if p is None:
+        print(f"\n   Spearman(conviccao, R): nao medido -- n={n} < {N_MIN_FAIXA} ou um dos "
+              "lados e constante")
+    else:
+        print(f"\n   Spearman(conviccao, R) = {rho}   p = {p} (unilateral, permutacao de "
+              f"DIAS, {N_PERM_CONV} perm., n={n})")
+    print(f"   {_leitura_monotonicidade(fora, rho, p)}")
+    return {"faixas": fora, "rho": rho, "p": p, "n": n, "n_sem_risco": n_sem}
+
+
+def _leitura_monotonicidade(faixas, rho, p):
+    """A regra escrita ANTES do numero (ver o cabecalho da secao). As DUAS condicoes."""
+    validas = [(nome, d) for nome, d in faixas
+               if d and d["n"] >= N_MIN_FAIXA and d["ic"][0] is not None]
+    if len(validas) < 2:
+        return (f"=> INDECIDIVEL: so {len(validas)} faixa(s) com n >= {N_MIN_FAIXA}. Nao ha "
+                "ordenacao a medir, e isto NAO e 'nao ordena' -- e falta de amostra. [F14]")
+    if p is None:
+        return (f"=> INDECIDIVEL: o Spearman nao foi medido (n < {N_MIN_FAIXA} ou lado "
+                "constante). A regra de leitura exige AS DUAS condicoes.")
+    quais = " < ".join(nome for nome, _d in validas)
+    escadinha = all(
+        validas[i][1]["ic"][1] < validas[i + 1][1]["ic"][0] for i in range(len(validas) - 1))
+    if escadinha and p <= 0.05:
+        return (f"=> a conviccao ORDENA o resultado ({quais}): IC separados na ordem certa "
+                f"E Spearman p = {p} <= 0,05.")
+    porque = []
+    if not escadinha:
+        porque.append("os IC se sobrepoem")
+    if p > 0.05:
+        porque.append(f"Spearman p = {p} > 0,05")
+    return (f"=> a conviccao NAO ordena o resultado ({' e '.join(porque)}). Faixas com "
+            f"amostra suficiente: {quais}. Elas sao estatisticamente indistinguiveis em R.")
+
+
+def varredura_conviccao(dfs=None, funding_8h=FUNDING_8H):
+    """[Q-13] A politica viva nos DOIS modos de alavancagem, cortada por faixa de conviccao.
+
+    Rodar (da RAIZ do repo):  python -m pesquisa.validacao conviccao
+
+    Quatro tabelas: {in-sample, OOS} x {lev por conviccao, lev fixo}. O in-sample olha a
+    timeline inteira de UMA config (ver o comentario no corpo -- as seis se aninham e empilha-las
+    duplicaria trade); o OOS e a que decide, porque conviccao que ordena no treino e nao ordena
+    no teste E a definicao do problema. A diferenca entre os dois modos de `lev` isola o canal
+    de liquidacao (ver o cabecalho desta secao).
+    """
+    dfs = dfs if dfs is not None else baixar_paineis()
+    nome, kw = POLITICA_VIVA
+    fora = []
+    for modo in ("conviccao", "fixo"):
+        pol = ((f"{nome} [lev {modo}]", {**kw, "lev_modo": modo}),)
+        print(f"\n{'#' * 78}\n# [Q-13] {nome} -- lev_modo = {modo}\n{'#' * 78}", flush=True)
+        (_n, _k, res), = comparar_politicas_producao(
+            dfs=dfs, funding_8h=funding_8h, politicas=pol, n_trials=N_TRIALS_CONV,
+            tag="[Q-13]", rotulo_extra=f" | [Q-13] lev {modo}")
+        if "erro" in res:
+            print(res["erro"])
+            continue
+        # A tabela in-sample e de UMA config, nao da uniao das seis. As configs do `GRID`
+        # diferem so em `min_conv`/`adx_min` e por isso se SOBREPOEM fortemente: a maior parte
+        # dos trades da config estrita e literalmente o mesmo trade da frouxa (mesmo `ts`,
+        # mesmo `ts_saida`). Nao e aninhamento perfeito -- depois de recusar uma entrada, a
+        # estrita fica livre para entrar numa barra em que a frouxa ainda estava posicionada --
+        # mas a sobreposicao e grande, e empilhar as seis contaria o MESMO trade varias vezes,
+        # com duplicatas PERFEITAMENTE correlacionadas. Isso e "contar observacao correlacionada
+        # como independente", o pecado que este card veio investigar: o `n` por faixa sairia
+        # inflado e o IC, estreito demais. A duplicacao medida vai no documento do card.
+        #
+        # A escolhida e a `naive_cfg` (a melhor in-sample). Ela e uma escolha snooped, e por
+        # isso vale so como DIAGNOSTICO -- mas o vies dela e a favor de achar ordenacao, nao
+        # contra: se nem a config que o proprio dado escolheu ordena por conviccao, o
+        # resultado negativo e mais forte, nao mais fraco.
+        cfg_is = res["naive_cfg"]
+        t_is = tabela_conviccao(res["por_cfg"][cfg_is],
+                                f"IN-SAMPLE (config {cfg_is}, timeline inteira) | lev {modo}")
+        t_oos = tabela_conviccao(res["oos"], f"OOS (walk-forward, o que decide) | lev {modo}")
+        fora.append((modo, res, t_is, t_oos))
+    _contraste_de_lev(fora)
+    return fora
+
+
+def _contraste_de_lev(fora):
+    """A subtracao que o cabecalho da secao promete: o que sobra e o canal de liquidacao."""
+    if len(fora) < 2:
+        return
+    print(f"\n{'=' * 100}")
+    print("[Q-13] CONTRASTE lev conviccao x lev fixo -- OOS, por faixa (o canal de liquidacao)")
+    print("=" * 100)
+    por_modo = {m: (t_oos or {}).get("faixas", []) for m, _r, _i, t_oos in fora}
+    print(f"   {'faixa':>8}{'exp.R conviccao':>18}{'exp.R fixo':>13}{'delta':>10}"
+          f"{'%liq conviccao':>17}{'%liq fixo':>12}")
+    for nome, _lo, _hi in FAIXAS_CONV:
+        d_c = dict(por_modo.get("conviccao", [])).get(nome)
+        d_f = dict(por_modo.get("fixo", [])).get(nome)
+        if not d_c or not d_f:
+            continue
+        print(f"   {nome:>8}{d_c['exp_r']:>+18.4f}{d_f['exp_r']:>+13.4f}"
+              f"{d_c['exp_r'] - d_f['exp_r']:>+10.4f}{d_c['pct_liq']:>16.1f}%"
+              f"{d_f['pct_liq']:>11.1f}%")
+    print("\n   Em R a alavancagem CANCELA (`pnl/R = (move - 2*taxa - fcost/(valor*lev))/"
+          "stop_dist`).")
+    print("   O que sobra dela e o piso `-valor` e o preco de liquidacao -- os dois mordem onde")
+    print("   a conviccao e mais alta. Um `delta` proximo de zero diz que nao ha canal; um "
+          "delta")
+    print("   grande na faixa 80-100 diz que o que a conviccao move e LIQUIDACAO, nao acerto.")
 
 
 def baixar_paineis():
@@ -1484,7 +2048,7 @@ def baixar_paineis():
 
 
 def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_contraste=True,
-                           saida_kw=None, dfs=None, rotulo_extra=""):
+                           saida_kw=None, dfs=None, rotulo_extra="", taxa=None):
     """Roda a regua na estrategia da plataforma e imprime. Mantem `python -m pesquisa.validacao`
     fazendo o que fazia -- so que sob o instrumento novo."""
     dfs = dfs if dfs is not None else baixar_paineis()
@@ -1492,7 +2056,7 @@ def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_co
     rot = f"{estrategia} | {TF} {DIAS}d | {LEV}x{rotulo_extra}"
 
     print(f"rodando {len(grid)} configs x {len(COINS)} moedas...", flush=True)
-    res = walk_forward(gerador_tendencia(dfs, estrategia, funding_8h, saida_kw), grid,
+    res = walk_forward(gerador_tendencia(dfs, estrategia, funding_8h, saida_kw, taxa), grid,
                        n_trials=N_TRIALS, rotulo=rot)
     relatorio(res)
 
@@ -1500,7 +2064,7 @@ def walk_forward_tendencia(estrategia="tendencia", funding_8h=FUNDING_8H, com_co
         # [P2-10] MESMO walk-forward com funding zerado -- que e o que este script media antes,
         # por usar o default do backtest_ativo. A diferenca e o carry que a pesquisa nao pagava.
         print("\nrodando o contraste sem funding...", flush=True)
-        r0 = walk_forward(gerador_tendencia(dfs, estrategia, 0.0, saida_kw), grid,
+        r0 = walk_forward(gerador_tendencia(dfs, estrategia, 0.0, saida_kw, taxa), grid,
                           n_trials=N_TRIALS, rotulo="funding 0")
         p1 = sum(t["pnl"] for t in res["oos"])
         p0 = sum(t["pnl"] for t in r0["oos"])
@@ -1749,6 +2313,15 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "zeroazero":
         varredura_zero_a_zero()                       # [Q-11] stop zero-a-zero, lev por conviccao
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "taxa":
+        # [Q-15] sensibilidade do veredito ao custo. Sem argumento roda os tres bracos; com
+        # um ou mais valores roda so eles -- que e como se testa o encanamento em 9 min em
+        # vez de descobrir o vazamento depois de 26.
+        varredura_taxa(taxas=tuple(float(x) for x in sys.argv[2:]) or TAXAS_Q15)
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "conviccao":
+        varredura_conviccao()                         # [Q-13] expectancia em R por faixa
         sys.exit(0)
     r = walk_forward_tendencia("tendencia")
     if "erro" not in r:

@@ -212,6 +212,34 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     convicção; sem isto, medir `be_em_R` não responde nada, porque o defeito que ele ataca É a
     interação entre alavancagem e limiar. Default `"fixo"` mantém toda rodada anterior idêntica.
 
+    **`lev` e `risco_inicial` no trade emitido ([Q-13]).** O trade sempre carregou `conv` e
+    `pnl`, e com esses dois só dá para responder *win rate* por faixa de convicção. O `[P1-10]`
+    já mostrou que win rate é o modo de falha clássico desta casa: a política `B auto-saída`
+    acerta 63,9% das vezes e tem Sharpe −1,018 (`VEREDITO-M4.md`, lev fixo 10x), porque
+    ganha pouco e perde muito. A pergunta do
+    `[Q-13]` — *a convicção prevê acerto?* — só se responde em **R** (P&L sobre o
+    risco-até-o-stop da ENTRADA), e R não era calculável a partir da lista de trades: `pos`
+    sabia `risco` e `lev` e os jogava fora na emissão.
+
+    `risco_inicial = valor · lev · stop_dist` é o risco em DINHEIRO no momento da entrada, e é
+    fixado ali — o zero-a-zero do `[Q-11]` move `pos["stop"]` depois, e o R de Van Tharp é o
+    risco original, não o corrente. O nome é o da coluna do banco vivo
+    (`trades.risco_inicial`, lida por `db.metricas()` para `expectancia_r`) **de propósito**:
+    a tabela do backtest tem de poder ser lida ao lado da tabela do vivo sem tradução.
+
+    **`taxa` no trade ([Q-15]).** O que a corretora levou neste trade, em dinheiro
+    (`2 · taxa · valor · lev`), mesmo nome e mesma unidade da coluna `trades.taxa` do banco.
+    Sem ele a conta de taxa de uma rodada não é reconstituível a posteriori — no modo
+    `conviccao` a alavancagem varia por trade, então `n × 2 · taxa · valor · LEV` está errado.
+    É o número que torna checável a estimativa que a moldura do `[Q-15]` registra ANTES da
+    rodada. Ele grava a cobrança nominal: quando o `max(…, −valor)` acima trunca a perda na
+    margem, a corretora cobrou a taxa do mesmo jeito.
+
+    ⚠️ Emitir estes **três** campos não pode mover número nenhum: nada a montante os lê, e o
+    `pnl` acima não os usa. É por isso que a mudança vem sozinha, com portão de regressão
+    próprio — `test_Q13_campos_novos_so_ACRESCENTAM_e_nao_movem_o_pnl`, mais a reprodução
+    do `VEREDITO-M4-PRODUCAO-2026-08-25.md`, que é a prova que vale.
+
     **`ts_saida`, e por que ele é o FECHAMENTO do candle de saída e não a abertura.**
     Cada trade grava o instante da entrada (`ts`, o open do candle i+1, que é o fill) e o
     instante em que o desfecho ficou conhecido (`ts_saida`). A régua usa esse segundo campo
@@ -359,7 +387,12 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                 fcost = d * funding_8h * ((i - pos["i0"]) * tfh / 8) * (valor * lev_p)  # funding: LONG paga>0, SHORT recebe
                 pnl = max(valor * lev_p * move - 2 * taxa * valor * lev_p - fcost, -valor)
                 trades.append({"conv": pos["conv"], "pnl": pnl, "motivo": motivo,
-                               "ts": pos["ts"], "ts_saida": int(tss[i]) + tf_ms})
+                               "ts": pos["ts"], "ts_saida": int(tss[i]) + tf_ms,
+                               # [Q-13] a unidade de risco da ENTRADA, para que R exista
+                               "lev": lev_p,
+                               "risco_inicial": valor * lev_p * (pos["risco"] / pos["e"]),
+                               # [Q-15] o que a corretora levou, em dinheiro (= `trades.taxa`)
+                               "taxa": 2 * taxa * valor * lev_p})
                 pos = None
     return trades
 

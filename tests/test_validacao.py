@@ -1245,3 +1245,359 @@ def test_a_politica_nao_muda_a_paridade_de_entrada():
     for pol in B.POLITICAS:
         assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fraco,
                                 saida=pol, adx_min=25) == []
+
+
+# ============================ [Q-13] a unidade de risco no trade ============================
+def test_Q13_trade_carrega_lev_e_risco_inicial_e_R_bate_a_conta_na_mao():
+    """Sem `risco_inicial` no trade, R nao existe -- e sem R o [Q-13] so consegue medir win
+    rate, que e exatamente o modo de falha que o [P1-10] pegou (`B auto-saida`: 61,4% de
+    acerto, Sharpe -0,408).
+
+    `risco_inicial = valor · lev · stop_dist` e a MESMA definicao da coluna do banco vivo
+    (`trades.risco_inicial`, lida por `db.metricas()` para `expectancia_r`). Aqui ela e
+    conferida contra a conta feita a mao, para que a paridade seja fato e nao intencao."""
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0                                    # fura o stop de 3% no candle 65
+    df = df_sintetico(precos, lows=lows)
+    t, = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60], stop_dist=0.03))
+
+    assert t["lev"] == 10.0                            # lev_modo='fixo' devolve o `lev` pedido
+    assert t["risco_inicial"] == pytest.approx(100 * 10 * 0.03)      # valor · lev · stop_dist
+    assert t["taxa"] == pytest.approx(2 * 0.0005 * 100 * 10)         # as duas pernas, em R$
+
+    r = t["pnl"] / t["risco_inicial"]                  # o stop foi ao chao: perda de ~1R
+    assert -1.2 < r < -1.0                             # -1R mais slippage e as duas taxas
+
+
+def test_Q13_risco_inicial_e_o_da_ENTRADA_mesmo_quando_o_zero_a_zero_move_o_stop():
+    """R de Van Tharp e o risco ORIGINAL. O zero-a-zero do [Q-11] reescreve `pos['stop']`
+    durante o trade; se `risco_inicial` seguisse o stop corrente, um trade protegido teria
+    R -> 0 e a expectancia em R explodiria para +infinito exatamente nos trades que a guarda
+    salvou. O campo tem de ficar congelado na entrada."""
+    precos = [100.0] * 62 + [101.5] * 2 + [98.0] * 6
+    highs, lows = list(precos), list(precos)
+    lows[64] = 98.0
+    df = df_com_indicadores(precos, highs=highs, lows=lows)
+    fn = sinal_em([60], stop_dist=0.01)
+
+    def roda(**kw):
+        return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
+                                saida="trailing", trailing_dist=0.02, **kw)
+
+    sem, = roda()
+    com, = roda(be_em_R=1.0)
+    assert com["motivo"] == "zero-a-zero"              # a guarda de fato armou
+    assert com["risco_inicial"] == sem["risco_inicial"] == pytest.approx(100 * 10 * 0.01)
+
+
+def test_Q13_lev_emitido_e_o_realizado_no_modo_conviccao_nao_o_argumento():
+    """No modo `conviccao` a alavancagem e por trade (2x-20x + cap geometrico do [P1-11]), e o
+    `lev` do argumento nao descreve nada. Se o trade gravasse o argumento, a conta de taxa do
+    [Q-15] e o `stop_dist` reconstruido do [Q-13] sairiam os dois errados, e no mesmo sentido."""
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0                                    # fura o stop de 1% no candle 65
+    df = df_sintetico(precos, lows=lows)
+    fn = sinal_em([60], conv=100.0, stop_dist=0.01)
+    t, = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, lev_modo="conviccao")
+    assert t["lev"] == B._lev_conviccao(100.0, 2.0, 20.0, 60.0, 0.01) == 20.0
+    assert t["lev"] != 10                              # o argumento `lev` NAO e o realizado
+    # `stop_dist` e reconstruido como risco_inicial/(valor·lev) -- a coluna 'stop med' da tabela
+    assert t["risco_inicial"] / (100 * t["lev"]) == pytest.approx(0.01)
+
+
+def test_Q13_campos_novos_so_ACRESCENTAM_e_nao_movem_o_pnl():
+    """O portao de regressao dos campos novos, e ele e o motivo de a emissao vir num commit
+    sozinha: `lev`, `risco_inicial` e `taxa` sao ADITIVOS. Nada a montante os le e o `pnl` nao
+    os usa -- entao toda rodada publicada tem de continuar identica. A prova forte e a
+    reproducao do `VEREDITO-M4-PRODUCAO-2026-08-25.md`, que nao cabe num teste offline; o que
+    cabe e afirmar que as chaves antigas seguem la e que o pnl continua preso a margem."""
+    precos = [100.0] * 60 + [101.0, 102.0, 103.0, 102.0, 101.0, 100.0, 99.0, 98.0, 97.0, 96.0]
+    df = df_com_indicadores(precos, highs=precos, lows=precos)
+    vistos = 0
+    for saida in B.POLITICAS:
+        for modo in ("fixo", "conviccao"):
+            for t in B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
+                                      saida=saida, lev_modo=modo):
+                assert {"conv", "pnl", "motivo", "ts", "ts_saida"} < set(t)
+                assert t["pnl"] >= -100.0              # o teto na margem segue de pe
+                assert t["lev"] == (10.0 if modo == "fixo" else t["lev"])
+                assert t["risco_inicial"] == pytest.approx(100 * t["lev"] * 0.03)
+                vistos += 1
+    assert vistos >= 6                                 # as tres politicas x os dois modos
+
+
+# ============================ [Q-13] faixas, postos e permutacao ============================
+def _trades_conv(pares, dia_de=None):
+    """(conviccao, R) -> trades com `risco_inicial` = 1, um por dia salvo indicacao."""
+    fora = []
+    for i, (conv, r) in enumerate(pares):
+        d = i if dia_de is None else dia_de[i]
+        fora.append({"conv": float(conv), "pnl": float(r), "risco_inicial": 1.0,
+                     "lev": 10.0, "taxa": 1.0, "motivo": "stop",
+                     "ts": int(T0 + d * DIA), "ts_saida": int(T0 + d * DIA)})
+    return fora
+
+
+def test_Q13_postos_usam_media_nos_empates():
+    """A conviccao do `scoring` e grossa e empata muito. Posto por `argsort` cru inventaria
+    ordem entre iguais e inflaria |rho| -- inventar ordem onde o dado nao tem e o jeito mais
+    barato de fabricar monotonicidade."""
+    assert list(V._postos([10, 20, 30])) == [1.0, 2.0, 3.0]
+    assert list(V._postos([10, 10, 30])) == [1.5, 1.5, 3.0]
+    assert list(V._postos([5, 5, 5, 5])) == [2.5, 2.5, 2.5, 2.5]
+
+
+def test_Q13_spearman_recupera_o_sinal_e_o_p_de_permutacao_nunca_e_zero():
+    """rho = +1 numa relacao monotonica perfeita, -1 na invertida. E [F5]: p = (1+#)/(B+1),
+    nunca 0 -- com B permutacoes o piso e 1/(B+1)."""
+    subindo = _trades_conv([(i, i) for i in range(120)])
+    rho, p, n = V.spearman_p_blocos([t["conv"] for t in subindo],
+                                    [t["pnl"] for t in subindo],
+                                    [t["ts"] for t in subindo], n_perm=200)
+    assert rho == pytest.approx(1.0) and n == 120
+    assert p == round(1.0 / 201, 4) and p > 0           # [F5] o piso, arredondado a 4 casas
+
+    descendo = _trades_conv([(i, -i) for i in range(120)])
+    rho2, p2, _ = V.spearman_p_blocos([t["conv"] for t in descendo],
+                                      [t["pnl"] for t in descendo],
+                                      [t["ts"] for t in descendo], n_perm=200)
+    assert rho2 == pytest.approx(-1.0)
+    assert p2 > 0.9                                    # unilateral: a direcao contraria nao conta
+
+
+def test_Q13_permutacao_por_DIA_e_mais_conservadora_que_a_iid_em_dado_agrupado():
+    """O achado do [Q-1] com outra roupa. Quando conviccao e R sao constantes DENTRO do dia e
+    variam entre dias, a estrutura toda mora no dia: uma permutacao iid trataria cada trade
+    como observacao independente e devolveria p minusculo; a permutacao por dia so tem tantas
+    unidades quanto dias, e o p que ela devolve e honestamente maior.
+
+    Se este teste falhar no sentido de o p de bloco ficar MENOR, a permutacao nao esta
+    respeitando o agrupamento -- e o instrumento voltou a contar trade correlacionado como
+    observacao independente."""
+    rng = np.random.default_rng(7)
+    pares, dias = [], []
+    for d in range(12):                                # 12 dias x 20 trades identicos no dia
+        c = float(d * 8)
+        r = float(rng.normal(d * 0.02, 0.5))
+        for _ in range(20):
+            pares.append((c, r))
+            dias.append(d)
+    tr = _trades_conv(pares, dia_de=dias)
+    convs = [t["conv"] for t in tr]
+    rs = [t["pnl"] for t in tr]
+    _rho, p_bloco, _ = V.spearman_p_blocos(convs, rs, [t["ts"] for t in tr], n_perm=500)
+
+    # o mesmo dado com cada trade num dia SO -- e a permutacao iid disfarcada
+    _rho2, p_iid, _ = V.spearman_p_blocos(convs, rs, [T0 + i * DIA for i in range(len(tr))],
+                                          n_perm=500)
+    assert p_bloco > p_iid
+
+
+def test_Q13_ic_de_faixa_reamostra_DIA_e_nao_trade():
+    """[F1] com outra roupa: a unidade trocavel e o DIA, nao o trade.
+
+    O cenario tem de ser o da dependencia, senao nao prova nada. Sao 20 valores de dia, cada um
+    repetido 20 vezes -- 400 numeros, mas so 20 observacoes de verdade. E o retrato do que
+    acontece na regua: 12 moedas correlacionadas operando na mesma barra nao sao 12
+    observacoes.
+
+    O contraste e contra o que o [F1] PROIBE: o bootstrap iid sobre a lista de trades, que
+    trataria os 400 como 400 observacoes e encolheria o IC por ~sqrt(20). Um IC de faixa que
+    saia parecido com o iid esta contando trade correlacionado como observacao independente --
+    exatamente o defeito que o [Q-1] consertou no DSR, com outra roupa."""
+    rng = np.random.default_rng(3)
+    dia_a_dia = list(rng.normal(0.05, 1.0, size=20))
+    rs = [v for v in dia_a_dia for _ in range(20)]                  # 400 numeros, 20 distintos
+    agrupado = [T0 + (i // 20) * DIA for i in range(400)]           # a verdade: 20 dias
+
+    lo_d, hi_d = V._ic_cluster_por_dia(rs, agrupado, n_boot=2000)
+    lo_t, hi_t = V.bootstrap_ci(rs, n_boot=2000, modo="iid")        # o proibido pelo [F1]
+    assert (hi_d - lo_d) > 3 * (hi_t - lo_t)
+
+
+def test_Q13_a_regra_de_leitura_exige_AS_DUAS_condicoes():
+    """A regra escrita ANTES do numero: 'monotonico' so vale com IC separados na ordem certa E
+    Spearman p <= 0,05. Cada uma sozinha ja produziu conclusao errada em pesquisa quant --
+    IC separados com p alto e ordenacao por acaso; p baixo com IC sobrepostos e efeito real
+    pequeno demais para decidir alavancagem."""
+    def faixas(*ics):
+        return [(n, {"n": 100, "ic": ic}) for n, ic in zip(("0-40", "40-60", "60-80"), ics)]
+
+    escada = faixas((-0.5, -0.3), (-0.1, 0.1), (0.3, 0.5))
+    sobrepostas = faixas((-0.5, 0.2), (-0.1, 0.3), (0.0, 0.5))
+    assert "ORDENA" in V._leitura_monotonicidade(escada, 0.4, 0.01)
+    assert "NAO ordena" in V._leitura_monotonicidade(escada, 0.4, 0.30)
+    assert "NAO ordena" in V._leitura_monotonicidade(sobrepostas, 0.4, 0.01)
+
+    # [F14] faixa de menos NAO e "nao ordena": emitir veredito negativo por falta de amostra e
+    # o erro que a terceira resposta da regua veio consertar. Aqui vale a mesma disciplina.
+    magra = [("0-40", {"n": 4, "ic": (-0.5, -0.3)}), ("40-60", {"n": 100, "ic": (0.3, 0.5)})]
+    saida = V._leitura_monotonicidade(magra, 0.4, 0.01)
+    assert "INDECIDIVEL" in saida and "NAO ordena" not in saida
+
+
+def test_Q13_tabela_conviccao_publica_o_trade_sem_risco_em_vez_de_conta_lo_como_zero():
+    """[P2-36]: ausente nao e zero. Um R falso de 0 entra como trade que empatou, achata o
+    desvio e puxa a expectancia para o meio -- e todos os erros vao para o mesmo lado, o que
+    embeleza. Numa casa cujo produto e o 'sem edge' honesto, a aproximacao que embeleza e a
+    proibida; o caminho e tira-lo da conta E publicar quantos sairam."""
+    tr = _trades_conv([(70, 1.0)] * 60)
+    tr.append({"conv": 70.0, "pnl": -999.0, "risco_inicial": None, "lev": 10.0, "taxa": 1.0,
+               "motivo": "stop", "ts": int(T0), "ts_saida": int(T0)})
+    fora = V.tabela_conviccao(tr, "teste")
+    assert fora["n_sem_risco"] == 1
+    d = dict(fora["faixas"])["60-80"]
+    assert d["n"] == 60 and d["exp_r"] == pytest.approx(1.0)
+
+
+def test_Q13_faixas_batem_com_as_do_banco_vivo():
+    """As fronteiras sao as MESMAS de `db.metricas().por_conviccao`. Se divergirem, a tabela do
+    backtest deixa de poder ser lida ao lado da do vivo -- e a comparacao entre pesquisa e
+    producao passa a exigir traducao, que e onde erro entra sem ser visto."""
+    import db
+    assert [(n, lo, hi) for n, lo, hi in V.FAIXAS_CONV] == sorted(
+        [("80-100", 80, 101), ("60-80", 60, 80), ("40-60", 40, 60), ("0-40", 0, 40)],
+        key=lambda f: f[1])
+    assert hasattr(db, "metricas")
+
+
+# ============================ [Q-15] a taxa atravessa a regua ============================
+def test_Q15_taxa_chega_ao_backtest_pelo_gerador_e_o_default_e_o_sentinela():
+    """O defeito que o card achou: `backtest_ativo` tem `taxa` desde junho e NENHUM chamador da
+    regua a passava, entao toda rodada publicada esta cravada em taker. O sentinela `None`
+    mantem o caminho default byte-identico -- a reproducao das rodadas publicadas nao pode
+    depender de duas constantes continuarem iguais em dois arquivos."""
+    df = df_com_indicadores([100.0] * 60 + [101.0, 102.0, 103.0, 101.0, 99.0,
+                                            97.0, 95.0, 93.0, 91.0, 89.0])
+    moeda = V.COINS[0]
+    dfs = {moeda: df}
+    fn = sinal_em([60])
+    orig_coins, orig_bt = V.COINS, V.backtest_ativo
+    try:
+        V.COINS = [moeda]
+        V.backtest_ativo = lambda *a, **k: orig_bt(*a, **dict(k, sinal_fn=fn))
+        cheia = V.gerador_tendencia(dfs, "tendencia", 0.0, {"saida": "trailing"})((0, 25))
+        zero = V.gerador_tendencia(dfs, "tendencia", 0.0, {"saida": "trailing"}, 0.0)((0, 25))
+    finally:
+        V.COINS, V.backtest_ativo = orig_coins, orig_bt
+
+    assert len(cheia) == len(zero) == 1
+    assert cheia[0]["taxa"] == pytest.approx(2 * 0.0005 * 100 * 10)   # default = TAXA (taker)
+    assert zero[0]["taxa"] == 0.0
+    # so o custo muda: mesmo trade, mesma saida, P&L deslocado pelas duas pernas de taxa
+    assert (cheia[0]["ts"], cheia[0]["ts_saida"]) == (zero[0]["ts"], zero[0]["ts_saida"])
+    assert cheia[0]["motivo"] == zero[0]["motivo"]
+    assert zero[0]["pnl"] - cheia[0]["pnl"] == pytest.approx(2 * 0.0005 * 100 * 10)
+
+
+def test_Q15_conta_de_taxa_soma_o_pago_e_nao_recalcula_de_uma_constante():
+    """No modo `conviccao` a alavancagem varia por trade, entao `n x 2·TAXA·VALOR·LEV` esta
+    errado -- e errado para MENOS ou para MAIS conforme a mistura de conviccoes da janela.
+    Somar o campo gravado tambem e o que faz a conta nao mentir quando os bracos da varredura
+    rodaram com taxas diferentes, que e o proposito da rodada."""
+    tr = [{"taxa": 1.0, "lev": 2.0}, {"taxa": 10.0, "lev": 20.0}, {"pnl": 3.0}]
+    assert V.conta_de_taxa(tr) == pytest.approx(11.0)      # o trade sem o campo nao entra
+    assert V.conta_de_taxa([]) == 0
+
+
+def test_Q15_taxa_viaja_para_o_worker_do_pool_por_initargs():
+    """No Windows o `ProcessPoolExecutor` usa *spawn*: o filho re-importa o modulo do zero e os
+    globais dele nascem `None`. Uma `taxa` fechada num closure viaja por pickle da FUNCAO e
+    silenciosamente NAO chega -- o braco 'maker' rodaria taker e a tabela inteira seria uma
+    mentira consistente. Por isso ela entra por `initargs`, e por isso isto e testado."""
+    import inspect
+    assert list(inspect.signature(V._init_worker).parameters) == ["dfs", "funding_8h", "taxa"]
+    try:
+        V._init_worker({"X/USDT": 1}, 0.0001, 0.0002)
+        assert (V._DFS_W, V._FUNDING_W, V._TAXA_W) == ({"X/USDT": 1}, 0.0001, 0.0002)
+        V._init_worker({"X/USDT": 1}, 0.0001)              # os chamadores antigos seguem valendo
+        assert V._TAXA_W is None
+    finally:
+        V._init_worker(None, None, None)
+    assert "taxa" in inspect.signature(V.comparar_politicas_producao).parameters
+
+
+def test_Q15_a_invariancia_do_conjunto_falha_nas_DUAS_direcoes():
+    """O portao de correcao da varredura, e ele e de graca. Com `sd_min=0` e `be_em_R=None` a
+    taxa entra na LOGICA DE SAIDA de uma politica so -- a `B auto-saida`, cujo gatilho le ROE.
+    Logo: A/C tem de ter conjunto IDENTICO entre bracos (so o pnl desloca) e B tem de MUDAR.
+
+    Um portao que so pega vazamento numa direcao deixaria passar o pior caso: a taxa nao chegar
+    ao `_roe` e o braco medir o default achando que mediu maker.
+
+    Quem le taxa na saida chega por `le_taxa_na_saida`, que a varredura monta do `kw`
+    (`saida == "auto"`). Nao pode sair do NOME: nome e rotulo de tabela e muda sem aviso."""
+    igual, muda = {("x",): (1, 2)}, {("x",): (9, 9)}
+    LE = {"B auto-saida"}
+    ok = {0.0005: {"A stop": igual, "B auto-saida": igual, "C trailing": igual},
+          0.0002: {"A stop": igual, "B auto-saida": muda, "C trailing": igual}}
+    for nome, iguais, espera in V._invariancia_do_conjunto(ok, LE):
+        assert iguais == espera, nome
+
+    vazou = {0.0005: {"A stop": igual, "B auto-saida": igual},
+             0.0002: {"A stop": muda, "B auto-saida": muda}}          # A mudou: vazamento
+    achados = dict((n, (i, e)) for n, i, e in V._invariancia_do_conjunto(vazou, LE))
+    assert achados["A stop"] == (False, True)                         # detectado
+
+    surdo = {0.0005: {"A stop": igual, "B auto-saida": igual},
+             0.0002: {"A stop": igual, "B auto-saida": igual}}        # B nao mudou: nao chegou
+    achados = dict((n, (i, e)) for n, i, e in V._invariancia_do_conjunto(surdo, LE))
+    assert achados["B auto-saida"] == (True, False)                   # detectado
+
+    # renomear a politica nao pode desarmar o portao -- era o defeito do prefixo de string
+    renomeada = {t: {"politica 4 [prod]": v["B auto-saida"]} for t, v in surdo.items()}
+    achados = dict((n, (i, e)) for n, i, e in
+                   V._invariancia_do_conjunto(renomeada, {"politica 4 [prod]"}))
+    assert achados["politica 4 [prod]"] == (True, False)              # segue detectado
+
+
+def test_Q15_assinatura_do_conjunto_ignora_pnl_e_olha_por_cfg_nao_o_oos():
+    """A assinatura NAO pode incluir P&L (ele muda de proposito) e o objeto tem de ser
+    `por_cfg`, nao `oos`: o conjunto OOS depende de qual config cada fold escolheu, e essa
+    escolha LE P&L. Comparar `oos` entre bracos daria falso positivo de vazamento sempre que a
+    taxa mudasse a config vencedora -- que e um efeito legitimo, nao um bug."""
+    def t(ts, pnl):
+        return {"ts": ts, "ts_saida": ts + 1, "motivo": "stop", "pnl": pnl}
+    a = {"por_cfg": {(50, 22): [t(1, 5.0), t(2, -3.0)]}}
+    b = {"por_cfg": {(50, 22): [t(1, 4.0), t(2, -4.0)]}}
+    assert V._assinatura_por_cfg(a) == V._assinatura_por_cfg(b)
+    c = {"por_cfg": {(50, 22): [t(1, 5.0), t(3, -3.0)]}}
+    assert V._assinatura_por_cfg(a) != V._assinatura_por_cfg(c)
+
+
+def test_Q13_faixa_magra_nao_ganha_IC_falso_em_vez_de_um_IC_ausente(capsys):
+    """O smoke pegou isto antes de a rodada de verdade pegar: com n < 30 o IC saia `(0.0, 0.0)`
+    e era IMPRESSO ao lado de uma expectancia de +1,34. Lido na tabela, `(0,0 ; 0,0)` parece um
+    IC apertadissimo em zero -- o oposto do que aconteceu, que foi nao haver amostra para
+    medir. E o defeito do [Q-7] com outra roupa: sentinela com cara de medicao, ao lado de um
+    numero de verdade, esperando que alguem compare os dois.
+
+    Sentinela agora e `None`, e a tabela escreve por extenso que a faixa nao tem amostra."""
+    assert V._ic_cluster_por_dia([1.0] * 10, [T0 + i * DIA for i in range(10)]) == (None, None)
+
+    tr = _trades_conv([(70, 1.0)] * 60 + [(90, 5.0)] * 5)   # 60 numa faixa, 5 na de cima
+    fora = V.tabela_conviccao(tr, "faixa magra")
+    saida = capsys.readouterr().out
+    assert "(0.0, 0.0)" not in saida and f"n < {V.N_MIN_FAIXA}" in saida
+    assert dict(fora["faixas"])["80-100"]["ic"] == (None, None)
+    assert dict(fora["faixas"])["60-80"]["ic"][0] is not None
+
+    # e a faixa sem IC nao pode entrar na leitura de monotonicidade
+    assert "INDECIDIVEL" in V._leitura_monotonicidade(fora["faixas"], 0.9, 0.001)
+
+
+def test_Q15_um_braco_so_diz_que_o_portao_NAO_RODOU_em_vez_de_imprimir_nada(capsys):
+    """Achado da rodada real desta sessao: com um braco so, o relatorio imprimia o cabecalho do
+    portao de invariancia e nenhuma linha embaixo. Cabecalho vazio le-se como "rodou e nao achou
+    nada" -- e o portao nem rodou, porque ele compara bracos ENTRE SI e havia um.
+
+    E a mesma familia do sentinela `(0.0, 0.0)`: o relatorio dando a impressao de ter verificado
+    algo que nao verificou. Numa casa onde o produto e o veredito honesto, essa e a mentira que
+    custa mais caro, porque ninguem vai conferir um portao que disse OK."""
+    assert V._invariancia_do_conjunto({0.0005: {"A": {}}}, set()) == []
+    V.relatorio_taxa([], assinaturas={0.0005: {"A": {}}}, le_taxa_na_saida=set())
+    saida = capsys.readouterr().out
+    assert "NAO SE APLICA" in saida and "1 braco(s)" in saida
+    assert "OK" not in saida.split("NAO SE APLICA")[1]
