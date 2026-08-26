@@ -39,7 +39,7 @@ explícito. Um painel que só lista sinal e posição atende metade da direção
 | **Day trade autônomo** | ✅ `signal_engine.py` + `autotrader.py`, ciclo de 15 s, guardas de risco | é o que existe de mais maduro |
 | **Swing trade** | ❌ o motor é 1h intraday | regime 1d/4h, stop largo, alavancagem baixa (card `SW-1`) |
 | **Gestão de carteira** | 🟡 risco por trade e teto de exposição existem (`simulador.guarda_risco`); `pesquisa/backtest_portfolio.py` mede carteira na régua | **a carteira não é objeto de decisão**: não há alocação alvo, rebalance, nem correlação entre posições. `motor_portfolio.py` está em `legado/`. O `dca.py` roda como anexo, não como parte da carteira |
-| **Momentum de mercado** | 🟡 `mercado.py` lê book, fluxo taker, funding e sentimento | nada disso entra na decisão como sinal **medido** — é display |
+| **Momentum de mercado** | 🟡 o **fluxo taker entra na decisão**: é portão de entrada (`signal_engine.py:87-98`, config `exigir_fluxo`) e sinal do gestor de saída (`:147-153`). Mas `funding_ranking()`, `sentimento()`, `fear_greed()`, `breadth()`, `smartmoney()` e `zonas_liquidez()` só são lidos pelo `api.py` — **display puro** | trazer o que já é coletado para dentro da decisão, com efeito **medido** e não achado. Barato: o coletor existe |
 | **Notícias** | ❌ nada | card `N-1`: coleta, consolidação e efeito medido |
 | **Fundamentalista** | ❌ nada | o dono disse "mais pra frente" — fica declarado, não esquecido |
 
