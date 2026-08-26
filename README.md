@@ -1,7 +1,13 @@
-# Plataforma de Pesquisa Quant + Paper Trading (cripto)
+# Ferramenta de operação e análise de criptoativos
 
-Sistema de **paper trading** e validação de estratégias em cripto. Dinheiro fictício, sem chave
-de exchange, sem ordem real — só dados públicos da Binance via `ccxt`.
+**Para onde isto aponta está em [NORTE.md](NORTE.md) — leia primeiro.** Em uma frase: operar
+sozinho (day trade, swing trade e gestão de carteira) e ser uma ferramenta de análise de mercado
+que consolida notícia, momentum, posicionamento e técnica. É pra ser lucrativa.
+
+**Estágio de hoje:** paper trading — dinheiro fictício, sem chave de exchange, sem ordem real,
+só dados públicos da Binance via `ccxt`. Isso é o estágio, não o destino: o painel é o mesmo que
+um dia encosta em dinheiro de verdade, e é por isso que as guardas de risco são levadas a sério
+desde agora.
 
 O objetivo é um sistema **lucrativo** — e a régua existe para que o lucro, quando vier, esteja
 atrás de evidência e não de sorte. Ela mede estratégias com rigor estatístico e **mata as ruins
@@ -197,6 +203,7 @@ bash deploy/provisionar-azure.sh
 
 | Documento | Conteúdo |
 |---|---|
+| [NORTE.md](NORTE.md) | **Para onde o projeto aponta**: a direção do dono, os cinco pilares e o estado de cada um, o que não se rediscute. Manda no `CLAUDE.md` quando os dois divergirem |
 | [CLAUDE.md](CLAUDE.md) | **Contrato entre sessões de IA**: mapa de módulos, comandos, convenções e os invariantes que não se relaxam sem decisão humana |
 | [ARQUITETURA.md](ARQUITETURA.md) | **Como funciona por dentro**: fluxo do worker, ciclo do sinal, esquema do banco, topologia do deploy, decisões com o porquê |
 | [BASE-CONHECIMENTO-TRADING.md](BASE-CONHECIMENTO-TRADING.md) | Base teórica: AT, microestrutura, risco/validação, cripto on-chain, o que funciona vs mito |
@@ -238,6 +245,7 @@ independentemente do Reality Check não é uma condição.
 
 ## Aviso
 
-Software de pesquisa e educação. Não é recomendação de investimento. O próprio projeto
-concluiu, com dados, que não encontrou vantagem operacional — trate qualquer resultado aqui
-como hipótese a ser refutada, não como sinal para arriscar dinheiro.
+Não é recomendação de investimento, e nada aqui vale para a carteira de outra pessoa. O
+projeto busca vantagem operacional e **ainda não encontrou uma que passe na régua** — enquanto
+não passar, trate todo resultado como hipótese a ser refutada, não como sinal para arriscar
+dinheiro. É essa a diferença entre o que o projeto quer e o que ele já provou.

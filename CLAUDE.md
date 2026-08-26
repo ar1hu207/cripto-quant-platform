@@ -5,6 +5,11 @@ FastAPI varre o mercado 24/7, propõe trades, e um auto-trader opcional abre e f
 Projeto AI-first: o desenvolvimento é feito por sessões de agente, e este arquivo é o contrato
 entre elas. Cada regra aqui nasceu de um erro real — as datas dizem quando doeu.
 
+**➜ Para onde o projeto aponta: [`NORTE.md`](NORTE.md). Leia antes deste arquivo.** Este diz
+*como* se trabalha aqui; o `NORTE.md` diz *para quê* — operar sozinho (day trade, swing e
+carteira) e ser ferramenta de análise de mercado, com lucro como objetivo declarado. Se os dois
+divergirem, o `NORTE.md` manda e este é que se conserta.
+
 **O objetivo é lucro; a honestidade é como se chega nele.** O walk-forward + DSR já concluiu
 que **não existe edge deployável no que está implementado**, e o M4 estendeu a conclusão às
 quatro políticas de saída — inclusive à que o sistema executa ao vivo (`C trailing`: 5.342
@@ -67,8 +72,9 @@ Logs da VM: `journalctl -u cripto-bot -n 50 --no-pager`, por `az vm run-command`
   o mandou para `legado/config.py` e tirou a reivindicação. **Não existe segunda fonte.**
 - **Nunca `cp` do `trading.db` vivo** — o bot escreve a cada ciclo. Cópia íntegra é
   `sqlite3 trading.db ".backup '...'"`, sempre seguida de `PRAGMA integrity_check`.
-- **Dinheiro é fictício, preço é real.** Isso não relaxa nada: o histórico de pesquisa é perda
-  real se corromper, e o painel é o mesmo que um dia encosta em dinheiro de verdade.
+- **Dinheiro é fictício, preço é real — e isso é o estágio, não o destino** (`NORTE.md`). Não
+  relaxa nada: o histórico de pesquisa é perda real se corromper, e o painel é o mesmo que um
+  dia encosta em dinheiro de verdade. Escreva cada guarda como se já encostasse.
 
 ## 2. Invariantes — nunca relaxar sem decisão humana registrada
 
