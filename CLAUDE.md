@@ -53,7 +53,7 @@ de propósito — não conserte esses imports (`legado/README.md`).
 ```bash
 pip install -r requirements.txt && uvicorn api:app --port 8000  # local; painel em :8000
 pip install -r requirements-dev.txt
-python -m pytest                    # 532 passed (~3 min) — rode antes de mergear
+python -m pytest                    # 594 testes (~3 min) — rode antes de mergear
 python -m pytest -m "not lento"     # laço rápido, sem a prova de 1 ano de curva de equity
 python -m pesquisa.validacao        # a régua (da RAIZ; `python pesquisa/validacao.py` NÃO roda)
 python -c "import api"              # smoke da plataforma
