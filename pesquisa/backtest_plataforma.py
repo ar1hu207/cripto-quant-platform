@@ -169,7 +169,7 @@ def _roe(pos, preco, valor, lev, taxa):
 def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                    estrategia="tendencia", df=None, adx_min=25, adx_max_rev=22,
                    max_hold=20, taxa=TAXA, slip=0.0002, funding_8h=0.0, tf_horas=None,
-                   entrada="taker", maker_off=0.0, exec_stats=None,
+                   entrada="taker", maker_off=0.0, exec_stats=None, taxa_saida=None,
                    sinal_fn=None, saida="regime", trailing_dist=TRAILING_DIST,
                    trailing_k_atr=None, alvo_roe=ALVO_ROE, sd_min=0.0,
                    be_em_R=None, lev_modo="fixo", lev_min=2.0, lev_max=20.0, conv_min_lev=60.0,
@@ -280,6 +280,15 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
         df = preparar(baixar_ohlcv(ativo, tf, dias=dias))
     tfh = _horas_por_barra(df, tf_horas, tf)                    # medida no df, nao adivinhada
     tf_ms = int(round(tfh * 3_600_000))                         # duracao do candle, para o `ts_saida`
+    # [CX-4] Taxa de ENTRADA e de SAIDA separadas. `taxa_saida=None` = a mesma da entrada, que
+    # deixa todo caminho anterior BYTE-IDENTICO (`taxa + taxa_saida` == `2 * taxa`).
+    #
+    # Existe porque o [CX-1] cobrou MAKER nas duas pernas, e isso e otimista: a saida do motor e
+    # stop/trailing, que e ordem a MERCADO por natureza -- quando o preco vira contra, nao da
+    # para pendurar limite e torcer. O round-trip realista de post-only e maker na entrada +
+    # taker na saida.
+    taxa_saida = taxa if taxa_saida is None else taxa_saida
+    taxa_rt = taxa + taxa_saida                                 # o que o round-trip custa, em fracao
     opens, closes, tss = df["open"].values, df["close"].values, df["timestamp"].values
     highs, lows = df["high"].values, df["low"].values
     mids = df["bb_mid"].values
@@ -438,7 +447,7 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
             elif saida == "trailing":
                 pass                                            # só stop trailado e liquidação fecham
             elif saida == "auto":                               # B: reversão COM lucro (gestor de saída)
-                roe = _roe(pos, closes[i], valor, pos["lev"], taxa)
+                roe = _roe(pos, closes[i], valor, pos["lev"], taxa_rt / 2.0)
                 if _sinais_reversao(d, i, closes, rsi, ema_r, ema_l) and (
                         roe >= alvo_roe or roe > ROE_MIN_LUCRO):
                     saida_p, motivo = closes[i], "auto-saida"
@@ -455,7 +464,7 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                 if be_em_R and not pos["be"] and pos["risco"] > 0:
                     ganho = (highs[i] - pos["e"]) if d == 1 else (pos["e"] - lows[i])
                     if ganho >= be_em_R * pos["risco"]:
-                        be = pos["e"] * (1 + d * 2 * taxa)       # zero a zero COBRINDO a taxa
+                        be = pos["e"] * (1 + d * taxa_rt)        # zero a zero COBRINDO a taxa do round-trip
                         pos["stop"] = max(pos["stop"], be) if d == 1 else min(pos["stop"], be)
                         pos["be"] = be
                 if saida == "trailing":
@@ -468,7 +477,7 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                 saida_fill = saida_p if motivo == "liquidacao" else saida_p * (1 - d * slip)  # liq = preço de liq (= live)
                 move = d * (saida_fill / pos["e"] - 1)
                 fcost = d * funding_8h * ((i - pos["i0"]) * tfh / 8) * (valor * lev_p)  # funding: LONG paga>0, SHORT recebe
-                pnl = max(valor * lev_p * move - 2 * taxa * valor * lev_p - fcost, -valor)
+                pnl = max(valor * lev_p * move - taxa_rt * valor * lev_p - fcost, -valor)
                 trades.append({"conv": pos["conv"], "pnl": pnl, "motivo": motivo,
                                "ts": pos["ts"], "ts_saida": int(tss[i]) + tf_ms})
                 pos = None
