@@ -67,15 +67,20 @@ Construir um robô de micro-trade automatizado que opera cripto na Binance via C
 
 ### 1.4 Objetivos (com expectativas calibradas)
 
-**Objetivo primário — Aprendizado (alta probabilidade de sucesso):**
-- Dominar CCXT, modelagem de ordens, backtesting honesto, gestão de risco, prompt-engineering para saída JSON estruturada e MLOps leve.
-- Entregável que tem valor mesmo se o bot não der lucro: um framework de teste A/B reproduzível e um relatório honesto de performance.
+> ⚠️ **Esta seção estava invertida e foi corrigida em 2026-08-27.** Ela listava aprendizado como
+> objetivo primário e lucro como secundário — o contrário do que o dono quer. Ver
+> [`NORTE.md`](NORTE.md), que é a fonte da direção. As **expectativas calibradas** abaixo ficam
+> como estavam: elas não são pessimismo, são a diferença entre meta e cenário-base.
 
-**Objetivo secundário — Potencial de lucro (probabilidade real, NÃO garantida):**
+**Objetivo primário — Lucro (probabilidade real, NÃO garantida):**
 - Em testnet: provar edge estatístico positivo **líquido de taxas** e superior a buy-and-hold no mesmo período — com a ressalva (Seção 7) de que o PnL de testnet não é representativo de lucratividade real.
 - Em produção (só se passar nos critérios): preservar capital e, na melhor hipótese, gerar retorno modesto ajustado ao risco.
 
-> **Expectativa honesta:** o resultado mais provável de bots de varejo é empatar ou perder para buy-and-hold depois das taxas. Tratar QUALQUER lucro consistente líquido como **sucesso excepcional**, não como cenário-base.
+**Objetivo secundário — Aprendizado (alta probabilidade de sucesso):**
+- Dominar CCXT, modelagem de ordens, backtesting honesto, gestão de risco, prompt-engineering para saída JSON estruturada e MLOps leve.
+- Entregável que sobra mesmo se o bot não der lucro: um framework de teste A/B reproduzível e um relatório honesto de performance. **Consolo, não meta.**
+
+> **Expectativa honesta:** o resultado mais provável de bots de varejo é empatar ou perder para buy-and-hold depois das taxas. Tratar QUALQUER lucro consistente líquido como **sucesso excepcional**, não como cenário-base. Isso calibra a expectativa, **não rebaixa o objetivo** — a meta segue sendo lucro.
 
 ### 1.5 Definição de SUCESSO e critérios Go / No-Go para dinheiro real
 
@@ -134,7 +139,7 @@ O **maior valor esperado do LLM-gerente é defensivo** (menor drawdown, melhor s
 
 ### 1.8 Disclaimer
 
-> Este projeto é experimental e tem finalidade primária de **estudo**. Trading de cripto envolve **risco real de perda total do capital**. Nada aqui é recomendação de investimento. A maioria dos bots de varejo perde dinheiro. Opere **somente com capital que você pode perder integralmente**. No Brasil, ganhos com cripto têm obrigações fiscais (regras detalhadas e em movimento na Seção 8) — **regras mudam; confirme com fonte oficial e/ou contador antes de operar com dinheiro real**. Os limiares de Go/No-Go (drawdown, dias, etc.) são fixados no Registro da Seção 11 pelo operador **antes** de iniciar, nunca ajustados para justificar um resultado já obtido.
+> Este projeto busca **lucro** (`NORTE.md`) e hoje é experimental. Trading de cripto envolve **risco real de perda total do capital**. Nada aqui é recomendação de investimento. A maioria dos bots de varejo perde dinheiro. Opere **somente com capital que você pode perder integralmente**. No Brasil, ganhos com cripto têm obrigações fiscais (regras detalhadas e em movimento na Seção 8) — **regras mudam; confirme com fonte oficial e/ou contador antes de operar com dinheiro real**. Os limiares de Go/No-Go (drawdown, dias, etc.) são fixados no Registro da Seção 11 pelo operador **antes** de iniciar, nunca ajustados para justificar um resultado já obtido.
 
 ### Fontes (Seção 1)
 - Taxas Binance spot: [Binance Square](https://www.binance.com/en/square/post/24640040632442)

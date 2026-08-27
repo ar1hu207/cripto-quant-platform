@@ -33,8 +33,10 @@ Dinheiro fictício, preço real. Já passou por validação rigorosa e o veredit
 | Reversão (RSI + Bollinger) | ❌ breakeven | `validar_reversao_maker.py`: +R$73 in / −R$76 OOS em ~1100 trades |
 | Funding arb (cash & carry) | ❌ não-deployável | `funding_estudo.py`: +1,9%/ano always-in; gated fica negativo |
 
-**Não existe edge deployável hoje.** O produto do projeto é o *instrumento honesto*: ele mede,
-avisa quando NÃO operar e mata ideia ruim antes de dinheiro real. Resultado negativo é entregável.
+**Não existe edge deployável hoje — no que foi implementado até aqui.** O objetivo do projeto é
+**lucro** (ver [`NORTE.md`](NORTE.md)); a régua é o *método*, não o produto: ela mede, avisa quando
+NÃO operar e mata ideia ruim antes de dinheiro real. Resultado negativo é entregável **porque
+encurta a busca** — não porque seja o destino.
 
 **Este item não busca edge.** Ele conserta a **régua** que decide se algo tem edge. É pré-requisito
 dos Itens 2 (Ornstein-Uhlenbeck) e 3 (dollar bars) do `PLANO-REPOS-QUANT.md`.

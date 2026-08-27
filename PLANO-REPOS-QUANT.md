@@ -9,8 +9,10 @@
 
 ## 0. Contexto obrigatório (leia antes de escrever qualquer linha)
 
-Este projeto é uma **plataforma de pesquisa quant + paper trading** de cripto. Ela já passou
-por validação rigorosa e o veredito atual é:
+Este projeto busca um sistema **lucrativo** de operação e análise de cripto — ver
+[`NORTE.md`](NORTE.md), que manda aqui. Hoje ele roda em **paper trading**, com uma régua de
+pesquisa quant na frente de tudo que se propõe. Ela já rodou sobre o que existe, e o veredito
+atual é:
 
 | Estratégia | Veredito | Onde foi provado |
 |---|---|---|
@@ -18,8 +20,9 @@ por validação rigorosa e o veredito atual é:
 | Reversão (RSI + Bollinger) | ❌ breakeven | `validar_reversao_maker.py` — melhor caso +R$73 in / −R$76 OOS sobre ~1100 trades |
 | Funding arb (cash & carry) | ❌ não-deployável | `funding_estudo.py` — always-in +1,9%/ano líquido; gated fica negativo (4 pernas de taxa comem o funding) |
 
-**Nenhum edge deployável existe hoje.** A plataforma é um instrumento honesto: mede, avisa
-quando NÃO operar, blinda risco e barra ideia ruim antes de dinheiro real.
+**Nenhum edge deployável existe hoje — no que foi implementado até aqui.** A plataforma mede,
+avisa quando NÃO operar, blinda risco e barra ideia ruim antes de dinheiro real. Isso é o
+**método** de chegar ao lucro, não um substituto dele.
 
 ### Regras invioláveis do projeto
 
@@ -28,6 +31,13 @@ Qualquer coisa implementada a partir deste plano **tem que** respeitar:
 1. **Maker sempre.** Toda estratégia entra com ordem limite. Foi provado que a taxa sozinha
    virou −R$589 em +R$73 (swing de R$660) no mesmo sinal. `TAXA = 0.0005` por lado em
    `backtest_plataforma.py:18`. Nunca modelar entrada a mercado sem justificar.
+
+   > ⚠️ **Esta regra existe desde sempre e NUNCA foi implementada na plataforma viva.** O
+   > `signal_engine`/`simulador` cobram `taxa_por_lado = 0.0005` — taker — e não existe caminho
+   > de ordem limite no código. A regra valia só para a pesquisa. Em 2026-08-26/27 isso virou
+   > trabalho medido: o `[CX-1]` mostrou que execução post-only leva o Sharpe de 0,955 para
+   > ~1,25 e faz o Reality Check passar, e o `[CX-3]` está separando quanto disso é a **taxa** e
+   > quanto é o **preço de entrada**. Implementar post-only na plataforma é o marco corrente.
 2. **Paridade backtest ↔ live.** A pontuação vive em `scoring.py` e é usada igual pelo
    `signal_engine.py` (ao vivo) e pelo `backtest_plataforma.py` (histórico). Sinal no candle
    **FECHADO** `i`, execução no **open do candle `i+1`** + slippage `0.0002`. Não quebrar isso.
@@ -35,7 +45,8 @@ Qualquer coisa implementada a partir deste plano **tem que** respeitar:
    Alvo de reversão usa `mids[i-1]` (`backtest_plataforma.py:68`).
 4. **Nada é aprovado por resultado in-sample.** Critério de aceite está na §6.
 5. **Resultado negativo é entregável.** Se a ideia morrer no teste, documente a morte com
-   número e siga. Isso é o produto do projeto, não fracasso.
+   número e siga. Isso **encurta a busca pelo que dá lucro** — não é o produto do projeto, e
+   não é fracasso.
 6. **Dependências enxutas no runtime.** `requirements.txt` hoje é fastapi/uvicorn/ccxt/
    pandas/numpy/pydantic. **Não adicionar dependência pesada ao runtime.** Se precisar de
    `statsmodels`/`scipy` para pesquisa, criar `requirements-pesquisa.txt` separado — o deploy
@@ -547,7 +558,8 @@ Falhou em qualquer uma → **não tem edge**. Documentar e seguir.
   plano existem justamente para detectar.
 - ❌ Não comemorar amostra pequena. O walk-forward precisou de 370 trades para concluir;
   4 trades bons não são sinal de nada (já caímos nessa uma vez).
-- ❌ Não esconder resultado ruim. É o produto.
+- ❌ Não esconder resultado ruim. Esconder não faz o prejuízo sumir, só adia a conta — e a
+  conta adiada chega em dinheiro real.
 
 ---
 

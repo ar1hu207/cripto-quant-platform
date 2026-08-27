@@ -18,8 +18,9 @@ efetivo, e se o MDS passar de `MDS_LIMITE` ela responde `INCONCLUSIVO: instrumen
 em vez de "sem edge". Ausencia de evidencia nao e evidencia de ausencia, e a regua passa a
 dizer isso com numero (F14 da `REVISAO-ITEM1.md`).
 
-**O veredito continua negativo, e isso e o produto.** Ver `CLAUDE.md`, cabecalho: honestidade
-e premissa, nao bug a consertar. Praticamente todo conserto desta versao empurra o numero
+**O veredito continua negativo, e isso e o PISO DA BUSCA -- nao a meta.** Ver `NORTE.md`: o
+objetivo do projeto e lucro, e esta regua existe para que ele, quando vier, esteja atras de
+evidencia. Honestidade e premissa, nao bug a consertar. Praticamente todo conserto desta versao empurra o numero
 para BAIXO (DSR sobre ~900 observacoes diarias em vez de 370 trades pseudo-independentes, IC
 por blocos em vez de iid, n_trials 30 -> 100). Se o numero piorar, e o instrumento
 funcionando.
@@ -1408,13 +1409,13 @@ def varredura_zero_a_zero(dfs=None, funding_8h=FUNDING_8H):
 #
 # O `POLITICAS_M4` acima roda sob `LEV` fixo (10x), porque era o unico modo que existia quando
 # o M4 foi medido. A producao roda `auto_lev_modo=conviccao`, 2x-20x. Entao o veredito
-# publicado -- inclusive o `SEM EVIDENCIA DE EDGE` sobre o `C trailing`, que e o PRODUTO
-# declarado deste projeto -- descreve uma configuracao que ninguem executa.
+# publicado -- inclusive o `SEM EVIDENCIA DE EDGE` sobre o `C trailing`, que e o resultado mais
+# citado deste projeto -- descreve uma configuracao que ninguem executa.
 #
 # Isto nao e caca a numero melhor. O contraste de 24/08 ja mostrou que corrigir o objeto NAO
 # muda o veredito (IC do Sharpe segue incluindo o zero, RC p = 0,1404). E sobre a afirmacao
-# publicada descrever o sistema que existe. Um projeto cujo produto e o "sem edge" honesto nao
-# pode ter o seu unico numero apontado para o objeto errado.
+# publicada descrever o sistema que existe. Um projeto que BUSCA lucro e ainda nao achou nao pode
+# ter o seu numero mais citado apontado para o objeto errado -- e o numero que diz onde procurar.
 #
 # So `lev_modo` muda em relacao ao `POLITICAS_M4`. As saidas sao as mesmas, linha por linha:
 # a comparacao entre as quatro continua com um fator so.
