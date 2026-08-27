@@ -1,0 +1,148 @@
+baixando 12 moedas (1h, 1095d)...
+anexando open interest a 12 moedas...
+  BTC/USDT   26249/26279 barras com d_oi medido (99.9%)
+  ETH/USDT   26249/26279 barras com d_oi medido (99.9%)
+  SOL/USDT   26249/26279 barras com d_oi medido (99.9%)
+  BNB/USDT   26249/26279 barras com d_oi medido (99.9%)
+  XRP/USDT   26249/26279 barras com d_oi medido (99.9%)
+  ADA/USDT   26249/26279 barras com d_oi medido (99.9%)
+  DOGE/USDT  26249/26279 barras com d_oi medido (99.9%)
+  AVAX/USDT  26249/26279 barras com d_oi medido (99.9%)
+  LINK/USDT  26249/26279 barras com d_oi medido (99.9%)
+  LTC/USDT   26249/26279 barras com d_oi medido (99.9%)
+  DOT/USDT   26249/26279 barras com d_oi medido (99.9%)
+  TRX/USDT   26249/26279 barras com d_oi medido (99.9%)
+
+[baseline] C trailing 2% fixo — 6 configs
+
+=== WALK-FORWARD: C trailing 2% fixo | 1h 1095d | 10x | 6 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: ATIVA
+n_trials = 940 (PISO CONTADO, nao estimativa)
+calibracao [Q-7]: o controle nulo rejeitou 8/200 paineis sem sinal (taxa 0.04) -> CALIBRADO
+   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, 95%): [4 ; 16] rejeicoes = [0.02 ; 0.08] | IC da taxa medida: (0.01742, 0.07729)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1            (55, 22)     1115  R$  +1674
+    2            (55, 22)     1178  R$  +3088
+    3            (55, 22)     1106  R$  -1179
+    4            (55, 22)      993  R$  +2526
+    5            (50, 22)      938  R$  -1267
+
+OOS agregado: 5330 trades | win 61.2% | PnL R$+4842
+  serie diaria da JANELA OOS: 911 dias (862 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=6 configs, 2000 bootstraps de bloco): p = 0.2009
+   Hansen SPA (estudentizado):                                     p = 0.2304
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.1684
+     -> o grid custou 0.033 de multiplicidade. [F12]
+   DSR da melhor config in-sample (50, 22) sobre a SERIE DIARIA (1093 dias): DSR = 0.0119
+     (sr=0.0318 vs sr0_esperado=0.0979 para n_trials=940)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 5330 trades OOS: 0.0866
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 6 configs sobrevivem -- FORA do veredito, nao-informativo em N=6 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0393   0.3982
+          30    0.0627   0.1452
+         100    0.0765   0.0631
+        1000    0.0985   0.0114
+       10000    0.1168   0.0018
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-5.4918, 16.4387)   iid: (-5.6217, 16.4923)
+   PSR (sem deflacao, SR*=0): 0.8447  (sr/dia = 0.0325)
+   Sharpe ANUALIZADO: 0.62   IC95% (bloco): (-0.737, 1.79)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=911): 1.574
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.111 do lucro bruto | folds positivos 3/5 | maior fold = 0.64 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [0.086, 0.0208, -0.0202, -0.045, -0.0418, 0.046, -0.0555, -0.038, -0.0, -0.0104]
+     banda +-1,96/sqrt(T) = +-0.0649 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-5.4918, 16.4387) inclui 0 ou PSR 0.8447 <= 0,95 ou RC p = 0.2009 > 0,05).
+   IC95% do Sharpe anualizado: [-0.737 ; 1.79].
+   O teste NAO exclui edges de Sharpe ate 1.79 -- MDS = 1.574. Ausencia de evidencia nao e evidencia de ausencia. [F7]
+
+[varredura Q-17] oi_modo — 24 configs
+  [1/24] (50, 22, 'off') -> 6878 trades
+  [2/24] (50, 22, 'concorda') -> 5272 trades
+  [3/24] (50, 22, 'concorda_tend') -> 5272 trades
+  [4/24] (50, 22, 'peso') -> 7096 trades
+  [5/24] (50, 25, 'off') -> 6461 trades
+  [6/24] (50, 25, 'concorda') -> 4959 trades
+  [7/24] (50, 25, 'concorda_tend') -> 4959 trades
+  [8/24] (50, 25, 'peso') -> 6888 trades
+  [9/24] (55, 22, 'off') -> 6213 trades
+  [10/24] (55, 22, 'concorda') -> 4690 trades
+  [11/24] (55, 22, 'concorda_tend') -> 4690 trades
+  [12/24] (55, 22, 'peso') -> 6552 trades
+  [13/24] (55, 25, 'off') -> 5695 trades
+  [14/24] (55, 25, 'concorda') -> 4305 trades
+  [15/24] (55, 25, 'concorda_tend') -> 4305 trades
+  [16/24] (55, 25, 'peso') -> 6326 trades
+  [17/24] (65, 22, 'off') -> 4387 trades
+  [18/24] (65, 22, 'concorda') -> 3174 trades
+  [19/24] (65, 22, 'concorda_tend') -> 3174 trades
+  [20/24] (65, 22, 'peso') -> 5158 trades
+  [21/24] (65, 25, 'off') -> 4364 trades
+  [22/24] (65, 25, 'concorda') -> 3154 trades
+  [23/24] (65, 25, 'concorda_tend') -> 3154 trades
+  [24/24] (65, 25, 'peso') -> 4772 trades
+
+=== WALK-FORWARD: C trailing 2% + portao de OI | 1h 1095d | 10x | 24 configs x 5 folds ===
+PADRAO (travado): criterio=sharpe modo=expandindo atribuir=entrada block=5 n_boot=2000 seed=42
+purga: ATIVA
+n_trials = 940 (PISO CONTADO, nao estimativa)
+calibracao [Q-7]: o controle nulo rejeitou 7/200 paineis sem sinal (taxa 0.035) -> CALIBRADO
+   banda de aceitacao CALCULADA (binomial exata, alfa=0,05, 95%): [4 ; 16] rejeicoes = [0.02 ; 0.08] | IC da taxa medida: (0.01419, 0.07078)
+
+ fold   config (conv/adx)   trades    pnl OOS
+    1  (55, 22, 'concorda')      824  R$  +1073
+    2  (65, 22, 'concorda')      616  R$  +3780
+    3  (65, 22, 'concorda')      587  R$   -712
+    4  (65, 22, 'concorda')      518  R$  +1208
+    5  (55, 22, 'concorda')      653  R$  -1567
+
+OOS agregado: 3198 trades | win 60.4% | PnL R$+3782
+  serie diaria da JANELA OOS: 911 dias (739 com P&L nao-nulo) -- o 1o dos 6 segmentos e treino puro e nao entra
+
+-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.
+   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO
+   White's Reality Check (N=24 configs, 2000 bootstraps de bloco): p = 0.1614
+   Hansen SPA (estudentizado):                                     p = 0.1484
+   p da melhor config SOZINHA (sem multiplicidade):                p = 0.061
+     -> o grid custou 0.1 de multiplicidade. [F12]
+   DSR da melhor config in-sample (55, 22, 'concorda') sobre a SERIE DIARIA (1093 dias): DSR = 0.0506
+     (sr=0.0516 vs sr0_esperado=0.0979 para n_trials=940)
+   [contraste] o numero ANTIGO -- DSR sobre a lista de 3198 trades OOS: 0.0784
+     -> objeto errado duas vezes: trades correlacionados contados como independentes, e o agregado OOS em vez da melhor config in-sample. [Q-1 1 e 3]
+   FDR (Benjamini-Hochberg, q=0,10): 0 de 24 configs sobrevivem -- FORA do veredito, nao-informativo em N=24 [F16]
+
+   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):
+    n_trials       sr0      DSR
+           6    0.0393   0.6677
+          30    0.0627   0.3469
+         100    0.0765   0.1886
+        1000    0.0985   0.0486
+       10000    0.1168   0.0106
+
+-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.
+   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO
+   IC95% da media/dia -- bloco (block=5): (-3.4988, 12.3203)   iid: (-2.9854, 11.4932)
+   PSR (sem deflacao, SR*=0): 0.8856  (sr/dia = 0.0383)
+   Sharpe ANUALIZADO: 0.731   IC95% (bloco): (-0.664, 1.986)
+   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, T=911): 1.574
+     -> comparacao de poder: T=180 dias daria MDS 3.54; T=1095 daria 1.44. [F6]
+   concentracao [F17]: top-5 dias = 0.118 do lucro bruto | folds positivos 3/5 | maior fold = 1.0 do total
+     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, nunca portao)
+   ACF do P&L diario, lags 1..10: [0.1492, 0.0152, -0.0143, -0.0191, -0.0144, 0.0095, -0.038, -0.0178, 0.0496, 0.0052]
+     banda +-1,96/sqrt(T) = +-0.0649 -- fora dela = autocorrelacao real [F12]
+
+=> VEREDITO: SEM EVIDENCIA DE EDGE (IC-bloco (-3.4988, 12.3203) inclui 0 ou PSR 0.8856 <= 0,95 ou RC p = 0.1614 > 0,05).
+   IC95% do Sharpe anualizado: [-0.664 ; 1.986].
+   O teste NAO exclui edges de Sharpe ate 1.986 -- MDS = 1.574. Ausencia de evidencia nao e evidencia de ausencia. [F7]

@@ -72,6 +72,26 @@ def _horas_por_barra(df, tf_horas, tf):
 
 POLITICAS = ("regime", "auto", "trailing")
 
+# [Q-17] Os modos do portao de open interest. `"off"` e a HIPOTESE NULA e o default: com ele
+# nada muda, e toda rodada anterior a este card devolve exatamente o que devolvia.
+#
+#   "off"            o open interest nao e consultado (a estrategia de hoje)
+#   "concorda"       recusa o sinal quando d_oi <= 0 (desmonte de posicao)
+#   "concorda_tend"  idem, mas so quando adx >= adx_min; fora de tendencia passa
+#   "peso"           nao recusa: soma +-OI_PESO de conviccao conforme concorde ou nao
+#
+# A grade esta declarada em `PRE-REGISTRO-Q17-OI-2026-08-25.md` §3 e e travada: nao havera
+# varredura de limiar de d_oi nem das outras colunas do dump -- as razoes long/short NAO
+# reconciliam com o caminho ao vivo e estao barradas de decidir.
+OI_MODOS = ("off", "concorda", "concorda_tend", "peso")
+
+# O passo do modo "peso", em pontos de conviccao. Fixo e nao varrido de proposito: varrer o
+# passo seria transformar um modo em quatro e multiplicar a grade -- e a §3 do pre-registro
+# declarou 24 configs, nao 96. 10 e uma faixa inteira das quatro do `db.metricas()`
+# (0-40/40-60/60-80/80-100): grande o bastante para mover a decisao, pequeno o bastante para
+# nao atropelar o `min_conv`.
+OI_PESO = 10.0
+
 # [P1-10] Defaults das politicas B e C, copiados do que o banco carrega HOJE
 # (`db.CONFIG_PADRAO`): `alvo_roe = 5`, `trailing_dist = 0.02`. Ficam aqui como constante de
 # pesquisa e nao lidos do banco de proposito -- este modulo nao importa `db`, e um backtest
@@ -152,7 +172,8 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                    entrada="taker", maker_off=0.0, exec_stats=None,
                    sinal_fn=None, saida="regime", trailing_dist=TRAILING_DIST,
                    trailing_k_atr=None, alvo_roe=ALVO_ROE, sd_min=0.0,
-                   be_em_R=None, lev_modo="fixo", lev_min=2.0, lev_max=20.0, conv_min_lev=60.0):
+                   be_em_R=None, lev_modo="fixo", lev_min=2.0, lev_max=20.0, conv_min_lev=60.0,
+                   oi_modo="off"):
     """Backtest com PARIDADE honesta: sinal no candle FECHADO i, execução no OPEN do
     candle SEGUINTE (i+1) + slippage. estrategia: 'tendencia' ou 'reversao' (alvo = volta à
     média + time-stop). df pré-carregado evita re-baixar.
@@ -253,6 +274,8 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     """
     if saida not in POLITICAS:
         raise ValueError(f"saida deve ser uma de {POLITICAS}, veio {saida!r}")
+    if oi_modo not in OI_MODOS:
+        raise ValueError(f"oi_modo deve ser um de {OI_MODOS}, veio {oi_modo!r}")
     if df is None:
         df = preparar(baixar_ohlcv(ativo, tf, dias=dias))
     tfh = _horas_por_barra(df, tf_horas, tf)                    # medida no df, nao adivinhada
@@ -265,12 +288,62 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     ema_r = df["ema_r"].values if precisa_auto else None
     ema_l = df["ema_l"].values if precisa_auto else None
     atrv = df["atr"].values if trailing_k_atr else None
+    # [Q-17] `d_oi` e a variacao do open interest de uma barra para a outra, ja alinhada sem
+    # look-ahead por `pesquisa.dados_derivados.serie_1h` e anexada ao painel por
+    # `anexar_oi`. `None` = painel sem a coluna, e ai `oi_modo` so pode ser "off".
+    d_oi = df["d_oi"].values if "d_oi" in df.columns else None
+    if oi_modo != "off" and d_oi is None:
+        raise ValueError("oi_modo != 'off' exige a coluna `d_oi` no painel "
+                         "(use pesquisa.backtest_plataforma.anexar_oi)")
     fn = sinal_fn or (pontuar if estrategia == "tendencia" else pontuar_reversao)
     trades, pos = [], None
     for i in range(60, len(df) - 1):                            # -1: precisa do open[i+1] pra entrar
         if pos is None:
             p = fn(df, i)
-            if not p or p["conviccao"] < min_conv:
+            if not p:
+                continue
+            # [Q-17] O portao de INFORMACAO, e o unico ponto do motor que le algo que nao vem
+            # do candle. `PRE-REGISTRO-Q17-OI-2026-08-25.md` fixou a hipotese antes dos
+            # numeros: preco subindo com open interest SUBINDO e dinheiro novo entrando na
+            # direcao; preco subindo com OI CAINDO e short se cobrindo, e isso morre quando a
+            # cobertura acaba. O mesmo candle verde com dois significados opostos -- e o
+            # `scoring` nao distingue os dois porque le preco e volume do proprio ativo.
+            #
+            # Fica aqui e nao no `scoring` pela mesma razao do `sd_min`: `scoring` e a
+            # paridade com o vivo (`CLAUDE.md` §0) e mexer nele mudaria o SINAL. Os modos
+            # "concorda*" nao mudam o sinal -- recusam executa-lo. O "peso" muda a conviccao,
+            # e por isso e o modo de que se desconfia mais (ver §5 do pre-registro: a
+            # conviccao ainda nao foi verificada, o [Q-13] esta aberto).
+            #
+            # `d_oi` NaN = barra sem open interest medido (o D+1 do dump, ou buraco). NaN NAO
+            # filtra: "nao operar quando falta dado" e outra hipotese, e deixa-la entrar sem
+            # querer seria medir duas coisas de uma vez.
+            if oi_modo != "off":
+                v = d_oi[i]
+                if v == v:                                  # NaN falha esta comparacao
+                    # CONFIRMACAO = open interest SUBINDO, e isso INDEPENDE da direcao.
+                    # Ver a §2.1-A do pre-registro: OI sobe quando posicao NOVA e aberta, e
+                    # todo contrato tem um comprado e um vendido. Entao preco subindo com OI
+                    # subindo = longs novos, e preco CAINDO com OI subindo = shorts novos --
+                    # nos dois casos e dinheiro novo na direcao do movimento, e a direcao do
+                    # movimento ja e a direcao do sinal. OI caindo e desmonte nos dois casos:
+                    # short se cobrindo na alta, long liquidando na baixa.
+                    #
+                    # A primeira versao deste portao escreveu `(v * direcao) > 0`, que para
+                    # SHORT exige OI CAINDO -- justamente o desmonte. Errado em metade dos
+                    # trades. Quem pegou foi `test_a_confirmacao_independe_da_direcao`, antes
+                    # de a regua rodar; a correcao esta registrada no pre-registro como
+                    # emenda datada, nao reescrita em silencio.
+                    concorda = v > 0
+                    if oi_modo == "concorda" and not concorda:
+                        continue
+                    if (oi_modo == "concorda_tend" and not concorda
+                            and p["adx"] >= adx_min):
+                        continue
+                    if oi_modo == "peso":
+                        p = dict(p, conviccao=p["conviccao"] + (OI_PESO if concorda
+                                                                else -OI_PESO))
+            if p["conviccao"] < min_conv:
                 continue
             if estrategia == "tendencia":                       # mesmos portões do ao vivo
                 if p["adx"] < adx_min or p["n_fatores"] < 3:
@@ -407,6 +480,32 @@ def _motivo_stop(pos):
     if pos.get("be") and pos["stop"] == pos["be"]:     # não avançou além do zero-a-zero
         return "zero-a-zero"
     return "trailing"
+
+
+def anexar_oi(df, ativo, dias=None, usar_cache=True):
+    """[Q-17] Anexa `sum_open_interest` e `d_oi` ao painel de um ativo.
+
+    Uma chamada por moeda, ANTES da varredura -- e nao dentro dela. As 24 configs da grade
+    leem a mesma coluna; recalcula-la por config seria 24 vezes o mesmo download para o
+    mesmo numero.
+
+    `d_oi` e a diferenca de UMA barra, como o pre-registro fixou: sem limiar, sem janela, sem
+    suavizacao. A primeira barra fica NaN por construcao (nao ha barra anterior), e NaN nao
+    filtra nada no portao.
+
+    **O merge e por `timestamp` e nao por posicao.** Alinhar por indice suporia que as duas
+    series tem exatamente as mesmas barras, na mesma ordem, sem buraco -- e o dump TEM
+    buraco (o D+1 de hoje, no minimo). Um desalinhamento de uma barra aqui e o mesmo
+    look-ahead de 5 minutos que a §4.1 do plano existiu para matar, so que por outra porta.
+    """
+    from pesquisa import dados_derivados
+
+    serie = dados_derivados.serie_1h(ativo, dias=dias or len(df), df_ohlcv=df,
+                                     usar_cache=usar_cache)
+    col = "sum_open_interest"
+    out = df.merge(serie[["timestamp", col]], on="timestamp", how="left")
+    out["d_oi"] = out[col].diff()
+    return out
 
 
 def relatorio(trades, valor, lev):
