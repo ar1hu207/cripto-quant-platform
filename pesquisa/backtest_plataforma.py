@@ -370,7 +370,20 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
             d = p["direcao"]
             if exec_stats is not None:
                 exec_stats["sinais"] = exec_stats.get("sinais", 0) + 1
-            if entrada == "maker":
+            if entrada == "gatilho":
+                # [CX-3] A ideia do dono: NAO pendura ordem. Fica olhando o preco e, quando ele
+                # chega no nivel, manda a MERCADO. Enche igual ao post-only -- mesma condicao,
+                # mesmo `maker_off` -- mas paga taxa de TAKER e paga slippage, porque quem manda
+                # a mercado consome a fila. A corretora nao cobra pela paciencia, cobra por quem
+                # tirou liquidez.
+                #
+                # Existe para ISOLAR os dois efeitos que o `maker` mistura: preco de entrada
+                # melhor e taxa menor. `gatilho` tem o primeiro e nao tem o segundo.
+                lim = opens[i + 1] * (1 - d * maker_off)
+                if (lows[i + 1] > lim) if d > 0 else (highs[i + 1] < lim):
+                    continue
+                e = lim * (1 + d * slip)
+            elif entrada == "maker":
                 # [CX-1] Ordem LIMITE post-only, `maker_off` MELHOR que o open, do nosso lado.
                 # Só existe trade se o preço vier até ela DENTRO do candle de execução; senão
                 # o sinal é PERDIDO (cancela, não vira taker) — é isso que separa a taxa de
