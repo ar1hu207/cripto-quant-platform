@@ -271,9 +271,16 @@ def auto_executar(saidas=None):
         if valor < min_valor:
             break
         try:
-            pid = simulador.abrir(s["id"], valor, lev)
+            # [EX-1] O bot tambem passa pelo `executar`: com `exec_modo=post_only` ele COLOCA a
+            # ordem e segue. O slot e o budget sao consumidos aqui do mesmo jeito -- a ordem ja
+            # conta nos tetos (`simulador._pendentes`), entao tratar pendente como "ainda tem
+            # espaco" faria o bot colocar mais ordens do que o teto permite e depois apanhar
+            # delas uma a uma no preenchimento.
+            tipo, ident = simulador.executar(s["id"], valor, lev)
+            pid = ident if tipo == "posicao" else None
             res["abertos"].append({"ativo": s["ativo"], "direcao": s["direcao"], "tf": s.get("tf"),
-                                   "valor": valor, "lev": lev, "conviccao": s["conviccao"] or 0, "pid": pid})
+                                   "valor": valor, "lev": lev, "conviccao": s["conviccao"] or 0,
+                                   "pid": pid, "tipo": tipo, "ordem_id": ident if tipo == "ordem" else None})
             vistos.add(s["ativo"])
             slots -= 1
             budget -= valor

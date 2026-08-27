@@ -45,6 +45,7 @@ de propósito — não conserte esses imports (`legado/README.md`).
 | `indicadores.py` | EMA, ATR, ADX, RSI, Donchian, Bollinger — também compartilhado |
 | `mercado.py` | book, fluxo taker, funding, sentimento (1 request por lista, cache de 5s por ativo) |
 | `autotrader.py` | modo automático (config `auto_trade`, desligado por padrão) |
+| `simulador.executar` | **[EX-1] ponto único de entrada**: despacha por `exec_modo`. `abrir()` (mercado) segue intacto ao lado |
 | `dca.py` | acumulação periódica, sem alavancagem, banca conceitualmente separada |
 | `alertas.py` | Telegram **opcional**: sem token na config é no-op |
 | `logbot.py` | `from logbot import log` → grava em **`plataforma.log`** (10 MB × 5, teto no código) |
@@ -91,6 +92,21 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
 - **Marcação por posição** (`P1-1`): o try/except do ciclo é **por posição**, nunca em volta do
   `for`. Em volta do `for` "funciona" e deixa toda posição após a primeira falha sem stop.
 - **Pânico mata a fonte primeiro** (`P1-7`): `/panico` grava `auto_trade=0` **antes** de fechar.
+- **[EX-1] Execução post-only — três regras que não se afrouxam.** A feature nasce desligada
+  (`exec_modo=mercado`); ligada, o sinal vira uma **ordem que descansa** em vez de posição.
+  1. **Ordem pendente conta nos tetos** (`simulador._pendentes`), nos DOIS caminhos — inclusive
+     ao abrir a mercado. Doze ordens que enchem no mesmo minuto são doze posições, e um teto que
+     só olha o que já abriu autoriza a exposição que ele mesmo proíbe.
+  2. **O sinal é reivindicado na CRIAÇÃO da ordem, não no preenchimento.** Sem isso o claim
+     atômico do `P1-6` deixa de valer justamente onde passou a existir uma janela de espera.
+  3. **Ordem que expira não devolve o sinal.** É a execução que o `[CX-1]` mediu; o `[CX-3]`
+     mostrou que a alternativa — esperar e mandar a mercado — não vale nada (Sharpe 0,960 contra
+     0,955 do taker de hoje), porque **o ganho é a taxa, não o preço**.
+
+  E a taxa: **maker só na perna de ENTRADA**, gravada em `posicoes.taxa_entrada`. A saída é
+  sempre `taxa_por_lado` (taker), porque stop e trailing são ordem a mercado por natureza
+  (`[CX-4]`). Cobrar maker nos dois lados inventa lucro que não houve; cobrar a taxa de hoje
+  sobre a entrada de ontem também.
 - **Sem `DASH_PASS` o backend recusa acesso externo, e não há bandeira para desligar isso.**
   Existiu uma (`PERMITIR_SEM_SENHA`) e foi ela que deixou `/reset`, `/panico`, `/config` e
   `/auto` abertos na internet: a guarda só protege se não houver como desligá-la.

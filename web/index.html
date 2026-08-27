@@ -713,6 +713,7 @@
     </section>
 
     <section class="subview" id="sub-posicoes" data-sub="posicoes" role="tabpanel" aria-labelledby="tab-posicoes" hidden>
+      <div class="panel" id="painel-ordens" hidden><h2>⏳ Ordens pendentes <span class="met-nota">post-only</span></h2><div id="ordens"></div></div>
       <div class="panel"><h2>🎯 Posições abertas</h2><div id="posicoes"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:75%"></div></div></div></div>
     </section>
 
@@ -1246,6 +1247,29 @@ async function carregar(){
 
   // posicoes: a linha fecha com a evolucao do P&L da propria posicao
   anotaPnl(e.posicoes);
+  // [EX-1] Ordens post-only pendentes. Elas JA reservam exposicao nos tetos do
+  // `simulador`, entao esconde-las seria esconder risco ja comprometido -- por isso o bloco
+  // fica ACIMA das posicoes, e nao numa aba propria. Some sozinho quando nao ha nenhuma.
+  const pOrd=document.getElementById('painel-ordens'), od=document.getElementById('ordens'), ords=e.ordens||[];
+  pOrd.hidden = !ords.length;
+  if(ords.length){
+    od.innerHTML='<table><thead><tr><th>Ativo</th><th>Lado</th><th class="num">Limite</th>'+
+    '<th class="num col-2">Preço ref.</th><th class="num col-2">Distância</th><th class="col-2">Tam.</th>'+
+    '<th class="num col-3">Expira</th></tr></thead><tbody>'+
+    ords.map(o=>{
+      const dist=o.preco_ref?Math.abs(o.preco_limite/o.preco_ref-1)*100:0;
+      // minutos ate expirar, do relogio do NAVEGADOR contra o carimbo do backend. Os dois sao
+      // hora de Sao Paulo sem fuso (CLAUDE.md §1), entao a subtracao fecha.
+      const falta=o.expira_em?Math.max(0,Math.round((new Date(o.expira_em.replace(' ','T'))-new Date())/60000)):null;
+      return `<tr><td style="font-weight:600">${o.ativo.replace('/USDT','')}</td>
+      <td><span class="tag ${o.direcao==='LONG'?'long':'short'}">${o.direcao}</span></td>
+      <td class="mono num" style="font-weight:600">${num(o.preco_limite)}</td>
+      <td class="mono mut num col-2">${num(o.preco_ref)}</td>
+      <td class="mono mut num col-2">${dist.toFixed(2)}%</td>
+      <td class="mono mut col-2">R$${o.valor_reais}·${o.alavancagem}x</td>
+      <td class="mono mut num col-3">${falta===null?'—':falta+' min'}</td></tr>`}).join('')+'</tbody></table>';
+  }
+
   const po=document.getElementById('posicoes');
   if(e.posicoes.length){
     po.innerHTML='<table><thead><tr><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada</th>'+

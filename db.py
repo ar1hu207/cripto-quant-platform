@@ -27,7 +27,27 @@ CREATE TABLE IF NOT EXISTS sinais(
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
   valor_reais REAL, alavancagem REAL, stop REAL, preco_atual REAL, pnl REAL,
-  aberto_em TEXT, status TEXT DEFAULT 'aberta', conviccao REAL, sinal_id INTEGER);
+  aberto_em TEXT, status TEXT DEFAULT 'aberta', conviccao REAL, sinal_id INTEGER,
+  -- [EX-1] Taxa que ESTA posicao pagou para ENTRAR, por lado. NULL = entrou a mercado e paga
+  -- `taxa_por_lado` como sempre. Fica na POSICAO e nao na config porque as duas convivem: com
+  -- `exec_modo=post_only` as ordens novas entram como maker enquanto posicoes antigas, abertas
+  -- a mercado, ainda estao vivas. Cobrar a taxa de hoje sobre a entrada de ontem inventaria
+  -- lucro que nao houve.
+  taxa_entrada REAL);
+
+-- [EX-1] Ordens post-only pendentes: o sinal vira uma ordem que DESCANSA no livro e so vira
+-- posicao se o preco vier ate ela. Se nao vier ate `expira_em`, a ordem morre e o sinal MORRE
+-- COM ELA -- nao vira ordem a mercado. Essa escolha nao e estilo: e a que o [CX-1] mediu, e o
+-- [CX-3] mostrou que a alternativa (esperar e mandar a mercado) nao vale nada -- Sharpe 0,960
+-- contra 0,955 do taker de hoje.
+CREATE TABLE IF NOT EXISTS ordens(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, sinal_id INTEGER, ativo TEXT, direcao TEXT,
+  preco_ref REAL,        -- preco ao vivo no instante em que a ordem foi colocada (auditoria do offset)
+  preco_limite REAL,     -- onde a ordem descansa
+  valor_reais REAL, alavancagem REAL, stop REAL, conviccao REAL,
+  criada_em TEXT, expira_em TEXT,
+  status TEXT DEFAULT 'pendente',   -- pendente|preenchida|expirada|cancelada
+  posicao_id INTEGER, resolvida_em TEXT, motivo TEXT);
 
 CREATE TABLE IF NOT EXISTS trades(
   id INTEGER PRIMARY KEY AUTOINCREMENT, sinal_id INTEGER, ativo TEXT, direcao TEXT,
@@ -68,7 +88,14 @@ CONFIG_PADRAO = {
                "LINK/USDT,LTC/USDT,DOT/USDT,TRX/USDT,ATOM/USDT,NEAR/USDT,UNI/USDT,AAVE/USDT,"
                "APT/USDT,ARB/USDT,OP/USDT,INJ/USDT,FIL/USDT,SUI/USDT,ETC/USDT,BCH/USDT"),
     "limite_perda_dia": "0.05",
-    "taxa_por_lado": "0.0005",
+    "taxa_por_lado": "0.0005",       # TAKER, o que se paga hoje entrando e saindo a mercado
+    # [EX-1] Execucao post-only. `exec_modo` nasce em "mercado" -- o comportamento de hoje, byte
+    # por byte -- porque ligar execucao nova sozinha e mudar como o dinheiro entra sem ninguem
+    # pedir. Ver VEREDITO-CX1/CX3/CX4 para o que cada numero destes vale medido.
+    "exec_modo": "mercado",          # "mercado" (hoje) | "post_only" (ordem limite que descansa)
+    "taxa_maker": "0.0002",          # taxa de MAKER por lado, cobrada so na perna de ENTRADA
+    "exec_maker_off": "0.0010",      # quao abaixo do preco a ordem descansa (0,10%); [CX-1]: 0,05%-0,20% deu igual
+    "exec_ordem_ttl_s": "3600",      # quanto tempo a ordem espera antes de expirar (1h = o candle que o [CX-1] mediu)
     "min_conviccao": "55",     # convicção mínima (confluência geral) — era 20-35, ruído
     "adx_min": "25",           # exige TENDÊNCIA (ADX) — não opera mercado choppy
     "min_fatores": "3",        # exige >=3 confirmações (ADX/rompimento/RSI/volume)
@@ -210,7 +237,8 @@ def _migrar(c):
                             ("vela_ms", "INTEGER"), ("fluxo_comprador", "REAL"), ("rejeicao", "TEXT"),
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
-                 "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER")],
+                 "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
+                              ("taxa_entrada", "REAL")],
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
                             ("risco_inicial", "REAL"), ("funding", "REAL"),
                             ("ret_pct_liq", "REAL")]}
@@ -236,6 +264,10 @@ INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity(ts)",
     "CREATE INDEX IF NOT EXISTS idx_equity_dia ON equity(substr(ts,1,10))",
     "CREATE INDEX IF NOT EXISTS idx_trades_fechado ON trades(fechado_em)",
+    # [EX-1] O worker varre ordens pendentes a cada ciclo (15s). Sem indice isso e full scan
+    # sobre uma tabela que so cresce -- e ela cresce mais rapido que `posicoes`, porque ordem
+    # expirada tambem fica.
+    "CREATE INDEX IF NOT EXISTS idx_ordens_status ON ordens(status)",
 ]
 
 
