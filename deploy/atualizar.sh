@@ -27,6 +27,14 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+# [EX-2] Todo acesso ao banco passa por aqui, e por um motivo medido: o worker escreve no
+# `trading.db` a cada ciclo (15s), e o `sqlite3` do shell nasce com busy_timeout ZERO -- ele
+# desiste no primeiro conflito de lock em vez de esperar. Em 2026-08-27 o deploy abortou
+# exatamente assim ("Error: stepping, database is locked") no passo 2, com o backup ja feito e
+# o codigo ainda intocado. Esperar e o comportamento certo: o worker solta o lock em
+# milissegundos, e 15s de paciencia e mais barato que um deploy que morre no meio.
+sq() { sqlite3 -cmd ".timeout 15000" "$APP/trading.db" "$@"; }
+
 echo "== 1. backup do banco ANTES de qualquer troca =="
 # sudo: o script de backup le /etc/cripto-bot-backup.sas (600 root) e escreve em
 # /var/log/cripto-backup.log. Como ubuntu ele falha em "Permission denied" e o deploy
@@ -35,9 +43,11 @@ sudo /usr/local/bin/cripto-backup.sh >/dev/null 2>&1 && echo "backup ok" || {
   echo "ABORTADO: o backup falhou. Nao se troca codigo sem copia integra do banco."; exit 1; }
 
 echo "== 2. congela: auto_trade=0 e conta posicoes abertas =="
-AUTO_ANTES=$(sqlite3 trading.db "SELECT valor FROM config WHERE chave='auto_trade';")
-sqlite3 trading.db "UPDATE config SET valor='0' WHERE chave='auto_trade';"
-ABERTAS=$(sqlite3 trading.db "SELECT COUNT(*) FROM posicoes WHERE status='aberta';")
+AUTO_ANTES=$(sq "SELECT valor FROM config WHERE chave='auto_trade';")
+sq "UPDATE config SET valor='0' WHERE chave='auto_trade';" || {
+  echo "ABORTADO: nao consegui congelar o auto_trade. Trocar codigo com o bot operando e o"
+  echo "unico jeito de o deploy abrir posicao com metade do codigo velho."; exit 1; }
+ABERTAS=$(sq "SELECT COUNT(*) FROM posicoes WHERE status='aberta';")
 echo "auto_trade era $AUTO_ANTES, agora 0 · posicoes abertas: $ABERTAS"
 [ "$ABERTAS" != "0" ] && echo "AVISO: deployando com posicao aberta. O ideal e zero (RUNBOOK-VM 5.4)."
 
@@ -70,9 +80,9 @@ sleep 8
 echo "== 6. verifica =="
 systemctl is-active cripto-bot
 journalctl -u cripto-bot -n 15 --no-pager | grep -ciE "traceback" || true
-sqlite3 trading.db "PRAGMA integrity_check;"
+sq "PRAGMA integrity_check;"
 sleep 15
-NOVAS=$(sqlite3 trading.db "SELECT COUNT(*) FROM equity WHERE ts > datetime('now','-1 minutes','localtime');")
+NOVAS=$(sq "SELECT COUNT(*) FROM equity WHERE ts > datetime('now','-1 minutes','localtime');")
 echo "linhas de equity no ultimo minuto: $NOVAS  (0 = o ciclo NAO esta girando)"
 curl -s --max-time 10 http://127.0.0.1:8000/health; echo
 
