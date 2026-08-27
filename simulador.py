@@ -115,7 +115,19 @@ def _pnl(pos, preco_saida):
     d = 1 if pos["direcao"] == "LONG" else -1
     move = d * (preco_saida / pos["entrada"] - 1)               # retorno do ATIVO a favor
     bruto = pos["valor_reais"] * pos["alavancagem"] * move      # P&L em R$ (alavancado)
-    taxa = 2 * _cfg_float(db.get_config(), "taxa_por_lado", 0.0005) * pos["valor_reais"] * pos["alavancagem"]
+    # [EX-1] Entrada e saida sao cobradas SEPARADAS. A saida e sempre `taxa_por_lado` (taker):
+    # stop e trailing sao ordem a mercado por natureza -- quando o preco vira contra, nao da para
+    # pendurar limite e torcer. A ENTRADA e a que pode ter sido maker, e quanto ela custou esta
+    # gravado NA POSICAO (`taxa_entrada`), nao na config: as duas convivem enquanto posicoes
+    # abertas a mercado ainda estao vivas, e cobrar a taxa de hoje sobre a entrada de ontem
+    # inventaria lucro que nao houve. NULL = entrou a mercado.
+    t_saida = _cfg_float(db.get_config(), "taxa_por_lado", 0.0005)
+    try:
+        t_entrada = pos["taxa_entrada"]
+    except (KeyError, IndexError):
+        t_entrada = None
+    t_entrada = t_saida if t_entrada is None else float(t_entrada)
+    taxa = (t_entrada + t_saida) * pos["valor_reais"] * pos["alavancagem"]
     pnl = bruto - taxa
     if pnl < -pos["valor_reais"]:                              # não perde mais que a margem
         pnl = -pos["valor_reais"]
@@ -217,8 +229,13 @@ def abrir(sinal_id, valor_reais, alavancagem):
     exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
     with _abrir_lock:                                     # serializa aberturas (worker + API) — sem TOCTOU no teto
         with db.conectar() as con:
-            abertas = [dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
+            # [EX-1] Ordem pendente conta nos tetos como se ja fosse posicao. APERTA a guarda, e
+            # de proposito: doze ordens pendentes que enchem no mesmo minuto sao doze posicoes, e
+            # um teto que so olha o que ja abriu autoriza uma exposicao que ele proprio proibe.
+            # Enquanto `exec_modo=mercado` a consulta devolve vazio e nada muda.
+            abertas = ([dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
                                                      "FROM posicoes WHERE status='aberta'")]
+                       + _pendentes(con))
             banca_atual = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
             if g["risco_aberto_max_rs"] is not None:      # teto de risco-até-o-stop (recalc dentro do lock)
                 risco_ab = sum(_risco_posicao(p["valor_reais"], p["alavancagem"], p["entrada"], p["stop"])
@@ -249,6 +266,181 @@ def abrir(sinal_id, valor_reais, alavancagem):
     log(f"ABRIU #{pid} {direcao} {ativo} @ {preco} | R${valor_reais} {alavancagem}x")
     alertas.enviar(f"🟢 Abriu {direcao} {ativo}\nR$ {valor_reais} @ {alavancagem}x · entrada {preco}")
     return pid
+
+
+def _pendentes(con):
+    """[EX-1] Ordens pendentes no formato de posicao, para os tetos as somarem sem saber a
+    diferenca. `preco_limite` faz as vezes de `entrada` porque e onde a posicao vai nascer."""
+    return [{"valor_reais": r["valor_reais"], "alavancagem": r["alavancagem"],
+             "entrada": r["preco_limite"], "stop": r["stop"]}
+            for r in con.execute("SELECT valor_reais,alavancagem,preco_limite,stop "
+                                 "FROM ordens WHERE status='pendente'")]
+
+
+def colocar_ordem(sinal_id, valor_reais, alavancagem):
+    """[EX-1] O caminho post-only: o sinal vira uma ordem que DESCANSA, nao uma posicao.
+
+    Roda as MESMAS guardas do `abrir()`, na mesma ordem, com uma diferenca: a entrada avaliada
+    e o `preco_limite`, nao o preco ao vivo -- e o preco onde a posicao vai nascer se nascer.
+    Avaliar geometria e risco sobre o preco de agora seria dimensionar sobre um preco que, por
+    construcao, nao e o que vai ser pago.
+
+    O sinal e reivindicado AQUI, na criacao da ordem, e nao no preenchimento. Sem isso o mesmo
+    sinal viraria duas ordens, e o claim atomico do [P1-6] deixaria de valer justamente onde
+    passou a existir uma janela de espera. Ordem que expira NAO devolve o sinal: e o que o
+    [CX-1] mediu, e o [CX-3] mostrou que a alternativa -- esperar e mandar a mercado -- nao
+    paga (Sharpe 0,960 contra 0,955 do taker de hoje).
+    """
+    if valor_reais <= 0 or alavancagem <= 0:
+        raise ValueError("valor de entrada e alavancagem devem ser > 0")
+    g = guarda_risco()
+    if g["trava_dia"]:
+        raise ValueError("trava diaria ativa - limite de perda do dia atingido")
+    with db.conectar() as con:
+        sig = con.execute("SELECT * FROM sinais WHERE id=?", (sinal_id,)).fetchone()
+    if not sig:
+        raise ValueError("sinal nao encontrado")
+    if sig["status"] != "novo":
+        raise ValueError("sinal ja %s - nao pode virar ordem de novo" % sig["status"])
+    cfg = db.get_config()
+    off = _cfg_float(cfg, "exec_maker_off", 0.0010)
+    ttl = _cfg_float(cfg, "exec_ordem_ttl_s", 3600.0)
+    preco = preco_ao_vivo(sig["ativo"])                        # rede FORA do lock
+    d = 1 if sig["direcao"] == "LONG" else -1
+    limite = round(preco * (1 - d * off), 8)                   # descansa do NOSSO lado do livro
+    stop_rel = (abs(sig["preco"] - sig["stop_sugerido"]) / sig["preco"]
+                if sig["preco"] and sig["stop_sugerido"] else 0.0)
+    stop = round(limite * (1 - d * stop_rel), 6) if stop_rel else sig["stop_sugerido"]
+    deg = _liq_antes_do_stop(limite, stop, alavancagem, d)     # [P1-12], sobre o preco do fill
+    if deg:
+        sd, ld = deg
+        raise ValueError("geometria degenerada - a %gx a liquidacao fica a %.2f%% da entrada e o "
+                         "stop a %.2f%%" % (alavancagem, ld * 100, sd * 100))
+    exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
+    agora = pd.Timestamp.now()
+    with _abrir_lock:
+        with db.conectar() as con:
+            abertas = ([dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
+                                                     "FROM posicoes WHERE status='aberta'")]
+                       + _pendentes(con))
+            banca_atual = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
+            if g["risco_aberto_max_rs"] is not None:
+                risco_ab = sum(_risco_posicao(x["valor_reais"], x["alavancagem"], x["entrada"], x["stop"])
+                               for x in abertas)
+                r_novo = _risco_posicao(valor_reais, alavancagem, limite, stop)
+                if risco_ab + r_novo > g["risco_aberto_max_rs"]:
+                    raise ValueError("teto de risco aberto - exposicao passaria o limite "
+                                     "(R$%.2f + R$%.2f > R$%.2f)"
+                                     % (risco_ab, r_novo, g["risco_aberto_max_rs"]))
+            if exp_max > 0:
+                margem_ab = sum((x["valor_reais"] or 0) for x in abertas)
+                if margem_ab + valor_reais > banca_atual * exp_max:
+                    raise ValueError("teto de margem - exposicao (R$%.2f) passaria %.0f%% da banca "
+                                     "(R$%.2f)" % (margem_ab + valor_reais, exp_max * 100,
+                                                   banca_atual * exp_max))
+            if con.execute("UPDATE sinais SET status='confirmado' "
+                           "WHERE id=? AND status='novo'", (sinal_id,)).rowcount != 1:
+                raise ValueError("sinal ja confirmado, pulado ou expirado")
+            con.execute("INSERT INTO ordens(sinal_id,ativo,direcao,preco_ref,preco_limite,"
+                        "valor_reais,alavancagem,stop,conviccao,criada_em,expira_em,status) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,'pendente')",
+                        (sig["id"], sig["ativo"], sig["direcao"], preco, limite, valor_reais,
+                         alavancagem, stop, sig["conviccao"], str(agora),
+                         str(agora + pd.Timedelta(seconds=ttl))))
+            oid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+    log("ORDEM #%s %s %s limite %s (ref %s) | R$%s %sx - expira em %.0fs"
+        % (oid, sig["direcao"], sig["ativo"], limite, preco, valor_reais, alavancagem, ttl))
+    return oid
+
+
+def _encheu(direcao, limite, preco):
+    """A ordem post-only encheu? LONG so enche em preco <= limite; SHORT em preco >= limite."""
+    return preco <= limite if direcao == "LONG" else preco >= limite
+
+
+def processar_ordens():
+    """[EX-1] Um ciclo do worker sobre as ordens pendentes: enche, ou expira.
+
+    O try/except e POR ORDEM, nunca em volta do `for` -- e a licao do [P1-1], e aqui ela morde
+    igual: uma moeda cuja cotacao falha nao pode impedir as outras ordens de encher nem de
+    expirar.
+    """
+    with db.conectar() as con:
+        pend = [dict(r) for r in con.execute("SELECT * FROM ordens WHERE status='pendente'")]
+    if not pend:
+        return {"vistas": 0, "preenchidas": 0, "expiradas": 0, "falhas": 0}
+    taxa_maker = _cfg_float(db.get_config(), "taxa_maker", 0.0002)
+    agora = pd.Timestamp.now()
+    res = {"vistas": len(pend), "preenchidas": 0, "expiradas": 0, "falhas": 0}
+    for o in pend:
+        try:
+            if o["expira_em"] and agora >= pd.Timestamp(o["expira_em"]):
+                _resolver(o["id"], "expirada", "ttl")          # o sinal NAO volta: ver colocar_ordem
+                res["expiradas"] += 1
+                continue
+            preco = preco_ao_vivo(o["ativo"])
+            if not _encheu(o["direcao"], o["preco_limite"], preco):
+                continue
+            # A trava diaria e re-checada NO FILL, e nao so na criacao: a ordem espera, e o dia
+            # pode ter estourado o limite de perda enquanto ela esperava. Deixar encher aqui
+            # seria a trava diaria valendo so para quem entra a mercado.
+            if guarda_risco()["trava_dia"]:
+                _resolver(o["id"], "cancelada", "trava diaria ativa no preenchimento")
+                res["expiradas"] += 1
+                continue
+            pid = _abrir_da_ordem(o, taxa_maker)
+            res["preenchidas"] += 1
+            log("ORDEM #%s PREENCHIDA -> posicao #%s @ %s (preco %s) - taxa de entrada %.3f%%"
+                % (o["id"], pid, o["preco_limite"], preco, taxa_maker * 100))
+        except Exception as e:
+            res["falhas"] += 1
+            log("ordem #%s falhou: %s" % (o["id"], e))
+    return res
+
+
+def _resolver(oid, status, motivo):
+    with db.conectar() as con:
+        con.execute("UPDATE ordens SET status=?, motivo=?, resolvida_em=? "
+                    "WHERE id=? AND status='pendente'",
+                    (status, motivo, str(pd.Timestamp.now()), oid))
+
+
+def _abrir_da_ordem(o, taxa_maker):
+    """Materializa a posicao de uma ordem que encheu. A entrada e o `preco_limite`, nao o preco
+    de agora: post-only significa que o preco foi NOSSO. Sem slippage, de proposito -- quem poe
+    o preco nao paga travessia de spread. O rowcount no UPDATE da ordem e o que impede duas
+    posicoes nascerem da mesma ordem se dois ciclos se cruzarem."""
+    with _abrir_lock:
+        with db.conectar() as con:
+            if con.execute("UPDATE ordens SET status='preenchida', resolvida_em=? "
+                           "WHERE id=? AND status='pendente'",
+                           (str(pd.Timestamp.now()), o["id"])).rowcount != 1:
+                raise ValueError("ordem ja resolvida")
+            con.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,stop,"
+                        "preco_atual,pnl,aberto_em,status,conviccao,sinal_id,taxa_entrada) "
+                        "VALUES(?,?,?,?,?,?,?,0,?,'aberta',?,?,?)",
+                        (o["ativo"], o["direcao"], o["preco_limite"], o["valor_reais"],
+                         o["alavancagem"], o["stop"], o["preco_limite"],
+                         str(pd.Timestamp.now()), o["conviccao"], o["sinal_id"], taxa_maker))
+            pid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+            con.execute("UPDATE ordens SET posicao_id=? WHERE id=?", (pid, o["id"]))
+    alertas.enviar("Ordem preenchida %s %s - R$ %s @ %sx - entrada %s"
+                   % (o["direcao"], o["ativo"], o["valor_reais"], o["alavancagem"],
+                      o["preco_limite"]))
+    return pid
+
+
+def executar(sinal_id, valor_reais, alavancagem):
+    """[EX-1] PONTO UNICO de entrada: despacha pelo `exec_modo` da config.
+
+    Devolve `("posicao", id)` ou `("ordem", id)`. O `abrir()` continua existindo intacto e
+    continua sendo o caminho a mercado -- nao virou wrapper nem mudou de assinatura, porque e
+    ele que as provas do M1 e a suite exercitam, e trocar o significado dele por baixo seria
+    mexer no risco pela porta dos fundos.
+    """
+    if str(db.get_config().get("exec_modo", "mercado")) == "post_only":
+        return "ordem", colocar_ordem(sinal_id, valor_reais, alavancagem)
+    return "posicao", abrir(sinal_id, valor_reais, alavancagem)
 
 
 def fechar(pos_id, motivo, preco_saida=None):

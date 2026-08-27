@@ -73,6 +73,7 @@ def worker():
     log("worker iniciado")
     while _worker_on["v"]:
         try:
+            simulador.processar_ordens()                # [EX-1] ordens post-only: enche ou expira
             simulador.atualizar()                       # marca/fecha posições no preço real
             abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
             _saidas["v"] = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
@@ -267,6 +268,14 @@ CONFIG_CATALOGO = {
     "risco_aberto_max":     ("float", 0.0, 1.0),      # 0 = sem teto (semântica existente)
     "exposicao_max":        ("float", 0.0, 1.0),      # 0 = sem teto (semântica existente)
     "taxa_por_lado":        ("float", 0.0, 0.01),
+    # execucao [EX-1]. `exec_modo` e a unica chave desta secao que muda COMPORTAMENTO -- as
+    # outras tres so parametrizam. Faixas apertadas pelo mesmo motivo das de risco: o ganho
+    # inteiro do post-only mora em ~0,03% por lado ([CX-1]), entao um digito a mais em
+    # `taxa_maker` apaga o efeito que a feature existe para capturar.
+    "exec_modo":            ("enum", ("mercado", "post_only")),
+    "taxa_maker":           ("float", 0.0, 0.01),
+    "exec_maker_off":       ("float", 0.0, 0.05),     # 0 = limite no proprio preco
+    "exec_ordem_ttl_s":     ("float", 0.0, 86400.0),  # 0 = expira no proximo ciclo
     "alavancagem_padrao":   ("float", 1.0, 50.0),
     # scanner / sinais
     "timeframe":            ("enum", _TFS),
@@ -308,6 +317,21 @@ CONFIG_CATALOGO = {
 # o "no edge" acontecer (`autotrader.py:8-13`), e agressividade acelera esse experimento. O
 # defeito era não estar escrito em lugar nenhum que a escolha foi deliberada, qual seria o
 # perfil conservador equivalente, e o que muda quando isto encostar em dinheiro real.
+#
+# [EX-1] Racional das chaves de execucao, para o `GET /catalogo`:
+#   exec_modo       -- "mercado" e o de hoje: o sinal vira posicao na hora, pagando taker nas
+#                      duas pernas. "post_only" faz o sinal virar uma ORDEM que descansa a
+#                      `exec_maker_off` do preco e so vira posicao se o preco vier ate ela; se
+#                      nao vier em `exec_ordem_ttl_s`, a ordem morre E O SINAL MORRE COM ELA.
+#                      Medido: o [CX-1] leva o Sharpe de 0,955 para ~1,25 e faz o Reality Check
+#                      passar; o [CX-3] mostrou que o atalho (esperar e mandar a mercado) nao
+#                      vale nada, porque o ganho e a TAXA e nao o preco.
+#   taxa_maker      -- cobrada so na perna de ENTRADA. A saida continua em `taxa_por_lado`
+#                      (taker), porque stop e trailing sao ordem a mercado por natureza [CX-4].
+#   exec_maker_off  -- o [CX-1] mediu 0,05%, 0,10% e 0,20% praticamente iguais. Fundo demais
+#                      derruba o fill sem pagar de volta.
+#   exec_ordem_ttl_s-- 3600 = a janela de 1h que o backtest mediu. Mudar isto muda o que a
+#                      medicao quer dizer.
 #
 # Formato: texto por chave, servido pelo `GET /catalogo`. Chave sem racional aqui é chave sem
 # decisão registrada — e o `None` no catálogo diz isso em vez de inventar uma justificativa.
@@ -678,6 +702,15 @@ def estado():
         "metricas": db.metricas(),
         "risco": simulador.guarda_risco(),
         "dca": dca.listar(),
+        # [EX-1] SO as pendentes, e com teto. O CLAUDE.md §2 e explicito: o `/estado` e servido
+        # a cada poll de 3s e engorda-lo gasta franquia continuamente. Pendente e naturalmente
+        # pouca coisa -- o teto de margem limita quantas existem ao mesmo tempo --, mas a tabela
+        # `ordens` guarda tambem expirada e preenchida, que so crescem. Historico de ordem se le
+        # por rota propria, nao no poll.
+        #
+        # Elas PRECISAM aparecer: uma ordem pendente ja reserva exposicao nos tetos, entao um
+        # painel que nao a mostra esconde risco comprometido.
+        "ordens": db.listar("ordens", 20, "WHERE status='pendente'"),
         "auto": _auto["v"],
     }
 
@@ -838,7 +871,16 @@ def confirmar(req: ConfirmarReq):
                         f"+ R${r_novo:.2f} deste trade passa o limite R${g['risco_aberto_max_rs']:.2f}. "
                         f"Feche uma posição ou reduza o tamanho."}
     try:
-        pid = simulador.abrir(req.sinal_id, req.valor_reais, req.alavancagem)
+        # [EX-1] `executar` despacha pelo `exec_modo`: com `mercado` (default) e o `abrir()` de
+        # sempre e o contrato da rota nao muda. Com `post_only` a resposta passa a devolver
+        # `ordem_id` em vez de `posicao_id`, e quem le o painel PRECISA ver essa diferenca --
+        # uma ordem pendente nao e uma posicao, e chamar as duas de "aberta" seria mentir sobre
+        # exposicao.
+        tipo, ident = simulador.executar(req.sinal_id, req.valor_reais, req.alavancagem)
+        if tipo == "ordem":
+            return {"ok": True, "tipo": "ordem", "ordem_id": ident,
+                    "msg": "ordem post-only colocada — vira posição se o preço vier até ela"}
+        pid = ident
     except ValueError as e:
         # abrir() diz "nao, e por este motivo" levantando ValueError. Sem traduzir isso para o
         # contrato {ok:false, erro} o FastAPI trata a RECUSA como falha do servidor: 500, e o
