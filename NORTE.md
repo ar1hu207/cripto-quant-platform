@@ -79,6 +79,27 @@ entrada, só raspa o PnL depois.
 o número da taxa — **não modelou não-preenchimento de ordem limite nem seleção adversa**. Que o
 maker seja alcançável é medição nova, não conclusão deste teste.
 
+## O que o marco de custo mediu, e entregou (26-27/08/2026)
+
+O dono escolheu comecar pelo custo de execucao. Quatro cards depois, com o veredito de cada um
+versionado ao lado:
+
+| card | o que mediu | resultado |
+|---|---|---|
+| `[Q-15]` | sensibilidade do veredito a taxa | a taxa **decide** o veredito: a 0% o edge sobrevive, a 0,05% nao |
+| `[CX-1]` | execucao post-only com fill modelado | Sharpe 0,955 → 1,25 (sob custo otimista) |
+| `[CX-2]` | maker + portao de open interest | **piorou os quatro niveis**; overfitting demonstrado |
+| `[CX-3]` | foi a taxa ou o preco de entrada? | **foi a taxa.** Esperar o preco e mandar a mercado nao vale nada |
+| `[CX-4]` | round-trip realista (maker in, taker out) | sobrevive **61%** do ganho: Sharpe 0,955 → **1,134** |
+
+**A leitura honesta:** post-only vale, e por larga margem — +R$840 em tres anos sobre o mesmo
+sinal, sem depender de achar sinal novo. Mas **nao coloca a estrategia do lado certo da linha**:
+continuam dois portoes reprovados (IC-bloco e Reality Check), com margem melhor. Quem esperava
+que baratear execucao resolvesse o veredito precisa ler o `VEREDITO-CX4-ROUNDTRIP-2026-08-27.md`.
+
+**Entregue em codigo:** `[EX-1]`, a execucao post-only na plataforma — desligada por padrao
+(`exec_modo=mercado`). Ver `CLAUDE.md` §2 para as tres regras que nao se afrouxam.
+
 ## Como isso vira trabalho — PROPOSTA, pendente de decisão do dono
 
 Marcos no formato do `PLANO-EXECUCAO-2026-08-20.md` §2: cada um é **uma frase que passa a ser
