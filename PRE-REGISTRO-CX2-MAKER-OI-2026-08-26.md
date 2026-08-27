@@ -75,3 +75,19 @@ conclusão.** O caminho é re-medir fora dela — janela nova, ou moedas fora da
 Não muda default nenhum: `entrada="taker"` e `oi_modo="off"` seguem sendo a plataforma. E o
 backtest continua sem medir o que decide se isso é operável: se a corretora trata a ordem como
 maker, e o que o vivo faz com o sinal que não encheu.
+
+## 7. Adendo, antes de qualquer número: o `[Q-17]` mediu noutra configuração
+
+Achado ao ler `_trades_oi` para montar esta rodada: o `[Q-17]` chamou o `backtest_ativo` **sem
+`lev_modo`**, ou seja com alavancagem **FIXA** — não com a de convicção que a produção roda e
+que o `[Q-15]` e o `[CX-1]` usaram. É por isso que o baseline dele é Sharpe 0,620 e o do
+`[CX-1]` é 0,955: não são a mesma coisa medida duas vezes, são duas configurações.
+
+**O `[CX-2]` roda em `lev_modo="conviccao"`**, a de produção, porque é a única que deixa esta
+rodada comparável com o `[CX-1]` — e porque é a que se opera.
+
+**Consequência que pode invalidar o prognóstico 2:** o efeito do portão de OI medido pelo
+`[Q-17]` (+30,2% de P&L por trade) foi medido com lev fixa. Sob dimensionamento por convicção o
+efeito pode ser maior, menor ou trocar de sinal, porque o portão e a convicção podem estar
+cortando o mesmo trade. **Não estou herdando aquele número: estou re-medindo o portão numa
+configuração em que ele nunca rodou.**
