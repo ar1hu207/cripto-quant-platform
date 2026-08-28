@@ -21,6 +21,176 @@
 
 ---
 
+# ⚠️ ADENDO 2026-08-28 (noite) — os dados de produção chegaram
+
+> **Leia este bloco antes do resto do documento.** Ele corrige três afirmações erradas das seções
+> abaixo e traz um achado novo que **reordena o plano da §8**. O texto original fica intacto: o que
+> mudou está aqui, com o número que mudou. (Mesmo padrão do `VEREDITO-M4.md`.)
+>
+> **Fonte:** 9 chamadas somente-leitura ao `trading.db` da VM, 28/08 ~18:06 UTC. Nada foi alterado.
+
+## A.1 O quadro medido
+
+| | |
+|---|---|
+| Banca atual | **R$1.115,91** (+11,6% sobre R$1.000) |
+| Pico de equity | **R$1.661,84** em 22/08 |
+| **Drawdown do pico** | **−32,9%** |
+| Trades fechados | **62** · P&L **+R$115,91** |
+| Win rate | **38,7%** (24 de 62) |
+| Ganho médio / perda média | +R$37,37 / −R$20,55 (razão 1,82) |
+| Profit factor | **1,15** |
+| Expectância | **+R$1,87** por trade |
+| Taxa paga | **R$84,17 = ~42% do lucro bruto** |
+| Alavancagem | média **7,69x**, máxima **20x** |
+
+**O P&L por dia:**
+
+| dia | n | P&L |
+|---|---:|---:|
+| 19/08 | 1 | −2,89 |
+| 20/08 | 15 | +78,85 |
+| **21/08** | **14** | **+374,86** |
+| 22/08 | 6 | +34,68 |
+| 23/08 | 6 | −87,57 |
+| 24/08 | 5 | −88,39 |
+| 25/08 | 4 | −101,55 |
+| 26/08 | 5 | −54,96 |
+| 27/08 | 2 | +34,28 |
+| 28/08 | 4 | −71,41 |
+
+📏 **O dia 21/08 sozinho vale 323% do resultado acumulado.** Sem ele o bot está em **−R$258,95**.
+De 23/08 a 28/08 são **seis dias, −R$369,60, com um único dia positivo** (27/08, n=2).
+
+📏 **E a qualidade caiu junto**, comparando os 47 trades de 24/08 com os 62 de agora:
+win rate **44,7% → 38,7%**, profit factor **1,57 → 1,15**.
+
+## A.2 O que eu tinha ERRADO
+
+| § | eu disse | o medido |
+|---|---|---|
+| §2.1, §4.4 | o auto-trader provavelmente está desligado desde 27/08 | **`auto_trade = 1` — está LIGADO.** A memória de 27/08 estava desatualizada; foi religado entre 27 e 28/08 |
+| §4.4, §8/1.1 | `exec_modo = mercado`; **ligar o post-only é a decisão de maior retorno do projeto** | **`exec_modo = post_only` — JÁ ESTÁ LIGADO.** A recomendação estava certa e **já foi executada por você**. Não é mais uma ação pendente |
+| §2.2 | "18%" não bate com nada | é **+11,6%** hoje. O 18% era uma leitura anterior, no meio da queda |
+
+**`trava_dia_em = 2026-08-28`** — a trava diária disparou **hoje**. 0 posições abertas, 0 ordens
+pendentes. O bot está parado por guarda, funcionando como projetado.
+
+## A.3 🐛 O bug do `risco_inicial`: **CONFIRMADO**
+
+A §5.1 era um argumento dedutivo. Agora tem prova, e mais forte do que eu previa.
+
+**Prova 1 — o stop está do lado errado.** Em **todos** os trades de saída por `trailing`, sendo
+LONG, o `stop` gravado está **acima** da entrada: id 18 (+7,6%), id 24 (+8,8%), id 32 (+11,6%),
+id 22 (+2,0%), id 17 (+4,3%), id 33 (+5,4%). Stop de LONG acima da entrada não é risco — é lucro
+travado. Os `stop` puros estão corretos (id 35 LONG: entrada 0,691 / stop 0,6667).
+
+**Prova 2 — excede o teto matemático.** Com `risco_por_trade = 3%`, no pico de banca o risco
+máximo por trade era **R$49,86**. O trade 18 gravou **R$177,55** — **3,6× o teto**, impossível
+pelo caminho do sizing.
+
+**Prova 3 — `risco_inicial ≈ pnl`.** 177,55 vs 174,81 · 83,16 vs 81,98 · 63,47 vs 62,87 ·
+55,01 vs 52,34 · 46,21 vs 45,02. **O "risco" gravado é o próprio lucro.** O denominador virou
+o numerador.
+
+**Prova 4 — o gradiente.** Risco médio por motivo: `trailing` 39,29 > `manual` 30,48 >
+`stop` 23,86 > `stop-gap` 16,69. Ordena exatamente pelo tempo que o trailing teve para agir.
+
+➡️ **`expectancia_r` e `sqn_r` estão inválidos**, e enviesados **para parecer melhores**. Nenhuma
+métrica em R desta tabela pode ser usada até o fix.
+
+## A.4 🔴 O ACHADO NOVO — e é ele que reordena tudo
+
+O `[Q-4]` (validação prospectiva do portão de fluxo) **já tinha amostra e nunca havia sido lido**.
+Saída literal:
+
+```
+grupo           n  alvo  stop  aberto    win%   ret1h%   ret4h%  ret24h%   fluxo%
+passou       1367   644   683      40    48.5   -0.111   -0.125    -0.31     47.4
+rejeitado    1229   564   625      40    47.4   -0.134    -0.16    -0.295    52.6
+delta win: +1.1 p.p.   z=0.55  p=0.5823
+veredito: o portao ainda nao mostrou valor
+```
+
+**Duas conclusões, e a segunda é a importante:**
+
+**(a) O portão de fluxo é ruído.** +1,1 p.p. com **p = 0,58**. E ele descarta **38,9% de todos os
+sinais** (1.461 de 3.752). Uma guarda que joga fora 4 de cada 10 sinais sem valor medido.
+
+**(b) 🔴 O retorno direcional dos sinais é NEGATIVO — nos dois grupos, nos três horizontes.**
+São **seis medições independentes, todas negativas**, sobre **2.596 sinais** com desfecho marcado:
+−0,111% / −0,125% / −0,31% no grupo que passou, e −0,134% / −0,16% / −0,295% no rejeitado.
+Desfecho binário: **1.208 alvo contra 1.308 stop = 48,0%** de acerto num contrafactual de 1R
+simétrico, onde o nulo é 50%.
+
+⚠️ **Honestidade sobre a força disso:** os sinais são correlacionados (24 moedas que andam juntas,
+mesma hora) e o relatório não publica IC — então é **indício forte, não prova**. E o empate na
+mesma vela conta como stop por convenção, o que puxa o win% um pouco para baixo. **Mas os retornos
+médios não sofrem dessa convenção, e são negativos em todas as seis leituras.**
+
+**O que isso significa:** o problema **não é o custo, não é a política de saída e não é o
+dimensionamento**. Esses três mexem na variância e no quanto se perde — não no sinal apontar para o
+lado certo. **O gargalo é a ENTRADA.** Três evidências independentes agora dizem a mesma coisa:
+3 anos de walk-forward (`SEM EVIDÊNCIA`), 10 dias de operação ao vivo (−32,9% do pico), e 2.596
+sinais prospectivos com retorno médio negativo.
+
+📏 **E há a confirmação prática:** o post-only **já está ligado**, e o bot perdeu **R$71,41 em 4
+trades** no dia seguinte. n=4 não prova nada sozinho — mas fecha o argumento de que **baratear a
+execução não conserta um sinal que aponta para o lado errado**.
+
+## A.5 O funil, que ninguém tinha olhado
+
+| etapa | n | % |
+|---|---:|---:|
+| sinais gerados | 3.752 | 100% |
+| rejeitados pelo portão de fluxo | 1.461 | 38,9% |
+| **expirados sem virar nada** | **1.966** | **52,4%** |
+| pulados | 258 | 6,9% |
+| **confirmados (viraram trade)** | **63** | **1,7%** |
+
+**Mais da metade dos sinais morre de velhice.** A janela de vida é de 4 velas do próprio TF e o
+auto-trader só opera sinal com até 12 min. O sistema gera 3.752 oportunidades e executa 63.
+
+## A.6 Um dado de engenharia que confirma a §5.3
+
+📏 **21 dos 62 trades (34%) saíram por `gap`** — o preço passou do stop entre dois polls do worker.
+`stop-gap` sozinho: n=18, −R$336,34 (o maior bloco de perda em número). Isso é evidência direta de
+que o ciclo de 15s **não está acompanhando o preço**, e reforça a hipótese da §5.3 (o scan alonga o
+ciclo para ~40-50s). ⚠️ Não conclua que o gap *custa* mais: a perda média do `stop-gap` (−18,69) é
+**menor** que a do `stop` puro (−25,29). O que está provado é a **latência**, não o custo dela.
+
+## A.7 O que isso muda na §8 (o plano)
+
+**A Onda 1 encolheu** — o item mais valioso dela (post-only) já está feito. Sobram o fix do
+`risco_inicial` (agora confirmado), o `avaliar_saida` fora do laço quente, e a instrumentação do
+ciclo.
+
+**A ordem das ondas inverte.** O plano original tratava sinal na Onda 4. Com a §A.4, **a entrada
+passa a ser a Onda 1**. Risco de carteira (Onda 2) continua valendo, mas muda de papel: deixa de
+ser "ganhar mais" e passa a ser "sobreviver enquanto se procura sinal".
+
+**Uma coisa que NÃO se deve fazer, e é contraintuitiva:** desligar o portão de fluxo por ele ser
+ruído. Ele é inútil, mas **remover um filtro inútil de um sinal de expectativa negativa faz o bot
+operar mais e perder mais rápido**. Deixe-o ligado até existir sinal com edge; o que muda é parar
+de acreditar que ele protege alguma coisa.
+
+**E o que continua verdadeiro:** é dinheiro fictício. Manter o bot rodando **não custa nada e gera
+dado** — a tabela `sinais` com desfecho marcado é exatamente a matéria-prima da §7.3. Ele só não
+vai dar lucro na forma atual.
+
+## A.8 O que ficou sem resposta
+
+- **Quando o `auto_trade` foi religado** — não há registro histórico de mudança de config no banco.
+  💭 Vale criar uma tabela de auditoria de config (barato, e responde isso para sempre).
+- **`/status` devolveu 401** (`DASH_PASS` setado). Os contadores de `caps_geometria`, `caps_tamanho`
+  e saúde do scan não foram coletados.
+- **`git status` na VM falhou** (`dubious ownership`) — o fix é escrita de config e a sessão,
+  corretamente, não executou. O commit veio do `/health` e é confiável; o que não sei é se a
+  árvore tem modificação não commitada.
+- **A duração real do `scan()` não foi medida** — a §5.3 continua sendo hipótese.
+
+---
+
 ## 0. Aviso de navegação para a próxima sessão
 
 ⚠️ **`C:\Users\aboni\Pesquisas\1` está 123 commits atrás**, na branch `feat/m6-design-system-cmc`.
@@ -89,7 +259,11 @@ nada — nem quando é +60%, nem quando é +18%.
 
 ---
 
-## 2. ⚠️ Três coisas que preciso confirmar com você antes de qualquer conclusão
+## 2. ~~⚠️ Três coisas que preciso confirmar~~ → **RESPONDIDAS em 28/08, ver ADENDO §A.2**
+
+> ✅ **As três foram medidas.** (1) O auto-trader está **LIGADO**. (2) A banca é **R$1.115,91
+> (+11,6%)**, e o drawdown do pico é **−32,9%**. (3) Sim, o perfil `experimento` continua ativo —
+> e agora você sabe. O texto abaixo fica como registro do que era dúvida.
 
 Estão aqui em primeiro lugar porque **mudam o diagnóstico**.
 
@@ -178,7 +352,12 @@ result so far)"*, com três linhas ❌. É o cartão de visita do repositório. 
 o enquadramento ("`SEM EVIDÊNCIA` é o piso da busca, não a meta"), mas o README não foi
 reorganizado — só emendado.
 
-### 4.4 A melhoria mais barata já medida está DESLIGADA
+### 4.4 ~~A melhoria mais barata já medida está DESLIGADA~~ → **JÁ FOI LIGADA. Ver ADENDO §A.2**
+
+> ❌ **Esta seção estava ERRADA.** A medição de 28/08 mostra `exec_modo = post_only` em produção.
+> A recomendação estava certa e **você já a executou**. Não é ação pendente. E o §A.4 acrescenta o
+> que isso ensinou: o bot perdeu R$71,41 em 4 trades no dia seguinte — **execução barata não
+> conserta sinal ruim**.
 
 📏 `exec_modo = "mercado"` (taker) é o default vivo. O `[EX-1]` (post-only) está implementado,
 testado, deployado em produção desde 27/08 — **e nunca foi ligado**. O `[CX-4]` mede que vale
@@ -209,7 +388,12 @@ invente uma."* Quatro marcos propostos, nenhum escolhido. Isso está travando o 
 
 ## 5. 🐛 Defeitos encontrados no código
 
-### 5.1 🔍 **ALTO — `trades.risco_inicial` grava o stop TRAILADO, não o inicial**
+### 5.1 📏 **CONFIRMADO EM PRODUÇÃO — `trades.risco_inicial` grava o stop TRAILADO**
+
+> ✅ **Deixou de ser hipótese em 28/08.** Quatro provas independentes no ADENDO §A.3, sobre os 62
+> trades reais. O maior valor gravado é **R$177,55** — 3,6× o teto matemático de R$49,86 — e nos
+> trades de `trailing` o "risco" é numericamente **igual ao lucro**. O argumento dedutivo abaixo
+> estava certo, e o outlier real é ainda pior que o R$83,16 que o `[P2-39]` registrou.
 
 **Onde:** `simulador.py`, função `fechar()`:
 ```python
@@ -540,15 +724,17 @@ metade da direção declarada.
 
 **Esta seção é o "de onde retomar".**
 
-### 9.1 Não executado (barato, primeira coisa a fazer)
+### 9.1 ~~Não executado~~ → **FEITO em 28/08 (noite). Resultados no ADENDO**
 
-- [ ] **Dados de produção da VM.** Um `az vm run-command` (~45s). A sessão tentou e o comando
-      estourou o timeout de 90s antes de retornar. Script pronto na §10.
-- [ ] **`--relatorio` do portão de fluxo** (`[Q-4]`) — medição que já existe e nunca foi lida.
-- [ ] **Cronometrar o `scan()`** para confirmar ou derrubar a §5.3.
-- [ ] **Confirmar a §5.1** rodando uma query no banco: comparar `trades.risco_inicial` com
-      `valor_reais × alavancagem × |entrada − stop_do_sinal| / entrada`. Se divergir nos trades com
-      `motivo_saida = 'trailing'`, o bug está provado.
+- [x] **Dados de produção da VM.** ✅ Coletados. ADENDO §A.1.
+- [x] **`--relatorio` do portão de fluxo** (`[Q-4]`). ✅ Lido — e foi ele que produziu o achado
+      mais importante de todos. ADENDO §A.4.
+- [x] **Confirmar a §5.1.** ✅ **Bug CONFIRMADO** com 4 provas. ADENDO §A.3.
+- [ ] **Cronometrar o `scan()`** — ⏳ **continua pendente.** A §5.3 segue sendo hipótese. Mas
+      ganhou apoio indireto: 34% dos trades saem por `gap` (ADENDO §A.6).
+- [ ] **Coletar o `/status`** — devolveu 401. Precisa do `DASH_PASS` para ler `caps_geometria`,
+      `caps_tamanho` e a saúde do scan.
+- [ ] **Tabela de auditoria de config** — não dá para saber quando o `auto_trade` foi religado.
 
 ### 9.2 Pesquisa externa — **lançada e perdida, zero entregue**
 
