@@ -151,6 +151,26 @@ execução não conserta um sinal que aponta para o lado errado**.
 **Mais da metade dos sinais morre de velhice.** A janela de vida é de 4 velas do próprio TF e o
 auto-trader só opera sinal com até 12 min. O sistema gera 3.752 oportunidades e executa 63.
 
+## A.5b 📏 O segundo bug (§5.2) também está CONFIRMADO — e de graça
+
+A §5.2 alegava que `avaliar_saida` roda a cada 15s por posição, gastando 3 chamadas de rede cada,
+e que **o bot nunca age sobre ela** porque o bloco em `autotrader.auto_executar` exige
+`trailing_ativo = 0`. Os dados de hoje fecham as duas metades:
+
+1. **A condição:** `trailing_ativo = 1` em produção (§A.1). Logo `not _verdade("1")` é `False` e o
+   bloco de auto-fechamento **nunca executa**, qualquer que seja `auto_fechar_saida`.
+2. **A consequência, empírica:** a tabela de motivos de saída cobre os **62 trades**
+   (`stop-gap` 18 + `trailing` 17 + `stop` 15 + `manual` 9 + `trailing-gap` 3 = 62). **Não existe
+   um único `auto-saida`.** Em dez dias o gestor de saída foi calculado a cada 15 segundos e
+   **fechou zero posições**.
+
+➡️ O custo de rede é real e o benefício é zero. A correção da §5.2 (tirar do laço quente, servir
+sob demanda em `/saidas`) fica confirmada como ganho puro.
+
+**De quebra, duas guardas passam no teste:** **zero liquidações** em 62 trades — o cap geométrico
+do `[P1-11]` está fazendo o trabalho dele; e **zero `panico`**, ou seja, o kill-switch nunca
+precisou ser usado.
+
 ## A.6 Um dado de engenharia que confirma a §5.3
 
 📏 **21 dos 62 trades (34%) saíram por `gap`** — o preço passou do stop entre dois polls do worker.
@@ -429,7 +449,11 @@ nova em `posicoes`, ex. `risco_ini`), e `fechar()` apenas copiar. Nunca recalcul
 campo mutável. **Antes de corrigir:** decidir o que fazer com as ~50 linhas já gravadas — o padrão
 desta casa (`[P2-40]`) é **não reescrever histórico**, e sim criar coluna nova com o nome certo.
 
-### 5.2 🔍 **ALTO — o gestor de saída é calculado a cada 15s e o bot NUNCA age sobre ele**
+### 5.2 📏 **CONFIRMADO — o gestor de saída é calculado a cada 15s e o bot NUNCA age sobre ele**
+
+> ✅ **Provado em 28/08, ver ADENDO §A.5b.** `trailing_ativo = 1` em produção mata o bloco, e os
+> 62 trades reais não têm **nenhum** `auto-saida`. Dez dias calculando a cada 15 segundos, zero
+> posições fechadas.
 
 **Onde:** `autotrader.auto_executar()`:
 ```python
