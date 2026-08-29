@@ -7,6 +7,7 @@ Rodar:  python signal_engine.py               (loop)
         python signal_engine.py --once        (uma varredura)
         python signal_engine.py --desfechos   ([Q-4] marca desfecho hipotético agora)
         python signal_engine.py --relatorio   ([Q-4] portão de fluxo: passou x rejeitado)
+        python signal_engine.py --cronometro  ([F-13] cronometra um ciclo do worker, COM rede)
 """
 import sys
 import time
@@ -466,6 +467,159 @@ def imprimir_relatorio_fluxo():
     return r
 
 
+# ============================================================ [F-13] o cronometro do ciclo
+
+class _Espiao:
+    """Envelope de um cliente ccxt que CONTA as chamadas de rede sem mudar nenhuma.
+
+    Delega tudo por `__getattr__` em vez de reimplementar a API do ccxt: o que interessa medir
+    e o numero de IDAS A REDE, e uma lista branca que ficasse velha silenciaria justamente a
+    chamada nova. Os metodos fora de `_REDE` passam intactos e nao sao contados -- `market()`,
+    `milliseconds()` e afins nao saem da maquina.
+    """
+    _REDE = ("fetch_ohlcv", "fetch_ticker", "fetch_tickers", "fetch_order_book",
+             "fetch_trades", "fetch_funding_rate", "fetch_funding_rates",
+             "fetch_funding_rate_history")
+
+    def __init__(self, alvo, contador):
+        self._alvo, self._contador = alvo, contador
+
+    def __getattr__(self, nome):
+        attr = getattr(self._alvo, nome)
+        if nome not in self._REDE:
+            return attr
+
+        def contando(*a, **k):
+            self._contador[nome] = self._contador.get(nome, 0) + 1
+            return attr(*a, **k)
+        return contando
+
+
+def _espioes(contador):
+    """Troca os clientes ccxt dos tres modulos do ciclo por espioes. Devolve o restaurador.
+
+    Sao cinco objetos e nao um: cada modulo instancia o seu no import (`signal_engine.ex`,
+    `simulador.ex`/`ex_fut`, `mercado.ex_spot`/`ex_fut`), e contar so um deles daria um numero
+    MENOR que o real justamente na conta que existe para expor o excesso.
+    """
+    import simulador
+    alvos = [(sys.modules[__name__], "ex"), (simulador, "ex"), (simulador, "ex_fut"),
+             (mercado, "ex_spot"), (mercado, "ex_fut")]
+    originais = [(m, n, getattr(m, n)) for m, n in alvos]
+    for m, n, o in originais:
+        setattr(m, n, _Espiao(o, contador))
+
+    def restaurar():
+        for m, n, o in originais:
+            setattr(m, n, o)
+    return restaurar
+
+
+def _semear_posicoes(n):
+    """n posicoes abertas nos primeiros n ativos da config, no preco de agora.
+
+    Preco real (1 `fetch_tickers`, colhido FORA do cronometro) porque o objeto medido e o custo
+    de marcar posicao viva: uma entrada inventada poderia cair do lado errado do stop e fechar a
+    posicao no primeiro ciclo, e ai o cronometro mediria um ciclo que nao existe. Stop e
+    alavancagem folgados (metade do preco, 2x) para que nada dispare durante a medicao.
+    """
+    ativos = [a.strip() for a in db.get_config()["ativos"].split(",") if a.strip()][:n]
+    precos = mercado.precos(ativos)
+    with db.conectar() as con:
+        for a in ativos:
+            p = precos.get(a)
+            if not p:
+                continue
+            con.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,"
+                        "stop,stop_abertura,risco_abertura,preco_atual,pnl,aberto_em,status,"
+                        "conviccao) VALUES(?,'LONG',?,50,2,?,?,25,?,0,?,'aberta',70)",
+                        (a, p, p * 0.5, p * 0.5, p, str(pd.Timestamp.now())))
+    return ativos
+
+
+def cronometrar(n_pos=5, com_scan=True):
+    """[F-13] Cronometra UM ciclo do worker COM REDE, e conta as requisicoes de cada etapa.
+
+        python signal_engine.py --cronometro                    (5 posicoes, com scan)
+        python signal_engine.py --cronometro --pos 3 --sem-scan
+
+    Por que com rede e nao com duble: a hipotese do F-13 e sobre TEMPO DE PAREDE, e o tempo de
+    parede de um ciclo que so faz requisicao E o round-trip. Um duble mediria o custo do Python,
+    que nao e o que estoura o ciclo. O preco disso e que o numero varia com a latencia de quem
+    roda -- por isso o cronometro imprime tambem a CONTAGEM de requisicoes, que e determinista e
+    esta travada em teste, e a mediana medida por requisicao, para o leitor refazer a conta na
+    latencia dele.
+
+    Banco TEMPORARIO (`db.DB` reapontado, restaurado no `finally`) e somente endpoints publicos
+    de leitura da Binance: nao toca `trading.db`, nao manda ordem, nao le chave.
+
+    Reproduz o corpo de `api.worker()` etapa por etapa em vez de chama-lo: o worker e um
+    `while True` com `sleep`, e `api.py` nao e territorio deste card. `POLL_ATUALIZAR` e
+    `INTERVALO_SCAN` sao IMPORTADOS de la, e nao recopiados, para que o teto contra o qual se
+    compara nao vire uma segunda fonte da cadencia.
+    """
+    import os
+    import tempfile
+    import simulador
+    from api import POLL_ATUALIZAR, INTERVALO_SCAN    # local: `api` importa este modulo
+
+    original = db.DB
+    db.DB = os.path.join(tempfile.mkdtemp(prefix="cronometro_"), "cronometro.db")
+    contador = {}
+    restaurar = _espioes(contador)
+    try:
+        db.init_db()
+        ativos = _semear_posicoes(n_pos)
+        contador.clear()          # a colheita de precos da semeadura NAO e do ciclo
+        cfg = db.get_config()
+        tfs = [t.strip() for t in cfg.get("timeframes", cfg["timeframe"]).split(",") if t.strip()]
+        n_ativos = len([a for a in cfg["ativos"].split(",") if a.strip()])
+        print("[F-13] CRONOMETRO DO CICLO DO WORKER")
+        print("  ciclo do worker: %ss   scan a cada: %ss" % (POLL_ATUALIZAR, INTERVALO_SCAN))
+        print("  posicoes abertas: %d   grade do scan: %d ativos x %d tf = %d pares\n"
+              % (len(ativos), n_ativos, len(tfs), n_ativos * len(tfs)))
+
+        etapas = []
+        acum = {"t": 0.0}
+
+        def etapa(nome, fn):
+            antes = sum(contador.values())
+            t = time.perf_counter()
+            fn()
+            dt = time.perf_counter() - t
+            reqs = sum(contador.values()) - antes
+            etapas.append((nome, dt, reqs))
+            acum["t"] += dt
+            print("  %-34s%8.2fs   %4d req" % (nome, dt, reqs))
+
+        etapa("simulador.processar_ordens()", simulador.processar_ordens)
+        etapa("simulador.atualizar()", simulador.atualizar)
+        abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
+        etapa("avaliar_saida() x %d" % len(abertas), lambda: [avaliar_saida(p) for p in abertas])
+        t_sem_scan, r_sem_scan = acum["t"], sum(r for _, _, r in etapas)
+        if com_scan:
+            etapa("signal_engine.scan()", scan)
+
+        print()
+        print("  CICLO SEM SCAN  %8.2fs   %4d req   (teto %ss) %s"
+              % (t_sem_scan, r_sem_scan, POLL_ATUALIZAR,
+                 "ESTOURA" if t_sem_scan > POLL_ATUALIZAR else "cabe"))
+        if com_scan:
+            print("  CICLO COM SCAN  %8.2fs   %4d req   (teto %ss) %s"
+                  % (acum["t"], sum(contador.values()), POLL_ATUALIZAR,
+                     "ESTOURA" if acum["t"] > POLL_ATUALIZAR else "cabe"))
+        reqs = sum(contador.values())
+        if reqs:
+            print("\n  mediana por requisicao: %.0f ms (medida AQUI; na VM e outra -- "
+                  "refaca a conta com a sua)" % (acum["t"] / reqs * 1000))
+        print("  por metodo: " + ", ".join("%s=%d" % kv for kv in sorted(contador.items())))
+        return {"etapas": etapas, "requisicoes": dict(contador),
+                "s_sem_scan": t_sem_scan, "s_com_scan": acum["t"] if com_scan else None}
+    finally:
+        restaurar()
+        db.DB = original
+
+
 if __name__ == "__main__":
     if "--relatorio" in sys.argv:
         db.init_db()
@@ -473,5 +627,8 @@ if __name__ == "__main__":
     elif "--desfechos" in sys.argv:
         db.init_db()
         print(f"{marcar_desfechos(limite=200)} desfechos marcados")
+    elif "--cronometro" in sys.argv:
+        n = int(sys.argv[sys.argv.index("--pos") + 1]) if "--pos" in sys.argv else 5
+        cronometrar(n_pos=n, com_scan="--sem-scan" not in sys.argv)
     else:
         run(once="--once" in sys.argv)

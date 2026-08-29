@@ -20,7 +20,8 @@ import pytest
 import db
 import mercado
 import signal_engine
-from conftest import semear_sinal
+import simulador
+from conftest import semear_posicao, semear_sinal
 
 
 # ================================================================ [P1-3] teto do `limite`
@@ -148,3 +149,106 @@ def test_a_expiracao_nao_reescreve_historico(banco, status):
 
 def test_expirar_sem_sinal_nenhum_nao_quebra(banco):
     assert signal_engine.expirar_sinais(pd.Timestamp("2026-08-22 12:00:00")) == 0
+
+
+# =========================================== [F-13] o custo de rede do ciclo, sem rede
+
+class _ExContado:
+    """Corretora de mentira que CONTA as chamadas. Nao existe rede aqui, de proposito.
+
+    O `cronometrar()` do `signal_engine` mede TEMPO e precisa de rede -- e por isso ele e
+    comando de linha, e nao teste: numero de parede depende de onde se roda. O que a suite
+    trava e a outra metade da mesma medicao, a que E determinista: **quantas idas a rede o
+    ciclo faz**. Uma requisicao que volte a nascer por posicao aparece aqui na hora, mesmo
+    numa maquina lenta e sem internet.
+    """
+
+    def __init__(self):
+        self.n = {}
+
+    def _conta(self, nome):
+        self.n[nome] = self.n.get(nome, 0) + 1
+
+    @property
+    def total(self):
+        return sum(self.n.values())
+
+    def fetch_ticker(self, ativo):
+        self._conta("fetch_ticker")
+        return {"last": 100.0}
+
+    def fetch_tickers(self, ativos):
+        self._conta("fetch_tickers")
+        return {a: {"last": 100.0, "percentage": 1.0} for a in ativos}
+
+    def fetch_ohlcv(self, ativo, timeframe=None, limit=200, since=None):
+        self._conta("fetch_ohlcv")
+        # serie sintetica com deriva e ruido deterministico: o suficiente para EMA/RSI/ADX
+        # sairem do warmup. O que este teste mede e a CONTAGEM, nao o veredito do indicador.
+        n = limit or 200
+        velas = []
+        for k in range(n):
+            base = 100.0 + k * 0.1 + (k % 7) * 0.05
+            velas.append([1_700_000_000_000 + k * 900_000, base, base * 1.003,
+                          base * 0.997, base * 1.001, 1000.0 + (k % 5) * 10])
+        return velas
+
+    def fetch_order_book(self, ativo, n=100):
+        self._conta("fetch_order_book")
+        return {"bids": [[99.9 - i * 0.01, 1.0] for i in range(n)],
+                "asks": [[100.1 + i * 0.01, 1.0] for i in range(n)]}
+
+    def fetch_trades(self, ativo, limit=200):
+        self._conta("fetch_trades")
+        return [{"amount": 1.0, "price": 100.0, "side": "buy" if i % 2 else "sell"}
+                for i in range(limit)]
+
+
+@pytest.fixture
+def corretora_contada(banco, monkeypatch):
+    """Substitui os clientes ccxt dos TRES modulos do ciclo. Sao objetos distintos, criados
+    no import de cada modulo: trocar so um deles daria uma contagem menor que a real."""
+    fake = _ExContado()
+    for modulo, nome in [(signal_engine, "ex"), (simulador, "ex"), (simulador, "ex_fut"),
+                         (mercado, "ex_spot"), (mercado, "ex_fut")]:
+        monkeypatch.setattr(modulo, nome, fake)
+    mercado._tcache.clear()                       # cache de 5s nao pode vazar de outro teste
+    return fake
+
+
+# O ciclo do worker (`api.worker`) gasta, por posicao aberta:
+#   1x `simulador.atualizar()`  -> `preco_ao_vivo`      = 1 fetch_ticker
+#   1x `signal_engine.avaliar_saida()`                  = 1 fetch_ohlcv
+#                                 + `mercado.book()`    = 1 fetch_order_book + 1 fetch_trades
+CUSTO_POR_POSICAO = 4
+
+
+@pytest.mark.parametrize("n_pos", [1, 3, 5])
+def test_f13_o_custo_de_rede_do_ciclo_cresce_por_posicao(corretora_contada, n_pos):
+    """[F-13] O ciclo e LINEAR no numero de posicoes, e o coeficiente e 4 requisicoes.
+
+    Medido com o relogio em 2026-08-29 (`python signal_engine.py --cronometro`, 5 posicoes,
+    a partir do Brasil): 20 requisicoes e **18,5 s** num ciclo cujo teto e 15 s -- ou seja o
+    ciclo ja estoura ANTES de o scan entrar. Este teste trava a metade determinista do
+    numero, para que a contagem nao volte a subir sem ninguem decidir que subiu.
+    """
+    for i in range(n_pos):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=50.0, alavancagem=2)
+    simulador.atualizar()
+    abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
+    assert len(abertas) == n_pos                     # nada fechou: o stop esta longe
+    for pos in abertas:
+        signal_engine.avaliar_saida(pos)
+    assert corretora_contada.total == n_pos * CUSTO_POR_POSICAO
+
+
+def test_f13_o_scan_gasta_uma_requisicao_por_par_ativo_x_timeframe(corretora_contada):
+    """[F-13] O scan e `ativos x timeframes` chamadas de candle. Com a grade viva
+    (24 ativos x 3 TFs) sao 72 -- e cada uma baixa 200 velas que, na maior parte dos ciclos,
+    sao as MESMAS de 60 s atras. Aqui a grade e pequena para o teste ser rapido; o que se
+    trava e a forma da conta, nao o 72."""
+    db.set_config("ativos", "AAA/USDT,BBB/USDT")
+    db.set_config("timeframes", "5m,15m,1h")
+    signal_engine.scan()
+    assert corretora_contada.n.get("fetch_ohlcv") == 2 * 3
