@@ -1,9 +1,17 @@
 """
 A REGUA: decide se uma estrategia tem edge, e sabe dizer quando NAO consegue decidir.
 
-Walk-forward (parametro escolhido so no passado, avaliado no futuro nao-visto) + White's
-Reality Check + Hansen SPA + Deflated/Probabilistic Sharpe + bootstrap de bloco, tudo sobre
-a SERIE DIARIA agregada, sob um criterio unico e travado (`PADRAO`).
+CPCV (Combinatorial Purged Cross-Validation, com purga bilateral e embargo) + PBO/CSCV +
+White's Reality Check + Hansen SPA + Deflated/Probabilistic Sharpe + bootstrap de bloco, tudo
+sobre a SERIE DIARIA agregada, sob um criterio unico e travado (`PADRAO`).
+
+**O walk-forward deixou de emitir veredito em 2026-08-29 ([N-7]), e nao foi apagado.** Ele
+produz UMA trajetoria, e um Sharpe OOS tirado dela e amostra de tamanho 1: se aquele caminho
+foi sortudo, nao ha segundo caminho para comparar. O CPCV devolve uma DISTRIBUICAO de
+trajetorias, e e por isso que o trabalho peer-reviewed de 2024 o mede como "marcadamente
+superior" em controle de falso positivo. Mas ele NAO e simulacao de operacao ao vivo -- em
+varios cortes o treino esta depois do teste --, e essa e a pergunta que o walk-forward continua
+respondendo, em `sensibilidade()`, impresso ao lado sempre.
 
 Por que: o split-por-moedas no MESMO periodo (`legado/validar_reversao*.py`, aposentados
 pelo [Q-2] justamente por isto) nao e honesto -- cripto e correlacionada e o corte era
@@ -157,17 +165,26 @@ PBO_S = 16              # blocos do CSCV. Bailey usa 16; com ~900 dias, ~56 dias
 # `criterio="sharpe"` e troca deliberada do default antigo: soma bruta de P&L favorece a
 # config que mais OPERA, nao a melhor -- e o proprio `ITEM1` §2/P5 diagnostica isso, mas a
 # assinatura que ele propos manteve `"pnl"`.
+# [N-7] O esquema de validacao cruzada. `"cpcv"` desde 2026-08-29; `"walk_forward"` continua
+# inteiro e roda em `sensibilidade()`, lado a lado, sempre -- ver a secao [N-7] mais abaixo.
+CPCV_GRUPOS = 8                 # N grupos contiguos no tempo -> C(8,2) = 28 cortes
+CPCV_TESTE = 2                  # k grupos de teste por corte -> C(7,1) = 7 trajetorias
+CPCV_EMBARGO_FRAC = 0.01        # embargo de Lopez de Prado, em fracao do span total
+
 PADRAO = {
+    "cv": "cpcv",               # [N-7] "cpcv" | "walk_forward" (o antigo, hoje diagnostico)
     "criterio": "sharpe",
-    "modo": "expandindo",
+    "modo": "expandindo",       # so tem efeito em cv="walk_forward"
     "atribuir": "entrada",      # "saida" ja e possivel (ha `ts_saida`); trocar e do dono
     "block": 5,
     "purga": True,              # pedida sempre; desliga sozinha e avisa se faltar ts_saida
     "gap_pre_teste_ms": 0,
+    "embargo_frac": CPCV_EMBARGO_FRAC,
     "n_boot": 2000,
     "seed": 42,
     "periodo": "D",
 }
+CVS = ("cpcv", "walk_forward")
 CRITERIOS = ("sharpe", "pnl", "pnl_por_trade")
 MODOS = ("expandindo", "rolante")
 ATRIBUIR = ("entrada", "saida")  # so roda em sensibilidade(), e so quando ha `ts_saida`
@@ -1142,11 +1159,233 @@ def _treino(trades, ini, tr_lim, purga, gap_ms, tem_saida):
     return fora
 
 
-def _nucleo(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste_ms,
-            n_boot, seed, periodo, n_folds=N_FOLDS):
-    """Motor do walk-forward. NAO e publico de proposito: quem chama de fora e
-    `walk_forward()`, que fixa tudo em `PADRAO` ([F3]). As variantes so chegam aqui por
-    `sensibilidade()`, e o resultado delas nunca vira veredito."""
+# ============================ [N-7] CPCV -- e por que ele substitui o walk-forward ========
+#
+# **O que o walk-forward nao consegue dizer.** Ele produz UMA trajetoria: um caminho unico pela
+# linha do tempo, com um treino e um teste por fold. O Sharpe OOS que sai dali e uma amostra de
+# tamanho 1 da distribuicao de "o que este procedimento renderia". Se aquele caminho foi sortudo,
+# nao ha como saber -- nao existe segundo caminho para comparar. E o `PLANO-REPOS-QUANT.md` /
+# `BASE-CONHECIMENTO-TRADING.md` 3.5 ja diziam isso em junho/2026, citando o trabalho
+# peer-reviewed de 2024 que mede CPCV como "marcadamente superior" em controle de falso
+# positivo. Nunca virou trabalho ate aqui.
+#
+# **O que o CPCV faz** (Lopez de Prado, AFML cap. 12): parte a linha do tempo em `N` grupos
+# contiguos e usa `k` deles como teste em cada corte -- todas as C(N,k) maneiras. Cada grupo cai
+# no teste C(N-1,k-1) vezes, e essas avaliacoes se remontam em C(N-1,k-1) TRAJETORIAS completas,
+# cada uma cobrindo a linha do tempo inteira uma vez. Com N=8 e k=2: 28 cortes, 7 trajetorias.
+# O produto deixa de ser um numero e passa a ser uma DISTRIBUICAO, e e ela que responde "esse
+# resultado e robusto ou foi o caminho?".
+#
+# 🔴 **O QUE O CPCV NAO E, e isto precisa ficar dito antes de qualquer numero.** Ele NAO e uma
+# simulacao de operacao ao vivo. Ha cortes em que o treino esta DEPOIS do teste no tempo, e isso
+# e deliberado -- e o preco da simetria que gera as trajetorias. Logo, um Sharpe de CPCV nao e
+# "o que eu teria ganhado"; e "quanto o procedimento de ESCOLHER config generaliza". Quem quiser
+# a pergunta de deployment le a variante `walk_forward`, que `sensibilidade()` imprime SEMPRE ao
+# lado -- e por isso ela nao foi apagada.
+#
+# **Duas consequencias que empurram o numero em direcoes opostas, e as duas ficam declaradas:**
+#
+#   * ⬆️ **T cresce.** No walk-forward o primeiro dos `n_folds+1` segmentos e treino puro e nunca
+#     entra na serie OOS. No CPCV todo grupo e teste em algum corte, entao a trajetoria cobre a
+#     janela inteira. Mais T => MDS MENOR => o instrumento parece ter mais poder, que e a
+#     direcao confortavel. Ela e legitima aqui (aquele pedaco de fato foi avaliado fora da
+#     amostra que o escolheu) mas nao e de graca: ela vem junto com o "nao e deployment" acima.
+#   * ⬇️ **O treino de cada corte e mais curto que os folds tardios do walk-forward expandindo**
+#     (aqui e sempre (N-k)/N = 75% da janela, contra ate 5/6 = 83% la), e vem purgado e
+#     embargado dos DOIS lados. Menos treino => escolha de config mais ruidosa => trajetoria
+#     tipicamente pior. Esta e a direcao desconfortavel, e ela e a maior parte do efeito.
+#
+# **O EMBARGO VOLTA A EXISTIR AQUI, e este e o achado do card.** A `REVISAO-ITEM1.md` F4 mostrou
+# que o embargo de Lopez de Prado estava mal aplicado -- e o argumento dela era exato: *"num
+# walk-forward estritamente sequencial nao existe treino apos o teste para embargar"*. Por isso
+# o parametro foi renomeado para `gap_pre_teste_ms` (default 0), com o docstring do `_treino`
+# dizendo que NAO e o embargo de LdP. **Sob CPCV essa premissa deixa de valer**: existe treino
+# depois do teste, em quase todo corte. Entao o embargo de LdP passa a ser necessario, e ele
+# entra com o nome certo (`embargo_frac`, fracao do span total, 1% como o livro sugere).
+# Trazer o CPCV sem o embargo seria importar a metade que da numero e deixar a metade que
+# protege -- e o numero importado seria otimista.
+#
+# **A purga NAO se afrouxa; ela aperta.** No walk-forward ela era unilateral (`ts_saida <
+# tr_lim`). Aqui um trade de treino e descartado se o seu span de label INTERSECTA qualquer
+# bloco de teste, dos dois lados. CPCV precisa de mais purga, nao de menos.
+
+
+def _grupos_tempo(t0, t1, n_grupos):
+    """`n_grupos` faixas de tempo contiguas cobrindo [t0, t1]. A ultima e fechada a direita
+    para que o ultimo trade nao caia fora de todo grupo."""
+    bordas = [t0 + (t1 - t0) * k / n_grupos for k in range(n_grupos + 1)]
+    return [(bordas[i], bordas[i + 1]) for i in range(n_grupos)]
+
+
+def _treino_cpcv(trades, blocos_teste, purga, gap_ms, embargo_ms, tem_saida, ultimo):
+    """Trades elegiveis para TREINO dado o conjunto de blocos de teste.
+
+    Tres exclusoes, e cada uma existe por um motivo diferente:
+
+      * **teste** -- trade dentro de qualquer bloco de teste nunca e treino, obviamente;
+      * **purga** (LdP / `ITEM1` 3.2) -- trade cujo span de label `[ts, ts_saida]` INTERSECTA
+        um bloco de teste sai do treino, ainda que tenha comecado fora dele. Sem `ts_saida` a
+        purga nao tem como agir, e o chamador ja foi avisado disso;
+      * **embargo** (LdP, cap. 7) -- trade que COMECA nos `embargo_ms` seguintes ao fim de um
+        bloco de teste sai do treino. Este e o embargo de verdade, e ele so faz sentido aqui:
+        e a faixa em que features serialmente correlacionadas carregam informacao do teste para
+        um treino que vem DEPOIS dele. Num walk-forward sequencial nao havia treino depois do
+        teste, e por isso o `gap_pre_teste_ms` tomou o lugar dele ([F4]);
+      * **gap pre-teste** -- o analogo da borda de tras, que cobre a memoria das features
+        (EMA50, Donchian20, o `range(60, ...)` do backtest). Continua valendo, agora aplicado
+        antes de CADA bloco de teste em vez de uma borda so.
+
+    `ultimo` e o fim da linha do tempo: um bloco de teste que termina nele nao tem embargo a
+    aplicar, e estender a faixa alem do fim nao descarta nada -- so confundiria quem lesse.
+    """
+    fora = []
+    for t in trades:
+        ts = t["ts"]
+        tsx = t.get("ts_saida", ts) if tem_saida else ts
+        vetado = False
+        for a, b in blocos_teste:
+            if a <= ts < b:                                  # dentro do teste
+                vetado = True
+                break
+            if purga and tem_saida and ts < a and tsx >= a:  # span cruza a borda de entrada
+                vetado = True
+                break
+            if purga and tem_saida and ts >= b and tsx < b:  # (nao ocorre, mas explicita)
+                vetado = True
+                break
+            if gap_ms and (a - gap_ms) <= ts < a:            # gap pre-teste
+                vetado = True
+                break
+            if embargo_ms and b < ultimo and b <= ts < (b + embargo_ms):   # embargo LdP
+                vetado = True
+                break
+        if not vetado:
+            fora.append(t)
+    return fora
+
+
+def _cortes_cpcv(n_grupos, k):
+    """Os C(n,k) conjuntos de grupos de teste, em ordem lexicografica -- e a ordem importa: e
+    ela que torna a montagem das trajetorias deterministica e reexecutavel."""
+    import itertools
+    return list(itertools.combinations(range(n_grupos), k))
+
+
+def _nucleo_cpcv(por_cfg, *, criterio, block, purga, gap_pre_teste_ms, embargo_frac,
+                 atribuir, periodo, n_boot, seed, n_grupos=CPCV_GRUPOS, k_teste=CPCV_TESTE,
+                 **_ignorados):
+    """Motor do CPCV. Mesma forma de resultado que `_nucleo`, mais a chave `cpcv`.
+
+    A serie de RECORDE (a que o bloco B usa para decidir) e a trajetoria MEDIANA por Sharpe --
+    nao a melhor, e nao uma qualquer. "A melhor" seria escolher no OOS, que e o pecado que esta
+    regua inteira existe para impedir; "a primeira" seria arbitraria e voltaria ao problema do
+    caminho unico com uma etiqueta nova. Com numero PAR de trajetorias fica a MENOR das duas
+    centrais, que e o lado conservador.
+
+    A distribuicao inteira sai em `cpcv`, e e ela que responde a pergunta do card. Um Sharpe
+    mediano bonito com metade das trajetorias negativas e um resultado ruim que a mediana
+    sozinha esconderia.
+    """
+    todos_ts = sorted(t["ts"] for tr in por_cfg.values() for t in tr)
+    if len(todos_ts) < 30:
+        return None
+    t0, t1 = todos_ts[0], todos_ts[-1]
+    if n_grupos < 3 or not (1 <= k_teste < n_grupos):
+        raise ValueError(f"CPCV exige n_grupos >= 3 e 1 <= k_teste < n_grupos, "
+                         f"veio {n_grupos}/{k_teste}")
+    grupos = _grupos_tempo(t0, t1, n_grupos)
+    tem_saida = _tem_ts_saida(por_cfg)
+    embargo_ms = (t1 - t0) * float(embargo_frac or 0.0)
+    cortes = _cortes_cpcv(n_grupos, k_teste)
+
+    # ---- um corte de cada vez: escolhe no treino purgado/embargado, avalia nos k grupos ----
+    por_corte, por_fold = [], []
+    for c, teste_g in enumerate(cortes):
+        blocos = [grupos[g] for g in teste_g]
+        melhor, melhor_v = None, -1e18
+        for cfg, tr in por_cfg.items():
+            treino = _treino_cpcv(tr, blocos, purga, gap_pre_teste_ms, embargo_ms,
+                                  tem_saida, t1)
+            v = _valor_criterio([t["pnl"] for t in treino], criterio)
+            if v > melhor_v:
+                melhor_v, melhor = v, cfg
+        por_grupo = {}
+        for g in teste_g:
+            a, b = grupos[g]
+            fim = b if g < n_grupos - 1 else float("inf")    # o ultimo grupo e fechado
+            por_grupo[g] = [t for t in por_cfg[melhor] if a <= t["ts"] < fim]
+        por_corte.append((teste_g, melhor, por_grupo))
+        n_tr = sum(len(v) for v in por_grupo.values())
+        por_fold.append((c + 1, melhor, n_tr,
+                         round(sum(t["pnl"] for v in por_grupo.values() for t in v), 2)))
+
+    # ---- remontagem das trajetorias: a j-esima aparicao de cada grupo vai para a trajetoria j
+    n_caminhos = len(por_corte) * k_teste // n_grupos
+    caminhos = [[] for _ in range(n_caminhos)]
+    for g in range(n_grupos):
+        j = 0
+        for teste_g, _cfg, por_grupo in por_corte:
+            if g in teste_g:
+                caminhos[j] += por_grupo[g]
+                j += 1
+    for cam in caminhos:
+        cam.sort(key=lambda t: t["ts"])
+
+    todos = [t for tr in por_cfg.values() for t in tr]
+    grade = grade_de_periodos(todos, atribuir, periodo)
+    grade_oos = list(grade)          # toda a janela: no CPCV nao ha segmento so-treino
+    series = [pnl_por_periodo(cam, grade_oos, atribuir) for cam in caminhos]
+    srs = [sharpe_anualizado(x) for x in series]
+    ordem = sorted(range(len(srs)), key=lambda i: (srs[i] is None,
+                                                   -1e18 if srs[i] is None else srs[i], i))
+    rep = ordem[(len(ordem) - 1) // 2]                # mediana; par -> a MENOR das centrais
+    validos = [x for x in srs if x is not None]
+
+    naive_cfg = max(por_cfg, key=lambda k: _valor_criterio([t["pnl"] for t in por_cfg[k]],
+                                                           criterio))
+    matriz_is = {c: pnl_por_periodo(tr, grade, atribuir) for c, tr in por_cfg.items()}
+    return {"oos": caminhos[rep], "por_fold": por_fold, "grade": grade, "grade_oos": grade_oos,
+            "serie_oos": series[rep],
+            "naive_cfg": naive_cfg, "matriz_is": matriz_is, "tem_ts_saida": tem_saida,
+            "cfgs": list(por_cfg.keys()), "block": block, "n_boot": n_boot, "seed": seed,
+            "cpcv": {
+                "n_grupos": n_grupos, "k_teste": k_teste, "n_cortes": len(cortes),
+                "n_caminhos": n_caminhos, "caminho_representativo": rep,
+                "embargo_frac": float(embargo_frac or 0.0),
+                "embargo_dias": round(embargo_ms / DIA_MS, 2),
+                "sharpes": [None if x is None else round(x, 4) for x in srs],
+                "sharpe_mediano": None if not validos else round(float(np.median(validos)), 4),
+                "sharpe_min": None if not validos else round(min(validos), 4),
+                "sharpe_max": None if not validos else round(max(validos), 4),
+                "fracao_caminhos_positivos": (None if not validos else
+                                              round(sum(1 for x in validos if x > 0)
+                                                    / len(validos), 4)),
+                "trades_por_caminho": [len(c) for c in caminhos],
+            }}
+
+
+def _nucleo(por_cfg, *, cv="cpcv", modo="expandindo", embargo_frac=CPCV_EMBARGO_FRAC,
+            **kw):
+    """[N-7] Despachante do esquema de validacao cruzada. NAO e publico de proposito: quem
+    chama de fora e `walk_forward()`, que fixa tudo em `PADRAO` ([F3]). As variantes so chegam
+    aqui por `sensibilidade()`, e o resultado delas nunca vira veredito.
+
+    `cv="cpcv"` desde 2026-08-29 e o que emite veredito; `cv="walk_forward"` continua inteiro
+    porque ele responde a OUTRA pergunta -- a de deployment, "aplicado cego pra frente, ganha
+    dinheiro?" --, e o CPCV nao responde essa (ver a secao [N-7]). Apagar o antigo teria
+    trocado uma pergunta pela outra fingindo que era a mesma.
+    """
+    if cv not in CVS:
+        raise ValueError(f"cv deve ser um de {CVS}, veio {cv!r}")
+    if cv == "cpcv":
+        return _nucleo_cpcv(por_cfg, embargo_frac=embargo_frac, **kw)
+    return _nucleo_wf(por_cfg, modo=modo, **kw)
+
+
+def _nucleo_wf(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste_ms,
+               n_boot, seed, periodo, n_folds=N_FOLDS, **_ignorados):
+    """Motor do walk-forward -- o esquema ANTIGO. Desde o [N-7] ele nao emite mais veredito;
+    roda em `sensibilidade()` como a variante que responde a pergunta de deployment."""
     todos_ts = sorted(t["ts"] for tr in por_cfg.values() for t in tr)
     if len(todos_ts) < 30:
         return None
@@ -1436,6 +1675,9 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
            "por_cfg": por_cfg}
     res.update({k: base[k] for k in ("oos", "por_fold", "serie_oos", "naive_cfg",
                                      "matriz_is", "grade", "grade_oos")})
+    res["cv"] = PADRAO["cv"]
+    if "cpcv" in base:                    # [N-7] a distribuicao de trajetorias
+        res["bloco_b"]["cpcv"] = base["cpcv"]
     res["veredito"] = _veredito(res)
     # [N-9/F10] Uma linha por varredura, no log append-only. E o unico ponto do projeto por
     # onde TODA varredura passa -- registrar aqui e o que torna `n_trials` contavel amanha em
@@ -1556,12 +1798,23 @@ def sensibilidade(res):
     """
     por_cfg = res["por_cfg"]
     n_trials = res["n_trials"]
-    fora = {"criterio": [], "modo": [], "atribuir": [], "block": []}
+    fora = {"cv": [], "criterio": [], "modo": [], "atribuir": [], "block": []}
+    # [N-7] O esquema de CV entra como PRIMEIRA variante, e nao como nota de rodape. O
+    # walk-forward saiu do veredito mas nao do relatorio: ele responde a pergunta de
+    # deployment ("aplicado cego pra frente, ganha dinheiro?"), que o CPCV nao responde porque
+    # em varios cortes o treino esta depois do teste. As duas linhas lado a lado sao a unica
+    # forma de a troca do [N-7] ser auditavel sem que alguem tenha de rodar o commit anterior.
+    for c in CVS:
+        r = _nucleo(por_cfg, **{**PADRAO, "cv": c})
+        fora["cv"].append((c, _resumo_variante(r, n_trials)))
     for c in CRITERIOS:
         r = _nucleo(por_cfg, **{**PADRAO, "criterio": c})
         fora["criterio"].append((c, _resumo_variante(r, n_trials)))
+    # `modo` (expandindo/rolante) so tem efeito no walk-forward -- e por isso ele roda AQUI
+    # sob `cv="walk_forward"` explicito. Deixa-lo rodar sob o CPCV imprimiria duas linhas
+    # identicas com nomes diferentes, que e pior que nao imprimir: parece diagnostico e nao e.
     for m in MODOS:
-        r = _nucleo(por_cfg, **{**PADRAO, "modo": m})
+        r = _nucleo(por_cfg, **{**PADRAO, "cv": "walk_forward", "modo": m})
         fora["modo"].append((m, _resumo_variante(r, n_trials)))
     # `atribuir` so entra aqui depois que o gerador passou a gravar `ts_saida`. Enquanto o
     # campo faltava, "saida" nem era rodavel; agora que e, ele NAO vira default em silencio --
@@ -2176,10 +2429,13 @@ def relatorio(res):
         return
     a, b = res["bloco_a"], res["bloco_b"]
     p = res["padrao"]
-    print(f"\n=== WALK-FORWARD: {res['rotulo']} | {len(res['matriz_is'])} configs "
-          f"x {N_FOLDS} folds ===")
-    print(f"PADRAO (travado): criterio={p['criterio']} modo={p['modo']} "
-          f"atribuir={p['atribuir']} block={p['block']} n_boot={p['n_boot']} seed={p['seed']}")
+    cp = b.get("cpcv")
+    esquema = (f"CPCV {cp['n_grupos']}x{cp['k_teste']} | {cp['n_cortes']} cortes, "
+               f"{cp['n_caminhos']} trajetorias" if cp else f"WALK-FORWARD | {N_FOLDS} folds")
+    print(f"\n=== {esquema}: {res['rotulo']} | {len(res['matriz_is'])} configs ===")
+    print(f"PADRAO (travado): cv={p.get('cv', 'walk_forward')} criterio={p['criterio']} "
+          f"modo={p['modo']} atribuir={p['atribuir']} block={p['block']} "
+          f"n_boot={p['n_boot']} seed={p['seed']}")
     print(f"purga: {'ATIVA' if res['purga_ativa'] else 'INATIVA -- ' + res['purga_motivo']}")
     print(f"n_trials = {res['n_trials']} (PISO CONTADO, nao estimativa)")
     cal = res.get("calibracao")
@@ -2191,13 +2447,20 @@ def relatorio(res):
               f"[{bb['k_lo']} ; {bb['k_hi']}] rejeicoes = [{bb['taxa_lo']} ; {bb['taxa_hi']}] "
               f"| IC da taxa medida: {cal['ic_taxa']}")
 
-    print(f"\n{'fold':>5}  {'config (conv/adx)':>18}  {'trades':>7}  {'pnl OOS':>9}")
+    print(f"\n{'corte' if cp else 'fold':>5}  {'config (conv/adx)':>18}  {'trades':>7}  "
+          f"{'pnl OOS':>9}")
     for f, cfg, n, pn in res["por_fold"]:
         print(f"{f:>5}  {str(cfg):>18}  {n:>7}  R${pn:>+7.0f}")
     so = stats([t["pnl"] for t in res["oos"]])
     print(f"\nOOS agregado: {so['n']} trades | win {so['win']}% | PnL R${so['pnl']:+.0f}")
-    print(f"  serie diaria da JANELA OOS: {b['T']} dias ({b['T_efetivo']} com P&L nao-nulo) "
-          f"-- o 1o dos {N_FOLDS + 1} segmentos e treino puro e nao entra")
+    if cp:
+        print(f"  serie diaria da JANELA OOS: {b['T']} dias ({b['T_efetivo']} com P&L "
+              f"nao-nulo) -- no CPCV a janela INTEIRA e OOS em alguma trajetoria")
+        print(f"  (o `OOS agregado` acima e a trajetoria mediana, nao a soma dos "
+              f"{cp['n_cortes']} cortes: somar contaria cada dia {cp['n_caminhos']} vezes)")
+    else:
+        print(f"  serie diaria da JANELA OOS: {b['T']} dias ({b['T_efetivo']} com P&L "
+              f"nao-nulo) -- o 1o dos {N_FOLDS + 1} segmentos e treino puro e nao entra")
 
     print("\n-- BLOCO A -- in-sample, a familia de configs. Nulo: max_k E[f_k] <= 0.")
     print("   pergunta: 'a melhor do grid bateu a sorte NO DADO QUE A ESCOLHEU?'  papel: DIAGNOSTICO")
@@ -2263,13 +2526,34 @@ def relatorio(res):
     for n, dd in res["sensibilidade_n_trials"]:
         print(f"   {n:>9}  {dd['sr0']:>8}  {dd['dsr']:>7}")
 
-    print("\n-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do walk-forward] <= 0.")
-    print("   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  papel: DECISAO")
+    print(f"\n-- BLOCO B -- out-of-sample, o PROCESSO. Nulo: E[pnl do "
+          f"{'CPCV' if cp else 'walk-forward'}] <= 0.")
+    if cp:
+        print("   pergunta: 'escolher config neste grid GENERALIZA?'  papel: DECISAO")
+    else:
+        print("   pergunta: 'o procedimento, aplicado cego pra frente, ganha dinheiro?'  "
+              "papel: DECISAO")
     print(f"   IC95% da media/dia -- bloco (block={p['block']}): {b['ic_bloco']}   "
           f"iid: {b['ic_iid']}")
     print(f"   PSR (sem deflacao, SR*=0): {b['psr']['psr']}  (sr/dia = {b['psr']['sr']})")
     print(f"   Sharpe ANUALIZADO: {b['sharpe_anualizado']}   IC95% (bloco): "
           f"{b['ic_sharpe_anualizado']}")
+    # [N-7] A distribuicao de trajetorias -- o que o walk-forward nunca teve para mostrar.
+    cp = b.get("cpcv")
+    if cp:
+        print(f"   CPCV: {cp['n_grupos']} grupos, k={cp['k_teste']} -> {cp['n_cortes']} "
+              f"cortes, {cp['n_caminhos']} trajetorias completas")
+        print(f"     purga dos DOIS lados + embargo LdP de {cp['embargo_frac'] * 100:.1f}% do "
+              f"span ({cp['embargo_dias']} dias)")
+        print(f"     Sharpe anualizado por trajetoria: {cp['sharpes']}")
+        print(f"     min {cp['sharpe_min']} | MEDIANA {cp['sharpe_mediano']} | "
+              f"max {cp['sharpe_max']} | positivas: "
+              f"{cp['fracao_caminhos_positivos']}")
+        print(f"     -> o bloco B acima decide sobre a trajetoria MEDIANA "
+              f"(#{cp['caminho_representativo']}), nunca a melhor.")
+        print(f"     -> e o CPCV NAO e simulacao de operacao ao vivo: em varios cortes o")
+        print(f"        treino esta DEPOIS do teste. A pergunta de deployment e a linha")
+        print(f"        `cv=walk_forward` da tabela de sensibilidade. [N-7]")
     # [N-5 / A.1] A linha que separa alfa de beta -- e a advertencia de que o RC acima rodou
     # contra ZERO, que e uma escolha e nao uma neutralidade.
     ex = exposicao_liquida(res["oos"], res.get("grade_oos"))
@@ -2310,8 +2594,8 @@ def relatorio(res):
     print(f"   concentracao [F17]: top-5 dias = {c['top5_dias_sobre_lucro_bruto']} do lucro "
           f"bruto | folds positivos {c['folds_positivos']}/{c['folds']} | "
           f"maior fold = {c['maior_fold_sobre_total']} do total")
-    print(f"     (com 5 folds, 5 positivos de 5 dao p=0,031 e 4/5 dao p=0,19 -- diagnostico, "
-          f"nunca portao)")
+    print(f"     (com {c['folds']} particoes, gatear na mediana seria um teste de ~1 bit -- "
+          f"diagnostico, nunca portao)")
     print(f"   ACF do P&L diario, lags 1..{len(b['acf'])}: {b['acf']}")
     print(f"     banda +-1,96/sqrt(T) = +-{b['banda_acf']} -- fora dela = autocorrelacao real "
           f"[F12]")
@@ -2375,6 +2659,10 @@ def relatorio_sensibilidade(sens):
     for nome, r in sens["modo"]:
         if r:
             print(f"   {nome:>14}  {r['trades']:>7}  {r['pnl']:>+8.0f}  "
+                  f"{str(r['ic_bloco']):>20}  {r['psr']:>6}  {str(r['sharpe_anual']):>10}")
+    for nome, r in sens.get("cv", []):
+        if r:
+            print(f"   {('cv=' + nome):>14}  {r['trades']:>7}  {r['pnl']:>+8.0f}  "
                   f"{str(r['ic_bloco']):>20}  {r['psr']:>6}  {str(r['sharpe_anual']):>10}")
     for nome, r in sens.get("atribuir", []):
         if r:
@@ -2558,7 +2846,16 @@ def rodar_golden(caminho_entrada=None):
         REGISTRAR_TENTATIVAS = antes
 
 
-def _diferencas(esp, atu, caminho="raiz", fora=None, teto=30):
+# [N-7] O teto subiu de 30 para 400, e quem o encosta passa a SER AVISADO. O [N-7] produziu
+# 45 divergencias e o CLI mostrou 30, calado -- as 15 escondidas incluiam `pnl_oos`, `n_oos`,
+# `serie_oos` e o digest do OOS, ou seja, justamente as que dizem se o esquema novo mudou o
+# que devia. Um golden que esconde diferenca convida exatamente ao gesto que ele proibe:
+# regravar sem ler. O teto continua existindo (uma divergencia estrutural pode gerar milhares
+# de linhas e enterrar o terminal), mas agora ele fala.
+TETO_DIFERENCAS = 400
+
+
+def _diferencas(esp, atu, caminho="raiz", fora=None, teto=TETO_DIFERENCAS):
     """Onde o golden e o atual divergem -- caminho a caminho, e nao um "nao bate"."""
     if fora is None:
         fora = []
@@ -2586,11 +2883,19 @@ def _diferencas(esp, atu, caminho="raiz", fora=None, teto=30):
 
 
 def conferir_golden(caminho_entrada=None, caminho_saida=None):
-    """(ok, diferencas). `ok` exige igualdade EXATA -- a reproducao bit-a-bit que o F2 pede."""
+    """(ok, diferencas). `ok` exige igualdade EXATA -- a reproducao bit-a-bit que o F2 pede.
+
+    Quando a lista encosta em `TETO_DIFERENCAS`, a ULTIMA entrada e um aviso explicito de que
+    ela esta incompleta. Sem isso, quem regrava le uma lista que parece inteira e nao e.
+    """
     with open(caminho_saida or GOLDEN_SAIDA, encoding="utf-8") as f:
         esperado = json.load(f)["snapshot"]
     atual = json.loads(_json_canonico(golden_snapshot(rodar_golden(caminho_entrada))))
-    return esperado == atual, _diferencas(esperado, atual)
+    difs = _diferencas(esperado, atual)
+    if len(difs) >= TETO_DIFERENCAS:
+        difs.append(f"[ATENCAO] a lista parou em {TETO_DIFERENCAS} divergencias e esta "
+                    f"INCOMPLETA -- ha mais, e elas nao foram lidas")
+    return esperado == atual, difs
 
 
 def gravar_golden(caminho_entrada=None, caminho_saida=None):

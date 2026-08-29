@@ -374,7 +374,7 @@ def test_veredito_edge_quando_o_drift_e_real_e_ha_poder():
     assert res["veredito"]["classe"] == "EDGE"
 
 
-def test_serie_oos_cobre_so_a_janela_oos_nao_a_timeline_inteira():
+def test_serie_oos_do_WALK_FORWARD_cobre_so_a_janela_oos_nao_a_timeline_inteira():
     """Bug que quase entrou no registro: a serie diaria OOS montada sobre a grade INTEIRA.
 
     O primeiro dos `N_FOLDS+1` segmentos e treino puro -- nunca foi testado, nao ha decisao a
@@ -384,17 +384,49 @@ def test_serie_oos_cobre_so_a_janela_oos_nao_a_timeline_inteira():
 
     O BLOCO A continua na timeline inteira, e isso e correto: cada config foi rodada nela
     inteira, e o nulo do Reality Check e sobre a familia in-sample.
+
+    [N-7] O teste passou a rodar sob `cv="walk_forward"` EXPLICITO. A propriedade que ele
+    guarda e do walk-forward e so dele -- ela nasce de haver um segmento que nunca foi testado.
+    Sob CPCV nao ha esse segmento, e o teste companheiro logo abaixo afirma o oposto, com o
+    porque.
     """
-    res = _res_sintetico(mu=0.0, seed=11, n_dias=1200)
-    grade_toda, grade_oos = res["grade"], res["grade_oos"]
+    por_cfg = {}
+    for k, cfg in enumerate(((50, 22), (55, 22), (65, 25))):
+        rng = np.random.default_rng(1100 + k)
+        por_cfg[cfg] = trades_diarios(rng.normal(0.0, 10.0, 1200).tolist())
+    base = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    grade_toda, grade_oos = base["grade"], base["grade_oos"]
     assert len(grade_oos) < len(grade_toda)
     assert 0.75 < len(grade_oos) / len(grade_toda) < 0.90       # ~5/6 da timeline
-    assert res["bloco_b"]["T"] == len(grade_oos)
-    assert len(res["bloco_a"]["serie_naive"]) == len(grade_toda)
-    # nenhum trade OOS cai fora da janela, e a janela nao comeca com uma sequencia de zeros
-    dias_oos = {t["ts"] // DIA for t in res["oos"]}
+    assert len(base["serie_oos"]) == len(grade_oos)
+    dias_oos = {t["ts"] // DIA for t in base["oos"]}
     assert min(dias_oos) >= grade_oos[0] and max(dias_oos) <= grade_oos[-1]
-    assert res["serie_oos"][0] != 0.0 or res["serie_oos"][1] != 0.0
+    assert base["serie_oos"][0] != 0.0 or base["serie_oos"][1] != 0.0
+
+
+def test_N7_no_CPCV_a_janela_INTEIRA_e_OOS_e_isso_muda_o_T_do_portao_de_poder():
+    """O contrario do teste acima, e a diferenca precisa ficar afirmada em vez de descoberta.
+
+    Sob CPCV todo grupo e teste em algum corte, entao cada trajetoria cobre a janela inteira e
+    `grade_oos == grade`. A consequencia e um T MAIOR, e T maior baixa o MDS -- ou seja, o
+    instrumento passa a parecer com mais poder. Essa e a direcao CONFORTAVEL, e por isso ela
+    tem de estar num teste e no relatorio, nao so no commit.
+
+    Ela e legitima (aquele pedaco de fato foi avaliado fora da amostra que o escolheu) mas vem
+    junto com o preco declarado do CPCV: em varios cortes o treino esta DEPOIS do teste, entao
+    o numero nao e simulacao de operacao ao vivo.
+    """
+    por_cfg = {}
+    for k, cfg in enumerate(((50, 22), (55, 22), (65, 25))):
+        rng = np.random.default_rng(1100 + k)
+        por_cfg[cfg] = trades_diarios(rng.normal(0.0, 10.0, 1200).tolist())
+    cp = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "cpcv"})
+    wf = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    assert cp["grade_oos"] == cp["grade"]
+    assert len(cp["grade_oos"]) > len(wf["grade_oos"])
+    assert V.mds_sharpe(len(cp["grade_oos"])) < V.mds_sharpe(len(wf["grade_oos"]))
+    # o BLOCO A nao muda: ele sempre foi a timeline inteira, nos dois esquemas
+    assert cp["matriz_is"] == wf["matriz_is"]
 
 
 def test_padrao_travado_walk_forward_nao_aceita_criterio():
@@ -1754,6 +1786,196 @@ def test_a_exposicao_liquida_da_rodada_real_ACOMPANHA_o_lado_da_posicao():
     assert V.exposicao_liquida(longo + curto)["motivo"] == ""
 
 
+# ============================ [N-7] CPCV no lugar do walk-forward =======================
+def test_N7_o_PADRAO_roda_CPCV_e_o_walk_forward_continua_existindo():
+    """O default e uma afirmacao sobre o que se mede por omissao, e ele mudou.
+
+    O walk-forward NAO foi apagado -- ele responde a outra pergunta (deployment), e apaga-lo
+    seria trocar uma pergunta pela outra fingindo que sao a mesma. Ele deixa de emitir
+    veredito e passa a rodar em `sensibilidade()`, sempre, lado a lado.
+    """
+    assert V.PADRAO["cv"] == "cpcv"
+    assert V.CVS == ("cpcv", "walk_forward")
+    with pytest.raises(ValueError, match="cv deve ser"):
+        V._nucleo({}, **{**V.PADRAO, "cv": "kfold"})
+
+
+def test_N7_toda_trajetoria_cobre_a_linha_do_tempo_INTEIRA_uma_vez_so():
+    """A propriedade que define o CPCV, e a que um bug de remontagem quebraria em silencio.
+
+    Com N grupos e k=2 saem C(N,2) cortes e C(N-1,1) = N-1 trajetorias, e cada trajetoria tem
+    de conter cada trade OOS exatamente UMA vez. Se a remontagem duplicasse, o P&L da
+    trajetoria inflaria e o T da serie diaria continuaria igual -- ou seja, o Sharpe subiria
+    sem que nada no relatorio denunciasse.
+    """
+    rng = np.random.default_rng(17)
+    por_cfg = {}
+    for k, cfg in enumerate(((50, 22), (55, 22), (65, 25))):
+        por_cfg[cfg] = trades_diarios(rng.normal(0.0, 8.0, 800).tolist(),
+                                      ts_saida=[T0 + (i + 1) * DIA for i in range(800)])
+    base = V._nucleo_cpcv(por_cfg, criterio="sharpe", block=5, purga=True,
+                          gap_pre_teste_ms=0, embargo_frac=0.0, atribuir="entrada",
+                          periodo="D", n_boot=2000, seed=42)
+    cp = base["cpcv"]
+    assert cp["n_cortes"] == math.comb(V.CPCV_GRUPOS, V.CPCV_TESTE)
+    assert cp["n_caminhos"] == math.comb(V.CPCV_GRUPOS - 1, V.CPCV_TESTE - 1)
+    assert len(cp["sharpes"]) == cp["n_caminhos"]
+
+    # remonta as trajetorias e confere: sem duplicata dentro de cada uma, e cobrindo a janela
+    grupos = V._grupos_tempo(min(t["ts"] for tr in por_cfg.values() for t in tr),
+                             max(t["ts"] for tr in por_cfg.values() for t in tr),
+                             V.CPCV_GRUPOS)
+    for n_trades in cp["trades_por_caminho"]:
+        assert n_trades > 0
+    # todo trade de uma trajetoria vem de um grupo distinto, e os 8 grupos aparecem
+    tocados = set()
+    for t in base["oos"]:
+        for g, (a, b) in enumerate(grupos):
+            if a <= t["ts"] < b or (g == len(grupos) - 1 and t["ts"] >= a):
+                tocados.add(g)
+                break
+    assert tocados == set(range(V.CPCV_GRUPOS))
+    assert len({id(t) for t in base["oos"]}) == len(base["oos"])
+
+
+def test_N7_a_serie_de_recorde_e_a_trajetoria_MEDIANA_e_nunca_a_melhor():
+    """Escolher a melhor trajetoria seria escolher no OOS -- o pecado que esta regua inteira
+    existe para impedir, cometido pela porta que o proprio conserto abriu. Com numero PAR de
+    trajetorias fica a MENOR das duas centrais, que e o lado conservador."""
+    rng = np.random.default_rng(23)
+    por_cfg = {cfg: trades_diarios(rng.normal(0.0, 8.0, 800).tolist(),
+                                   ts_saida=[T0 + (i + 1) * DIA for i in range(800)])
+               for cfg in ((50, 22), (55, 22), (65, 25))}
+    base = V._nucleo_cpcv(por_cfg, criterio="sharpe", block=5, purga=True,
+                          gap_pre_teste_ms=0, embargo_frac=0.0, atribuir="entrada",
+                          periodo="D", n_boot=2000, seed=42)
+    cp = base["cpcv"]
+    srs = [x for x in cp["sharpes"] if x is not None]
+    rep = cp["sharpes"][cp["caminho_representativo"]]
+    assert rep == pytest.approx(float(np.median(srs)), abs=1e-9)
+    # "nunca a melhor" dito de forma que sobrevive a EMPATE: com trajetorias empatadas no topo
+    # a mediana pode COINCIDIR com o maximo valor, e ainda assim nao ser uma escolha pelo
+    # maximo. O que se afirma e a posicao: no maximo metade das trajetorias esta acima dela.
+    assert sum(1 for x in srs if x > rep) <= len(srs) // 2
+    assert V.sharpe_anualizado(base["serie_oos"]) == pytest.approx(rep, abs=1e-4)
+
+
+def test_N7_o_EMBARGO_de_LdP_volta_a_existir_e_de_fato_descarta_treino_DEPOIS_do_teste():
+    """O achado do card, e ele corrige o `F4` sem contradize-lo.
+
+    O `F4` da `REVISAO-ITEM1.md` estava certo: num walk-forward ESTRITAMENTE SEQUENCIAL nao ha
+    treino apos o teste, logo o embargo de Lopez de Prado nao tinha o que embargar, e o
+    parametro virou `gap_pre_teste_ms` (default 0). **Sob CPCV a premissa cai**: em quase todo
+    corte existe treino depois do teste. Entao o embargo volta -- e trazer o CPCV sem ele seria
+    importar a metade que da numero e deixar a metade que protege.
+
+    A prova e direta: um trade que comeca logo DEPOIS do fim do bloco de teste entra no treino
+    com embargo 0 e sai dele com embargo > 0.
+    """
+    bloco = [(1000.0, 2000.0)]
+    tr = [{"ts": 500, "ts_saida": 600},       # antes do teste, fecha antes -> fica
+          {"ts": 900, "ts_saida": 1500},      # span CRUZA a borda -> purga tira
+          {"ts": 1500, "ts_saida": 1600},     # dentro do teste -> nunca e treino
+          {"ts": 2050, "ts_saida": 2100},     # DEPOIS do teste -> so o embargo tira
+          {"ts": 2500, "ts_saida": 2600}]     # bem depois -> fica
+    sem = V._treino_cpcv(tr, bloco, purga=True, gap_ms=0, embargo_ms=0,
+                         tem_saida=True, ultimo=9000)
+    assert [t["ts"] for t in sem] == [500, 2050, 2500]
+
+    com = V._treino_cpcv(tr, bloco, purga=True, gap_ms=0, embargo_ms=100,
+                         tem_saida=True, ultimo=9000)
+    assert [t["ts"] for t in com] == [500, 2500]       # o de 2050 caiu no embargo
+
+    # e o gap PRE-teste continua valendo, agora antes de CADA bloco (a outra borda)
+    gap = V._treino_cpcv(tr, bloco, purga=True, gap_ms=600, embargo_ms=0,
+                         tem_saida=True, ultimo=9000)
+    assert [t["ts"] for t in gap] == [2050, 2500]      # o de 500 caiu no gap [400, 1000)
+
+
+def test_N7_a_purga_no_CPCV_e_BILATERAL_e_nao_afrouxa_a_do_walk_forward():
+    """No walk-forward a purga era unilateral (`ts_saida < tr_lim`) porque so havia uma borda.
+    No CPCV cada bloco de teste tem duas, e um trade cujo label ATRAVESSA qualquer uma delas
+    sai do treino. CPCV precisa de MAIS purga, nao de menos -- afrouxar aqui deixaria vazar
+    exatamente pelo lado que o esquema novo criou."""
+    bloco = [(1000.0, 2000.0)]
+    tr = [{"ts": 900, "ts_saida": 1001}]              # entra antes, sai DENTRO do teste
+    assert V._treino_cpcv(tr, bloco, purga=True, gap_ms=0, embargo_ms=0,
+                          tem_saida=True, ultimo=9000) == []
+    # sem `ts_saida` a purga nao tem como agir -- e ela NAO finge que agiu
+    tr2 = [{"ts": 900}]
+    assert len(V._treino_cpcv(tr2, bloco, purga=True, gap_ms=0, embargo_ms=0,
+                              tem_saida=False, ultimo=9000)) == 1
+
+
+def test_N7_o_ultimo_bloco_de_teste_nao_inventa_embargo_fora_da_janela():
+    """Embargo depois do fim da linha do tempo nao descarta nada -- so confundiria quem lesse
+    o codigo achando que ha treino ali. A guarda e `b < ultimo`."""
+    tr = [{"ts": 8500, "ts_saida": 8600}]
+    # bloco terminando NO fim da janela: nao ha treino posterior, entao o trade fica
+    assert len(V._treino_cpcv(tr, [(1000.0, 9000.0)], purga=True, gap_ms=0, embargo_ms=1000,
+                              tem_saida=True, ultimo=9000)) == 0   # (esta DENTRO do teste)
+    tr2 = [{"ts": 9500, "ts_saida": 9600}]
+    assert len(V._treino_cpcv(tr2, [(1000.0, 9000.0)], purga=True, gap_ms=0, embargo_ms=1000,
+                              tem_saida=True, ultimo=9000)) == 1
+
+
+def test_N7_os_grupos_cobrem_a_janela_sem_buraco_e_sem_sobreposicao():
+    """Grupo com buraco perderia trades sem avisar; grupo sobreposto poria o mesmo trade em
+    dois blocos de teste e a trajetoria remontada teria duplicata."""
+    g = V._grupos_tempo(1000, 9000, 8)
+    assert len(g) == 8
+    assert g[0][0] == 1000 and g[-1][1] == 9000
+    assert all(g[i][1] == g[i + 1][0] for i in range(7))
+
+
+def test_N7_o_CPCV_recusa_particao_impossivel_em_vez_de_calar():
+    with pytest.raises(ValueError, match="n_grupos >= 3"):
+        V._nucleo_cpcv({("a", 0): trades_diarios([1.0] * 100)}, criterio="sharpe", block=5,
+                       purga=False, gap_pre_teste_ms=0, embargo_frac=0.0, atribuir="entrada",
+                       periodo="D", n_boot=100, seed=1, n_grupos=2, k_teste=1)
+
+
+def test_N7_o_walk_forward_continua_dando_EXATAMENTE_o_numero_de_antes():
+    """A troca do [N-7] muda o numero por CONSTRUCAO -- e por isso ela so e auditavel se o
+    esquema antigo continuar reproduzindo o que reproduzia. Este teste e o que separa "o CPCV
+    mediu diferente" de "alguem quebrou o motor no caminho".
+
+    O painel e o do golden, e o numero e o que o golden congelava ANTES do [N-7]:
+    Sharpe anualizado -1,14 e IC-bloco (-1,2478 ; 0,0928) na trajetoria unica do walk-forward.
+    """
+    por_cfg, meta = V.carregar_golden_entrada()
+    base = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    assert V.sharpe_anualizado(base["serie_oos"]) == pytest.approx(-1.14, abs=0.005)
+    ic = V.bootstrap_ci(base["serie_oos"], n_boot=2000, modo="bloco", eh_serie_temporal=True,
+                        block=5, seed=42)
+    assert ic == (-1.2478, 0.0928)
+    assert len(base["por_fold"]) == V.N_FOLDS
+
+
+def test_N7_a_sensibilidade_imprime_os_DOIS_esquemas_lado_a_lado(capsys):
+    """O CPCV nao responde a pergunta de deployment: em varios cortes o treino esta DEPOIS do
+    teste, e isso e da definicao dele, nao defeito. Entao a linha `cv=walk_forward` tem de
+    continuar saindo -- e imprimir as duas e a unica forma de a troca ser auditavel sem
+    alguem ter de rodar o commit anterior."""
+    res = _res_sintetico(mu=0.0, seed=3, n_dias=600)
+    V.relatorio_sensibilidade(V.sensibilidade(res))
+    saida = capsys.readouterr().out
+    assert "cv=cpcv" in saida and "cv=walk_forward" in saida
+
+
+def test_N7_o_relatorio_declara_que_o_CPCV_nao_e_simulacao_de_operacao(capsys):
+    """A frase que impede a leitura errada mais cara possivel: ler um Sharpe de CPCV como "o
+    que eu teria ganhado". Ele nao e isso, e o relatorio tem de dizer no lugar onde o numero
+    aparece -- nao so no commit, que ninguem le junto com a saida."""
+    res = _res_sintetico(mu=0.0, seed=4, n_dias=800)
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "CPCV" in saida
+    assert "NAO e simulacao de operacao ao vivo" in saida
+    assert "trajetoria MEDIANA" in saida
+    assert "embargo LdP" in saida
+
+
 # ============================ [N-8] PBO por CSCV e n_trials efetivo =====================
 #
 # O padrao de prova e o que o [N-5] usou e funcionou: um caso construido onde a resposta e
@@ -2117,6 +2339,33 @@ def test_a_varredura_que_FALHOU_tambem_entra_no_log(tmp_path, monkeypatch):
     regs, _ = V.ler_tentativas(alvo)
     assert len(regs) == 1 and regs[0]["resultado"]["veredito"] == "INCONCLUSIVO"
     assert "erro" in regs[0]["resultado"]
+
+
+def test_a_lista_de_divergencias_AVISA_quando_esta_incompleta(tmp_path, monkeypatch):
+    """Defeito do `[N-6]` achado ao rodar o `[N-7]`, e ele e do tipo mais caro: o silencioso.
+
+    `_diferencas` parava em 30 e o CLI imprimia as 30 sem dizer que havia mais. A troca do
+    walk-forward pelo CPCV produziu 45, e as 15 escondidas eram `pnl_oos`, `n_oos`,
+    `serie_oos`, `por_fold` e o digest do OOS -- exatamente as que dizem se o esquema novo
+    mudou o que devia mudar. Uma lista que parece inteira e nao e faz de "eu li a divergencia"
+    uma frase falsa dita de boa-fe, que e como o golden vira decorativo sem ninguem mentir.
+
+    O teto continua existindo (divergencia estrutural gera milhares de linhas e enterra o
+    terminal); o que mudou e que agora ele FALA.
+    """
+    monkeypatch.setattr(V, "TETO_DIFERENCAS", 3)
+    esp = {f"k{i}": i for i in range(10)}
+    atu = {f"k{i}": i + 1 for i in range(10)}
+    difs = V._diferencas(esp, atu, teto=V.TETO_DIFERENCAS)
+    assert len(difs) == 3                              # o teto continua valendo
+
+    saida = tmp_path / "s.json"
+    saida.write_text(json.dumps({"snapshot": esp}), encoding="utf-8")
+    monkeypatch.setattr(V, "golden_snapshot", lambda _res: atu)
+    monkeypatch.setattr(V, "rodar_golden", lambda _c=None: None)
+    ok, difs = V.conferir_golden(caminho_saida=str(saida))
+    assert not ok
+    assert "INCOMPLETA" in difs[-1]                    # ...e agora ele avisa
 
 
 def test_o_golden_NAO_conta_como_tentativa(tmp_path, monkeypatch):
