@@ -328,3 +328,154 @@ def test_as_metricas_leem_o_trade_com_gap_sem_quebrar(banco, sem_rede):
     assert m["win_rate"] == 0
     assert m["pnl_total"] == pytest.approx(round(100 * 10 * (98.0 / 102.0 - 1) - 1.0, 2))
     assert m["expectancia_r"] != 0                           # risco_inicial gravado -> R vivo
+
+
+# ----------------------------------------------------------- [F-12] o banco fora do laco
+
+def _contar_conectar(monkeypatch):
+    """Conta quantas vezes `db.conectar()` e chamado. O contador embrulha o
+    contextmanager original -- nao o substitui -- entao o que roda por baixo continua sendo
+    o caminho de producao inteiro (WAL, busy_timeout, commit)."""
+    n = {"v": 0}
+    original = db.conectar
+
+    def contado(*a, **k):
+        n["v"] += 1
+        return original(*a, **k)
+
+    monkeypatch.setattr(db, "conectar", contado)
+    return n
+
+
+def test_pnl_aceita_a_config_ja_lida_e_nao_reabre_o_banco(banco, monkeypatch):
+    """[F-12] Com `cfg` na mao, `_pnl` nao toca no banco. Sem ele, toca -- e as duas
+    chamadas tem de devolver o MESMO numero, senao o barateamento mudou a aritmetica."""
+    cfg = db.get_config()
+    n = _contar_conectar(monkeypatch)
+    com_cfg = simulador._pnl(pos(), 101.0, cfg)
+    assert n["v"] == 0
+    sem_cfg = simulador._pnl(pos(), 101.0)
+    assert n["v"] == 1
+    assert com_cfg == sem_cfg
+
+
+def test_marcacao_de_n_posicoes_nao_multiplica_leitura_de_config(banco, sem_rede):
+    """[F-12] A prova que da o numero: N posicoes abertas, um ciclo de marcacao, e a
+    contagem de `db.conectar()` cresce como N (persistir a marcacao de cada uma) e nao como
+    2N (persistir + reler a config para saber a taxa).
+
+    Medido na base fb23aeb, com `trailing_ativo=0` e sem nenhuma posicao batendo stop:
+    5 posicoes = 12 aberturas de banco. Depois: 7. As 5 que sairam eram `db.get_config()`
+    dentro do `_pnl`, uma por posicao, para ler `taxa_por_lado`.
+    """
+    import pytest as _pytest
+    db.set_config("trailing_ativo", "0")
+    ativos = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
+    for a in ativos:
+        semear_posicao(ativo=a, direcao="LONG", entrada=100.0, valor_reais=10.0,
+                       alavancagem=2, stop=90.0)
+    sem_rede(100.0)                                  # nenhuma fecha: preco == entrada
+
+    mp = _pytest.MonkeyPatch()
+    try:
+        n = _contar_conectar(mp)
+        simulador.atualizar()
+    finally:
+        mp.undo()
+
+    # 1 (`db.get_config()` do ciclo) + 1 (SELECT das abertas) + 5 (persistir cada marcacao)
+    assert n["v"] == 2 + len(ativos)
+    assert simulador.ultima_marcacao["ok"] == len(ativos)
+    assert simulador.ultima_marcacao["falhas"] == 0
+
+
+def test_marcar_uma_sem_cfg_continua_valendo(banco, sem_rede):
+    """`cfg=None` e o caminho de quem chama de fora do ciclo (API, panico, auto-trader):
+    ali a config de AGORA e a certa, e ela e relida. O default existe para isso, e some se
+    alguem tornar o parametro obrigatorio."""
+    pid = semear_posicao(direcao="LONG", entrada=100.0, valor_reais=10.0, alavancagem=2,
+                         stop=90.0)
+    sem_rede(101.0)
+    with db.conectar() as c:
+        pos_row = dict(c.execute("SELECT * FROM posicoes WHERE id=?", (pid,)).fetchone())
+    eventos = []
+    simulador._marcar_uma(pos_row, {"on": False}, eventos)
+    assert eventos == []
+    with db.conectar() as c:
+        marcada = c.execute("SELECT preco_atual,pnl FROM posicoes WHERE id=?", (pid,)).fetchone()
+    assert marcada["preco_atual"] == pytest.approx(101.0)
+    assert marcada["pnl"] == pytest.approx(simulador._pnl(pos_row, 101.0)[0])
+
+
+# ============================== [F-12] a config do laco de marcacao, lida uma vez so
+
+def _contar_get_config(monkeypatch):
+    """Envelopa `db.get_config` contando as chamadas, sem mudar o que ela devolve."""
+    n = {"v": 0}
+    real = db.get_config
+
+    def contando():
+        n["v"] += 1
+        return real()
+
+    monkeypatch.setattr(db, "get_config", contando)
+    return n
+
+
+def test_f12_pnl_com_cfg_dado_nao_abre_o_banco(banco, monkeypatch):
+    """[F-12] O parametro existe para uma coisa so: nao reabrir o banco. Se `_pnl` ainda
+    chamar `get_config()` tendo recebido a config, o teste falha em vez de so ficar lento --
+    o custo do defeito e invisivel no resultado, entao a prova tem de ser sobre a CHAMADA."""
+    monkeypatch.setattr(db, "get_config",
+                        lambda: pytest.fail("_pnl abriu o banco mesmo com cfg no parametro"))
+    pnl, taxa, move = simulador._pnl(pos(), 101.0, {"taxa_por_lado": "0.0005"})
+    assert (move, taxa, pnl) == (pytest.approx(0.01), pytest.approx(1.0), pytest.approx(9.0))
+
+
+def test_f12_pnl_sem_cfg_continua_lendo_a_config_de_agora(banco, monkeypatch):
+    """A outra metade, e ela e deliberada: `fechar()` e chamado de FORA do ciclo (API,
+    panico, auto-trader) e ali a taxa vigente e a certa. Um default que nao lesse o banco
+    congelaria a config no valor do ultimo ciclo do worker."""
+    n = _contar_get_config(monkeypatch)
+    db.set_config("taxa_por_lado", "0.001")
+    _, taxa, _ = simulador._pnl(pos(), 101.0)
+    assert n["v"] == 1
+    assert taxa == pytest.approx(2.0)            # 2 x 0,1% x R$1.000 de nocional
+
+
+def test_f12_a_marcacao_le_a_config_uma_vez_por_CICLO_e_nao_por_posicao(banco, sem_rede,
+                                                                        monkeypatch):
+    """[F-12] Era uma conexao SQLite nova + PRAGMA + SELECT da tabela inteira + commit POR
+    POSICAO, a cada 15 s, para ler um numero que nao muda dentro do ciclo.
+
+    A asseracao e `== 1` e nao `<= n`: o ponto do card e que o custo pare de crescer com o
+    numero de posicoes, e um teto frouxo deixaria a leitura por posicao voltar de mansinho
+    numa carteira pequena."""
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=50.0, alavancagem=2)
+    n = _contar_get_config(monkeypatch)
+    simulador.atualizar()
+    assert simulador.ultima_marcacao["ok"] == 5      # as cinco foram marcadas de fato
+    assert n["v"] == 1
+
+
+def test_f12_a_config_do_ciclo_e_a_MESMA_para_todas_as_posicoes(banco, sem_rede, monkeypatch):
+    """Efeito colateral que vale como garantia, e e o mesmo argumento do `_trailing_cfg`:
+    com a leitura por posicao, um `POST /config` no meio do laco marcava metade da carteira
+    com a taxa velha e metade com a nova. Aqui a config muda DEPOIS da primeira posicao e
+    nenhuma das cinco enxerga a mudanca."""
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=100.0, alavancagem=10, preco_atual=100.0)
+    real = simulador._marcar_uma
+    vistos = []
+
+    def espiando(pos, trail, eventos, cfg=None):
+        vistos.append((cfg or {}).get("taxa_por_lado"))
+        db.set_config("taxa_por_lado", "0.009")      # alguem mexe no painel no meio do laco
+        return real(pos, trail, eventos, cfg)
+
+    monkeypatch.setattr(simulador, "_marcar_uma", espiando)
+    simulador.atualizar()
+    assert vistos == ["0.0005"] * 5

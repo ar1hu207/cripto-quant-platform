@@ -109,7 +109,20 @@ def _liq_antes_do_stop(entrada, stop, alavancagem, d):
     return dist_stop / entrada, dist_liq / entrada
 
 
-def _pnl(pos, preco_saida):
+def _pnl(pos, preco_saida, cfg=None):
+    """[F-12] `cfg` entra por parâmetro para que o LAÇO de marcação não reabra o banco.
+
+    `db.get_config()` é uma conexão SQLite nova, um `PRAGMA journal_mode=WAL`, um SELECT da
+    tabela inteira e um commit — por posição, a cada 15 s, para ler UM número (`taxa_por_lado`)
+    que não muda dentro do ciclo. `atualizar()` já lê a config uma vez, pelo mesmo motivo que o
+    `_trailing_cfg` existe: todas as posições de um ciclo marcadas sob a MESMA política.
+
+    `None` continua abrindo o banco, e isso não é preguiça: `fechar()` é chamado de fora do
+    ciclo (API, pânico, auto-trader) e ali a config de agora é a certa. A versão-sintoma seria
+    memoizar `get_config()` num cache global de N segundos — barateava o mesmo laço e de quebra
+    deixava o `POST /config` demorar para valer em TODO o resto do sistema, que é afrouxar uma
+    garantia de config para pagar um problema de laço.
+    """
     if not pos["entrada"] or not pos["alavancagem"]:            # guard divisão por zero
         return 0.0, 0.0, 0.0
     d = 1 if pos["direcao"] == "LONG" else -1
@@ -121,7 +134,7 @@ def _pnl(pos, preco_saida):
     # gravado NA POSICAO (`taxa_entrada`), nao na config: as duas convivem enquanto posicoes
     # abertas a mercado ainda estao vivas, e cobrar a taxa de hoje sobre a entrada de ontem
     # inventaria lucro que nao houve. NULL = entrou a mercado.
-    t_saida = _cfg_float(db.get_config(), "taxa_por_lado", 0.0005)
+    t_saida = _cfg_float(db.get_config() if cfg is None else cfg, "taxa_por_lado", 0.0005)
     try:
         t_entrada = pos["taxa_entrada"]
     except (KeyError, IndexError):
@@ -552,7 +565,7 @@ def atualizar():
         # try POR POSIÇÃO, não em volta do for: uma moeda que falha não pode tirar as OUTRAS
         # posições da vigilância de stop/trailing/liquidação, nem derrubar o resto do ciclo.
         try:
-            _marcar_uma(pos, trail, eventos)
+            _marcar_uma(pos, trail, eventos, cfg)
             ultima_marcacao["ok"] += 1
         except Exception as e:
             ultima_marcacao["falhas"] += 1
@@ -631,9 +644,12 @@ def _trailing_novo_stop(pos, preco, d, trail):
     return None
 
 
-def _marcar_uma(pos, trail, eventos):
+def _marcar_uma(pos, trail, eventos, cfg=None):
     """Marca UMA posição no preço ao vivo. Extraído do for de atualizar() para que o
-    try/except tenha a granularidade de uma posição — os `continue` viram `return`."""
+    try/except tenha a granularidade de uma posição — os `continue` viram `return`.
+
+    [F-12] `cfg` desce de `atualizar()` já lido, e segue para o `_pnl` — mesma razão do
+    `trail`: leitura de banco a menos, e a mesma política para todas as posições do ciclo."""
     preco = preco_ao_vivo(pos["ativo"])
     d = 1 if pos["direcao"] == "LONG" else -1
     # trailing: só sobe o stop (LONG) / só desce (SHORT). O `novo` só é aceito se andar a favor —
@@ -652,7 +668,7 @@ def _marcar_uma(pos, trail, eventos):
         fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
     if hit_stop:
         return _fecha_stop(pos, eventos, preco, liq)
-    pnl, _, _ = _pnl(pos, preco)
+    pnl, _, _ = _pnl(pos, preco, cfg)
     with db.conectar() as con:                              # persiste o stop trailado (sobe entre ciclos)
         con.execute("UPDATE posicoes SET preco_atual=?, pnl=?, stop=? WHERE id=? AND status='aberta'",
                     (preco, pnl, pos["stop"], pos["id"]))
