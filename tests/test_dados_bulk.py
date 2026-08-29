@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Testes de PARSING e NORMALIZACAO do `pesquisa/dados_bulk.py`. [N-1] [N-2]
+"""Testes de PARSING e NORMALIZACAO do `pesquisa/dados_bulk.py`. [N-1] [N-2] [N-3]
 
 **Nenhum teste daqui toca a rede, e isso e requisito, nao preferencia.** A suite inteira
 roda antes de todo merge (`CLAUDE.md` §0); teste que baixa arquivo transforma queda de
@@ -374,3 +374,40 @@ def test_meses_de_klines_concatenados_saem_ordenados_e_sem_repeticao(monkeypatch
     assert db.estritamente_crescente(df["datetime"])
     assert len(df) == 2
     assert df.attrs["ausentes"] == []
+
+
+# ------------------------------------------------------------------ [N-3] par que morreu
+
+def test_par_deslistado_para_de_ter_arquivo_e_isso_e_o_DADO(monkeypatch):
+    """[N-3]. Par deslistado simplesmente PARA de ter mes no bucket. Se `baixar_klines`
+    levantasse no primeiro 404, o vies de sobrevivencia ficaria impossivel de medir
+    justamente pelo modulo que existe para mata-lo."""
+    def falso(chave, usar_cache=True, verificar_hash=True):
+        if "2022-05" in chave:
+            return _zipar("k.csv", KLINES_SEM_HEADER)
+        return None                                    # 404: o par ja tinha morrido
+    monkeypatch.setattr(db, "baixar_zip", falso)
+
+    df = db.baixar_klines("LUNAUSDT", "1h", "2022-05", "2022-07")
+    assert len(df) == 2
+    assert df.attrs["ausentes"] == ["2022-06", "2022-07"]
+
+
+def test_listar_periodos_le_a_listagem_e_devolve_os_meses_ordenados(monkeypatch):
+    """O ultimo mes devolvido aqui e a data de MORTE do par -- e o que torna o vies
+    visivel sem pedir mes a mes e contar 404."""
+    xml = (b"<ListBucketResult>"
+           b"<Contents><Key>data/futures/um/monthly/klines/LUNAUSDT/1h/"
+           b"LUNAUSDT-1h-2022-05.zip</Key></Contents>"
+           b"<Contents><Key>data/futures/um/monthly/klines/LUNAUSDT/1h/"
+           b"LUNAUSDT-1h-2021-01.zip</Key></Contents>"
+           b"<Contents><Key>data/futures/um/monthly/klines/LUNAUSDT/1h/"
+           b"LUNAUSDT-1h-2022-05.zip.CHECKSUM</Key></Contents>"
+           b"</ListBucketResult>")
+    monkeypatch.setattr(db, "_http", lambda *a, **k: xml)
+    assert db.listar_periodos("LUNAUSDT", "1h", "futures_um") == ["2021-01", "2022-05"]
+
+
+def test_listar_periodos_de_par_que_nunca_existiu_e_lista_vazia(monkeypatch):
+    monkeypatch.setattr(db, "_http", lambda *a, **k: b"<ListBucketResult></ListBucketResult>")
+    assert db.listar_periodos("NAOEXISTEUSDT", "1h", "futures_um") == []

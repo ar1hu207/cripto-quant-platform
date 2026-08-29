@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Baixador dos dumps publicos do `data.binance.vision` -- [N-1], [N-2].
+Baixador dos dumps publicos do `data.binance.vision` -- [N-1], [N-2], [N-3].
 
 Rodar (da RAIZ do repo):  python -m pesquisa.dados_bulk
 
@@ -17,6 +17,8 @@ O que ele destrava:
   granularidade de 5 min desde 2020-09-01.
 * **[N-2]** `taker_buy_volume` ja vem dentro dos klines. Permite backtestar o portao de
   fluxo do bot em ANOS, contra os 10 dias que produziram o p=0,58.
+* **[N-3]** pares deslistados continuam no bucket. Baixa-los e o que mata o vies de
+  sobrevivencia que o `PLANO-REPOS-QUANT.md` §5.4 registrou em julho e ninguem corrigiu.
 
 --------------------------------------------------------------------------------------
 AS QUATRO ARMADILHAS DESTE BUCKET -- todas MEDIDAS, nenhuma suposta
@@ -61,8 +63,10 @@ DECISOES QUE NAO SE DEDUZEM DO CODIGO
   o cache de graca e baixaria de novo o mesmo byte.
 
 * **`baixar_*` NAO explode quando falta periodo** -- devolve o que existe e lista o que
-  faltou em `df.attrs["ausentes"]`. Buraco no historico e um fato do bucket, e quem
-  precisa de serie fechada passa `exigir_completo=True`.
+  faltou em `df.attrs["ausentes"]`. Nao e leniencia: para o [N-3] o par deslistado
+  PARAR de ter arquivo e o dado, nao o erro. `LUNAUSDT` em `futures/um` termina em 2022-05,
+  e e disso que o vies de sobrevivencia e feito. Quem precisa de serie fechada passa
+  `exigir_completo=True`.
 
 * **Este modulo constroi o baixador; ele nao baixa o acervo.** Tudo e parametrizado por
   simbolo/mercado/intervalo/periodo, e a prova do `__main__` roda num recorte pequeno
@@ -72,14 +76,20 @@ DECISOES QUE NAO SE DEDUZEM DO CODIGO
 import hashlib
 import io
 import os
+import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
 import pandas as pd
 
 BASE = "https://data.binance.vision"
+
+# Listagem do bucket (S3 puro). Serve para descobrir o que existe sem contar 404 -- e o
+# que o [N-3] precisa para achar a data de morte de um par.
+LISTAGEM = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "bulk")
 
@@ -376,11 +386,11 @@ def _juntar(partes, ausentes, coluna="datetime"):
 
 def baixar_klines(simbolo="BTCUSDT", intervalo="1h", inicio="2024-01", fim="2024-02",
                   mercado="futures_um", usar_cache=True, exigir_completo=False):
-    """[N-2] Klines mensais concatenados, normalizados e ordenados.
+    """[N-2][N-3] Klines mensais concatenados, normalizados e ordenados.
 
     Traz `taker_buy_volume` de graca -- e o [N-2]: o portao de fluxo do bot passa a ser
-    backtestavel em anos, contra os 10 dias que produziram o p=0,58. Mes ausente nao
-    interrompe: vai para `df.attrs["ausentes"]`.
+    backtestavel em anos. Mes ausente nao interrompe: vai para `df.attrs["ausentes"]`,
+    porque par deslistado simplesmente PARA de ter arquivo ([N-3]).
     """
     partes, ausentes = [], []
     for periodo in meses(inicio, fim):
@@ -413,11 +423,26 @@ def baixar_metrics(simbolo="BTCUSDT", inicio="2024-01-15", fim="2024-01-16",
     return _juntar(partes, ausentes)
 
 
+def listar_periodos(simbolo="LUNAUSDT", intervalo="1h", mercado="futures_um"):
+    """[N-3] Meses que o bucket TEM para um par -- inclusive par que ja morreu.
+
+    E a consulta que torna o vies de sobrevivencia visivel: o ultimo mes devolvido aqui e
+    a data de morte do par. Sem isso a unica forma de saber e pedir mes a mes e contar 404.
+    """
+    prefixo = f"data/{_mercado(mercado)}/monthly/klines/{simbolo}/{intervalo}/"
+    url = f"{LISTAGEM}?prefix={urllib.parse.quote(prefixo)}&max-keys=1000"
+    xml = _http(url)
+    if not xml:
+        return []
+    chaves = re.findall(r"<Key>([^<]+)</Key>", xml.decode())
+    marca = f"-{intervalo}-"
+    return sorted({k.rsplit(marca, 1)[-1][:-4] for k in chaves if k.endswith(".zip")})
+
 
 # ------------------------------------------------------------------ prova de rede
 
 if __name__ == "__main__":
-    print("PROVA DE REDE -- pesquisa/dados_bulk.py  ([N-1] [N-2])")
+    print("PROVA DE REDE -- pesquisa/dados_bulk.py  ([N-1] [N-2] [N-3])")
     print("Recorte pequeno de proposito: o modulo e o baixador, nao o acervo.\n")
 
     # ---- [N-1] metrics: as colunas prometidas existem -------------------------------
@@ -489,6 +514,26 @@ if __name__ == "__main__":
           f"-> {s2['datetime'].iloc[0]}")
     print(f"      com unit='ms' fixo, 2025-01 daria: "
           f"{pd.to_datetime(int(s2['open_time'].iloc[0]), unit='ms')}")
+
+    # ---- [N-3] par deslistado -------------------------------------------------------
+    print("\n[N-3] par DESLISTADO ainda baixa -- e a morte dele fica visivel")
+    disponiveis = listar_periodos("LUNAUSDT", "1h", "futures_um")
+    assert disponiveis, "LUNAUSDT nao tem nenhum mes em futures/um"
+    ultimo = disponiveis[-1]
+    luna = baixar_klines("LUNAUSDT", "1h", ultimo, ultimo, mercado="futures_um")
+    assert len(luna) > 0, "o ultimo mes de LUNAUSDT veio vazio"
+    assert "taker_buy_volume" in luna.columns
+    depois_da_morte = baixar_klines("LUNAUSDT", "1h", "2026-01", "2026-01",
+                                    mercado="futures_um")
+    assert depois_da_morte.attrs["ausentes"] == ["2026-01"], \
+        "2026-01 deveria estar ausente para um par que morreu em 2022"
+    assert len(depois_da_morte) == 0
+    print(f"      LUNAUSDT futures/um: {len(disponiveis)} meses, "
+          f"{disponiveis[0]} -> {ultimo}")
+    print(f"      ultimo mes ({ultimo}): {len(luna)} barras | "
+          f"{luna['datetime'].iloc[0]} -> {luna['datetime'].iloc[-1]}")
+    print(f"      2026-01 ausente={depois_da_morte.attrs['ausentes']}  "
+          f"<- o par morreu; BTCUSDT nao morreu, e e so ele que a pesquisa backtesta hoje")
 
     print("\nTODAS AS AFIRMACOES PASSARAM.")
     print(f"cache em: {CACHE_DIR}")
