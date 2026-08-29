@@ -325,16 +325,28 @@ def bootstrap_ci(serie, n_boot=2000, modo="iid", eh_serie_temporal=False,
     return (round(float(lo), 4), round(float(hi), 4))
 
 
-def _boot_medias(matriz, n_boot, block, seed):
+def _boot_medias(matriz, n_boot, block, seed, benchmark=None):
     """Reamostragem compartilhada: um unico conjunto de indices por replica, aplicado a
     TODAS as configs. E o ponto critico do Reality Check -- indices por config destruiriam a
     correlacao cruzada entre elas e o quantil nulo sairia errado.
+
+    `benchmark` [N-5]: serie de referencia, do MESMO tamanho e na MESMA grade. O RC e definido
+    sobre performance RELATIVA (`f_k,t = pnl_k,t - pnl_benchmark,t`); subtrai-se antes de tudo,
+    e ai o resto do algoritmo nao muda uma linha. `None` NAO subtrai nada -- nem um vetor de
+    zeros -- para que o caminho de hoje continue bit a bit o de ontem.
 
     Devolve (cfgs, f, F_estrela) com F_estrela de forma (n_boot, n_cfgs).
     """
     cfgs = list(matriz.keys())
     M = np.asarray([matriz[c] for c in cfgs], dtype=float)      # (K, T)
     T = M.shape[1]
+    if benchmark is not None:
+        bm = np.asarray(benchmark, dtype=float)
+        if bm.shape != (T,):
+            raise ValueError(f"benchmark tem {bm.shape} e a matriz tem T={T} -- o RC compara "
+                             "series alinhadas na MESMA grade de periodos, nao alinhaveis "
+                             "por corte silencioso")
+        M = M - bm[None, :]
     rng = np.random.default_rng(seed)
     idx = block_bootstrap_idx(T, block=block, rng=rng, n_amostras=n_boot)   # (B, T)
     F = np.stack([M[k][idx].mean(axis=1) for k in range(M.shape[0])], axis=1)
@@ -351,15 +363,38 @@ def _p_bootstrap(cont, n_boot):
     return (1.0 + float(cont)) / (n_boot + 1.0)
 
 
-def reality_check(matriz, n_boot=2000, block=5, seed=42):
-    """White's Reality Check. H0: a MELHOR das N configs nao tem performance esperada > 0.
+def reality_check(matriz, n_boot=2000, block=5, seed=42, benchmark=None):
+    """White's Reality Check. H0 (composto): `max_k E[f_k] <= 0` -- NENHUMA config da familia
+    tem performance esperada positiva.
+
+    [A.1] O enunciado antigo desta docstring dizia "a MELHOR das N configs nao tem performance
+    esperada > 0", e convidava exatamente o erro que o teste existe para evitar: nao se
+    seleciona a melhor e depois se testa, testa-se a FAMILIA. O algoritmo sempre esteve certo;
+    a frase e que descrevia outro nulo.
 
     matriz: {config: serie de pnl por periodo} -- todas no MESMO grid e tamanho.
+
+    `benchmark` [N-5 / A.1]: serie de referencia na mesma grade, ou `None`. **Fixar benchmark
+    em zero e uma ESCOLHA, nao uma neutralidade** -- e numa estrategia direcional em cripto,
+    P&L positivo pode ser BETA. Com `None` o teste responde "ganhou do zero"; com uma serie,
+    responde "ganhou do benchmark", que e a diferenca entre ter alfa e ter estado comprado num
+    bull. Ver `exposicao_liquida()`: e ela que diz se a pergunta faz diferenca neste dado.
+
+    `None` continua sendo o default de proposito. Os vereditos negativos ja emitidos foram
+    contra zero e nao mudam: a estrategia e long-biased numa janela majoritariamente de alta e
+    MESMO ASSIM nao bateu o zero -- contra buy-and-hold iria pior, entao o "sem evidencia"
+    fica mais forte, nao mais fraco. O parametro e bloqueante para o veredito POSITIVO, que e
+    onde dinheiro real entraria.
     """
-    cfgs, f, F = _boot_medias(matriz, n_boot, block, seed)
+    cfgs, f, F = _boot_medias(matriz, n_boot, block, seed, benchmark)
     T = len(matriz[cfgs[0]])
     V = math.sqrt(T) * float(f.max())
     Vb = math.sqrt(T) * (F - f[None, :]).max(axis=1)
+    # O dicionario de volta NAO ganha uma chave "benchmark", e isso e deliberado: qualquer
+    # chave nova aqui quebraria o golden do [N-6] sem que numero nenhum tivesse mudado, e a
+    # unica saida seria regravar o golden -- exatamente o gesto que ele existe para tornar
+    # visivel. Quem chamou ja sabe o que passou; quem LE precisa da informacao, e ela esta no
+    # `relatorio()`, que e onde o parecer pediu que aparecesse.
     return {"p_valor": round(_p_bootstrap(int((Vb >= V).sum()), n_boot), 4),
             "melhor_cfg": cfgs[int(f.argmax())], "V": round(V, 4), "n_cfgs": len(cfgs)}
 
@@ -679,6 +714,70 @@ def controle_nulo_direto(matriz, M=M_CONTROLE_NULO, seed=42, alfa=0.05,
                  "n_boot": n_boot})
     return fora
 
+
+
+def exposicao_liquida(trades, grade=None):
+    """[N-5 / A.1] Exposicao LIQUIDA ponderada por TEMPO EM POSICAO. E a diferenca entre
+    "tem alfa" e "estava comprado num bull".
+
+    O Reality Check roda hoje contra benchmark = 0, e o parecer foi explicito: **isso e uma
+    escolha, nao uma neutralidade**. Numa estrategia direcional em cripto, P&L positivo pode
+    ser simplesmente beta. O numero que responde essa pergunta sem precisar de um benchmark
+    escolhido e este: se a exposicao liquida for ~+1, a estrategia esteve comprada o tempo
+    todo e o P&L dela e indistinguivel de buy-and-hold ate que alguem prove o contrario; se
+    for ~0, ela e direcionalmente neutra e o zero e um benchmark defensavel.
+
+    Ponderada por TEMPO em posicao, e nao por contagem de trades, porque um short de tres dias
+    e o triplo de exposicao de um short de um dia -- contar cabecas trata os dois igual e e a
+    forma mais facil de o numero mentir para o lado confortavel.
+
+        liquida = sum(direcao_i * duracao_i) / sum(duracao_i)      em [-1, +1]
+
+    Campos que o trade precisa trazer: `ts` e `ts_saida` (para a duracao) e `direcao` -- ou
+    `d`, que e como o motor a chama internamente -- em {+1, -1}. Faltando `direcao`, a funcao
+    devolve `liquida=None` COM O MOTIVO, e nunca 0.0: zero e "direcionalmente neutra", que e
+    uma afirmacao forte, e emiti-la por falta de dado seria inventar a resposta mais
+    conveniente que existe. O bruto (`cobertura`, `posicoes_medias`) continua saindo, porque
+    ele so depende do tempo.
+    """
+    if not trades:
+        return {"n": 0, "liquida": None, "cobertura": None, "posicoes_medias": None,
+                "dias_em_posicao": 0, "motivo": "nenhum trade"}
+    if not all("ts_saida" in t for t in trades):
+        return {"n": len(trades), "liquida": None, "cobertura": None,
+                "posicoes_medias": None, "dias_em_posicao": 0,
+                "motivo": "os trades nao trazem `ts_saida` -- sem duracao nao ha ponderacao "
+                          "por tempo em posicao"}
+
+    duracoes = [max(int(t["ts_saida"]) - int(t["ts"]), 0) for t in trades]
+    total = float(sum(duracoes))
+    dias = set()
+    for t in trades:
+        for d in range(int(t["ts"]) // DIA_MS, int(t["ts_saida"]) // DIA_MS + 1):
+            dias.add(d)
+    if grade:
+        dias &= set(grade)
+        janela = len(grade)
+    else:
+        janela = (max(int(t["ts_saida"]) for t in trades) // DIA_MS
+                  - min(int(t["ts"]) for t in trades) // DIA_MS + 1)
+    fora = {"n": len(trades), "dias_em_posicao": len(dias),
+            "cobertura": round(len(dias) / janela, 4) if janela else None,
+            "posicoes_medias": round(total / (janela * DIA_MS), 4) if janela else None,
+            "motivo": ""}
+
+    direcoes = [t.get("direcao", t.get("d")) for t in trades]
+    if any(d not in (1, -1) for d in direcoes):
+        fora["liquida"] = None
+        fora["motivo"] = ("os trades nao trazem `direcao` (nem `d`) em {+1,-1} -- "
+                          "`pesquisa/backtest_plataforma.py` grava conv/pnl/motivo/ts/ts_saida "
+                          "e joga fora o lado da posicao no `trades.append`")
+    elif total <= 0:
+        fora["liquida"] = None
+        fora["motivo"] = "duracao total zero -- nada a ponderar"
+    else:
+        fora["liquida"] = round(sum(d * u for d, u in zip(direcoes, duracoes)) / total, 4)
+    return fora
 
 def mds_sharpe(T, poder=0.80, alfa=0.05, ppa=PPA):
     """Sharpe ANUALIZADO minimo detectavel com `poder` a `alfa` unilateral, dado T periodos.
@@ -1643,6 +1742,26 @@ def relatorio(res):
     print(f"   PSR (sem deflacao, SR*=0): {b['psr']['psr']}  (sr/dia = {b['psr']['sr']})")
     print(f"   Sharpe ANUALIZADO: {b['sharpe_anualizado']}   IC95% (bloco): "
           f"{b['ic_sharpe_anualizado']}")
+    # [N-5 / A.1] A linha que separa alfa de beta -- e a advertencia de que o RC acima rodou
+    # contra ZERO, que e uma escolha e nao uma neutralidade.
+    ex = exposicao_liquida(res["oos"], res.get("grade_oos"))
+    if ex["liquida"] is None:
+        print(f"   exposicao LIQUIDA ponderada por tempo em posicao: NAO COMPUTAVEL")
+        print(f"     -> {ex['motivo']}.")
+        print(f"     -> sem ela o Reality Check acima (benchmark = ZERO) nao separa alfa de "
+              f"beta [F-4].\n        Enquanto faltar, veredito POSITIVO nao se emite: em "
+              f"cripto, P&L positivo pode ser so\n        ter estado comprado num bull.")
+    else:
+        print(f"   exposicao LIQUIDA ponderada por tempo em posicao: {ex['liquida']:+.4f}   "
+              f"(+1 = comprado o tempo todo, 0 = neutra, -1 = vendida)")
+        print(f"     -> o Reality Check acima usa benchmark = ZERO. Com exposicao liquida "
+              f"longe de 0, parte\n        deste P&L e BETA, e o zero deixa de ser um "
+              f"benchmark defensavel [A.1]. `reality_check(...,\n        benchmark=serie)` "
+              f"e por onde se responde a outra pergunta.")
+    if ex["cobertura"] is not None:
+        print(f"   tempo em mercado: {ex['dias_em_posicao']} dos {b['T']} dias OOS "
+              f"({ex['cobertura']:.1%}) | posicoes simultaneas medias: "
+              f"{ex['posicoes_medias']}")
     piso = b.get("mds_piso")
     marca = " -- e um PISO" if piso else ""
     print(f"   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, "

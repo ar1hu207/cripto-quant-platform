@@ -1352,3 +1352,207 @@ def test_golden_le_a_entrada_do_disco_e_nao_regera_por_seed(tmp_path):
     alt.write_text(json.dumps(d), encoding="utf-8")
     ok, _ = V.conferir_golden(caminho_entrada=str(alt))
     assert not ok, "trocar a entrada nao mudou o resultado -- o golden nao a esta lendo"
+
+
+# ============================ [N-5] benchmark no Reality Check ============================
+def _matriz_drift(mu_bench, mu_extra, T=500, seed=0, k=3):
+    """Benchmark com drift `mu_bench` e K configs que sao o benchmark + `mu_extra` + ruido.
+
+    `mu_extra=0` e a estrategia que NAO tem alfa nenhum: ela e o benchmark com ruido em cima.
+    Contra ZERO ela parece otima; contra o proprio benchmark, nao e nada. E a demonstracao
+    literal do que a `REVISAO-ITEM1.md` §A.1 chamou de "estava comprado num bull".
+    """
+    rng = np.random.default_rng(seed)
+    bench = rng.normal(mu_bench, 3.0, size=T)
+    matriz = {(50 + i, 22): (bench + rng.normal(mu_extra, 1.0, size=T)).tolist()
+              for i in range(k)}
+    return matriz, bench.tolist()
+
+
+def test_benchmark_none_reproduz_o_numero_de_hoje_bit_a_bit():
+    """[N-5] O default nao pode mexer em nada. `None` NAO subtrai um vetor de zeros -- ele nao
+    subtrai coisa nenhuma --, e a prova de que isso bastou e o golden do [N-6], que continuou
+    verde depois deste card. Aqui fica a versao unitaria da mesma afirmacao.
+    """
+    matriz, _ = _matriz_drift(0.0, 0.0, seed=1)
+    assert V.reality_check(matriz) == V.reality_check(matriz, benchmark=None)
+
+
+def test_benchmark_de_zeros_e_identico_a_benchmark_none():
+    """Subtrair zero e a identidade -- se nao fosse, a compatibilidade seria acidental."""
+    matriz, _ = _matriz_drift(0.0, 0.0, seed=2)
+    T = len(next(iter(matriz.values())))
+    assert V.reality_check(matriz, benchmark=[0.0] * T) == V.reality_check(matriz)
+
+
+def test_estrategia_IDENTICA_ao_benchmark_da_diferenca_nula_e_p_maximo():
+    """Caso construido com resposta CONHECIDA: se a estrategia E o benchmark, `f_k,t` e zero
+    em todo t. Entao V = 0, V*_b = 0, e sob a regra `p = (1+#{>=})/(B+1)` com empate em toda
+    replica o p-valor tem de ser exatamente 1,0 -- nenhuma evidencia de superar a referencia.
+    """
+    _, bench = _matriz_drift(1.0, 0.0, seed=3)
+    matriz = {(50, 22): list(bench), (55, 22): list(bench)}
+    rc = V.reality_check(matriz, benchmark=bench)
+    assert rc["V"] == 0.0
+    assert rc["p_valor"] == 1.0
+
+
+def test_o_benchmark_e_o_que_separa_ALFA_de_BETA():
+    """O item bloqueante da V2, num teste so.
+
+    A mesma familia de configs, o mesmo dado: contra ZERO ela tem "edge" com folga; contra o
+    benchmark de que ela e uma copia ruidosa, nao tem nada. Se o p-valor nao mudasse, o
+    parametro seria decorativo.
+    """
+    matriz, bench = _matriz_drift(mu_bench=1.0, mu_extra=0.0, seed=4)
+    contra_zero = V.reality_check(matriz)["p_valor"]
+    contra_bench = V.reality_check(matriz, benchmark=bench)["p_valor"]
+    assert contra_zero <= 0.05, contra_zero          # "ganhou do zero"
+    assert contra_bench > 0.20, contra_bench         # "nao ganhou do benchmark"
+
+
+def test_alfa_de_verdade_sobrevive_ao_benchmark():
+    """O espelho do teste acima: quem tem alfa REAL continua passando depois de descontado o
+    beta. Sem este par, o teste anterior seria compativel com um benchmark que simplesmente
+    mata tudo."""
+    matriz, bench = _matriz_drift(mu_bench=1.0, mu_extra=0.6, seed=5)
+    assert V.reality_check(matriz, benchmark=bench)["p_valor"] <= 0.05
+
+
+def test_benchmark_de_tamanho_errado_e_erro_e_nao_corte_silencioso():
+    """Alinhar por corte seria comparar dias diferentes e nao avisar."""
+    matriz, bench = _matriz_drift(0.0, 0.0, T=300, seed=6)
+    with pytest.raises(ValueError, match="benchmark"):
+        V.reality_check(matriz, benchmark=bench[:200])
+
+
+# ============================ [N-5] exposicao liquida ============================
+def test_exposicao_liquida_e_ponderada_por_TEMPO_e_nao_por_contagem():
+    """Caso com resposta conhecida: 3 dias comprado + 1 dia vendido -> (3-1)/4 = +0,5.
+
+    Contando CABECAS o resultado seria 0,0 (um long e um short), que e a resposta errada e a
+    mais confortavel -- "sou neutro". A ponderacao por tempo e o que impede isso.
+    """
+    D = V.DIA_MS
+    trades = [{"ts": 0, "ts_saida": 3 * D, "direcao": 1, "pnl": 0.0},
+              {"ts": 3 * D, "ts_saida": 4 * D, "direcao": -1, "pnl": 0.0}]
+    assert V.exposicao_liquida(trades)["liquida"] == 0.5
+
+
+def test_exposicao_liquida_nos_extremos():
+    """+1 = comprado o tempo todo; -1 = vendido o tempo todo; 0 = simetrica no tempo."""
+    D = V.DIA_MS
+    so_long = [{"ts": i * D, "ts_saida": (i + 1) * D, "direcao": 1} for i in range(10)]
+    so_short = [{**t, "direcao": -1} for t in so_long]
+    assert V.exposicao_liquida(so_long)["liquida"] == 1.0
+    assert V.exposicao_liquida(so_short)["liquida"] == -1.0
+    assert V.exposicao_liquida(so_long[:5] + so_short[5:])["liquida"] == 0.0
+
+
+def test_exposicao_liquida_aceita_o_apelido_d_do_motor():
+    """`backtest_plataforma` chama o lado de `d` internamente; `scoring` chama de `direcao`."""
+    D = V.DIA_MS
+    assert V.exposicao_liquida([{"ts": 0, "ts_saida": D, "d": -1}])["liquida"] == -1.0
+
+
+def test_sem_direcao_a_exposicao_e_None_COM_MOTIVO_e_nunca_zero():
+    """Zero significa "direcionalmente neutra", que e uma afirmacao FORTE.
+
+    Emiti-la por falta de campo seria inventar a resposta mais conveniente que existe -- e
+    justamente a que faria o benchmark = 0 parecer justificado. O motivo tem de nomear o campo
+    que falta, senao quem le nao sabe o que consertar.
+    """
+    D = V.DIA_MS
+    ex = V.exposicao_liquida([{"ts": 0, "ts_saida": D, "pnl": 1.0}])
+    assert ex["liquida"] is None
+    assert "direcao" in ex["motivo"]
+    assert ex["cobertura"] is not None          # o BRUTO continua saindo: so depende do tempo
+
+
+def test_sem_ts_saida_nao_ha_ponderacao_por_tempo():
+    ex = V.exposicao_liquida([{"ts": 0, "pnl": 1.0, "direcao": 1}])
+    assert ex["liquida"] is None and "ts_saida" in ex["motivo"]
+
+
+def _res_com_direcao(n_dias=900, seed=21, cfgs=((50, 22), (55, 22))):
+    """Um walk-forward cujos trades trazem `direcao` -- 70% long, para dar exposicao != 0."""
+    D = V.DIA_MS
+    por_cfg = {}
+    for k, cfg in enumerate(cfgs):
+        rng = np.random.default_rng(seed + k)
+        tr = []
+        for i in range(n_dias):
+            d = 1 if rng.random() < 0.7 else -1
+            ts = int(T0 + i * D)
+            tr.append({"ts": ts, "ts_saida": ts + D, "direcao": d,
+                       "pnl": float(rng.normal(0.0, 10.0))})
+        por_cfg[cfg] = tr
+    return V.walk_forward(gerador_constante(por_cfg), list(cfgs), n_trials=100,
+                          rotulo="com direcao")
+
+
+def test_relatorio_imprime_a_exposicao_liquida_COM_NUMERO(capsys):
+    """[N-5] O criterio de aceite: a linha existe e traz numero, nao promessa."""
+    res = _res_com_direcao()
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "exposicao LIQUIDA ponderada por tempo em posicao" in saida
+    assert "NAO COMPUTAVEL" not in saida
+    assert "tempo em mercado" in saida
+    esperado = V.exposicao_liquida(res["oos"], res["grade_oos"])["liquida"]
+    assert esperado is not None and abs(esperado) > 0.2          # long-biased, como construido
+    assert f"{esperado:+.4f}" in saida
+
+
+def test_relatorio_declara_quando_a_exposicao_NAO_e_computavel(capsys):
+    """A rodada REAL cai neste ramo, e ele tem de falar alto.
+
+    O gerador de hoje grava `ts_saida` mas NAO grava `direcao` -- entao o relatorio de
+    producao imprime NAO COMPUTAVEL, nomeia o arquivo que precisa mudar, e carrega o portao
+    junto: sem exposicao liquida, veredito POSITIVO nao se emite. Omitir a linha, ou imprimir
+    0,0 e seguir a vida, seria a versao-sintoma deste item -- e a mais perigosa, porque 0,0 e
+    exatamente o numero que faria o `benchmark = 0` do Reality Check parecer justificado.
+    """
+    res = _res_com_direcao()
+    for t in res["oos"]:                              # a forma exata do trade de hoje
+        t.pop("direcao")
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "exposicao LIQUIDA ponderada por tempo em posicao: NAO COMPUTAVEL" in saida
+    assert "veredito POSITIVO nao se emite" in saida
+    assert "backtest_plataforma" in saida
+    assert "tempo em mercado" in saida                # o BRUTO continua saindo, com numero
+
+
+def test_relatorio_tambem_declara_quando_falta_ts_saida(capsys):
+    """O outro ramo: sem `ts_saida` nao ha nem duracao, entao nem o bruto sai. Duas faltas
+    diferentes, dois motivos diferentes -- um motivo generico mandaria consertar o campo
+    errado."""
+    V.relatorio(_res_sintetico(mu=0.0, seed=9))
+    saida = capsys.readouterr().out
+    assert "exposicao LIQUIDA ponderada por tempo em posicao: NAO COMPUTAVEL" in saida
+    assert "ts_saida" in saida
+    assert "tempo em mercado" not in saida
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "[N-5] o buraco que sobra: `pesquisa/backtest_plataforma.py` nao grava o lado da posicao "
+    "no `trades.append`, entao a exposicao liquida da rodada REAL sai NAO COMPUTAVEL. "
+    "Arquivo fora do territorio T-REGUA (Onda A) -- falta uma chave la"))
+def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
+    """XFAIL estrito, que nesta casa e card em aberto e nao teste quebrado (`CLAUDE.md` §6).
+
+    O dia em que o motor gravar `direcao` no trade, este teste vira XPASS e QUEBRA a suite de
+    proposito -- obrigando a promover a asercao em vez de deixar o buraco se fechar em
+    silencio, sem ninguem notar que o portao do veredito POSITIVO caiu.
+
+    Escrever isso como xfail em vez de so mencionar no relatorio e a diferenca entre uma
+    divida registrada e uma divida contada uma vez.
+    """
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0                                    # fura o stop de 3% no candle 65
+    trades = B.backtest_ativo("X/USDT", 0, 100, 10, df=df_sintetico(precos, lows=lows),
+                              sinal_fn=sinal_em([60]))
+    assert trades, "o motor nao gerou trade -- o teste nao esta medindo o que promete"
+    assert V.exposicao_liquida(trades)["liquida"] is not None
