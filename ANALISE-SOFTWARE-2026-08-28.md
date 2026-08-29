@@ -674,7 +674,11 @@ existe e que **destrava tudo que vem depois**.
 
 ---
 
-## 8. Plano proposto
+## 8. ~~Plano proposto~~ → **SUPERADO. Use o §8-BIS**
+
+> ⚠️ **Este plano foi escrito antes de dois eventos:** a medição de produção (ADENDO) e a pesquisa
+> externa (`PESQUISA-EXTERNA-2026-08-28.md`). Ele tratava sinal na Onda 4 e custo na Onda 1 — a
+> ordem certa é o inverso. **Fica como registro; o plano vivo é o §8-BIS.**
 
 **Nada aqui foi executado.** É proposta, e a ordem é minha recomendação — a decisão é sua.
 
@@ -741,6 +745,177 @@ existe e que **destrava tudo que vem depois**.
 A tela de **análise por criptoativo** que o `NORTE.md` pede: consolidar técnica + fluxo +
 posicionamento + notícias com o *porquê* à vista. Hoje o painel só mostra sinal e posição, que é
 metade da direção declarada.
+
+---
+
+---
+
+# 8-BIS. O PLANO VIVO — reescrito em 29/08 com a pesquisa externa
+
+> **Fontes deste plano:** o código (§5–§7), os dados de produção (ADENDO), e
+> `PESQUISA-EXTERNA-2026-08-28.md` (4 frentes, ~250 buscas, com URL e ano em cada afirmação).
+> **Nada aqui foi executado.**
+
+## 8B.0 O que a pesquisa mudou de figura
+
+**(a) O nosso achado não é anomalia local — é o resultado que a literatura prevê.** Três trabalhos
+independentes de 2026 chegaram ao mesmo lugar com dados de Binance:
+
+| trabalho | o que fez | resultado |
+|---|---|---|
+| *Frontiers in Blockchain* (peer-reviewed) | 3,4 M de observações de 1 min, OFI + depth imbalance + VPIN + Kyle + Amihud, horizonte 5 min | **Sharpe líquido −10,68 a −52,05** com taxa VIP-0 |
+| Jadouli (arXiv 2607.19453) | gradient boosting sobre microestrutura | **AUC 0,885** e decisão registrada no paper: **`NO_TRADE`** |
+| Mesfin (arXiv 2605.04004) | 14 famílias de sinais OHLCV, critérios pré-registrados | **nenhuma passou**; edge bruto 0,07–1,50 bps contra 2 bps de fricção |
+
+📏 **"AUC 0,885 e prejuízo" é o número que reenquadra o projeto:** a previsibilidade **existe** e é
+**pequena demais para pagar a taxa**. Nosso `SEM EVIDÊNCIA` de três anos deixa de ser fracasso de
+implementação e passa a ser o resultado esperado do terreno.
+
+**(b) O dado que travava a pesquisa é grátis.** O `NORTE.md` registra o muro: *"a Binance serve
+~30 dias de OI e long/short ratio"*. Isso vale para o **endpoint REST**. O dump
+`data.binance.vision/data/futures/um/daily/metrics/` tem OI, os três long/short ratios e o taker
+ratio **em granularidade de 5 minutos desde 2020-09 (BTC) e 2021-12 (alts)** — 24 pares × ~1.731
+dias ≈ **487 MB, ~70 minutos de download**, verificado por download real. **O muro não existe.**
+Contraponto que dói: **Coinglass Standard a US$ 299/mês entrega 30 dias — o mesmo que o REST
+grátis.**
+
+**(c) A configuração de risco destrói a banca mesmo com sinal bom.** Cinco posições de 3% a
+ρ=0,85 dão σ=14,07% e **N_eff = 1,14** — cinco posições são **uma aposta e um oitavo**. Kelly ótimo
+com os nossos números medidos é 5,04%; estamos operando a **2,79× Kelly**. Acima de 2× Kelly o
+crescimento composto é negativo **mesmo com edge real**: −99,1% em mil trades.
+
+**(d) A régua precisa de conserto.** Bailey/Borwein/López de Prado/Zhu (*Notices of the AMS*, 2014):
+**3 anos de backtest compram no máximo ~14 configurações independentes** — e já gastamos muito mais
+que isso. E Arian/Norouzi/Seco (*Knowledge-Based Systems*, 2024, peer-reviewed) medem que **CPCV é
+marcadamente superior ao walk-forward** em controle de falso positivo. A crítica atinge exatamente
+o método que usamos.
+
+## 8B.1 ✅ Uma pergunta em aberto da pesquisa, respondida daqui
+
+A pesquisa não conseguiu apurar **se o funding entra no P&L do paper trading**, e avisou que, se
+não entrasse, o resultado ao vivo estaria inflado em 3% a 55% da banca ao ano.
+
+📏 **Entra.** `simulador.py:459` — `pnl += funding  # funding entra no P&L realizado`, e a coluna
+`trades.funding` guarda o valor (com `NULL` quando não foi possível medir, nunca zero falso).
+Os dados de produção confirmam: funding total de **−R$2,23** em 62 trades.
+
+**Por que tão pequeno, e por que a ressalva da pesquisa continua válida:** o funding liquida a cada
+8h e os nossos trades duram **horas** (os quatro últimos: 35 min, 1h40, 2h40, 12h). A maioria paga
+zero ou um settlement. **O aviso vale para o regime de swing/carry** — que é justamente o que a
+Onda 3 quer explorar. Ao mudar para hold longo, o funding deixa de ser ruído e vira custo de
+primeira ordem.
+
+## 8B.2 Onda 0 — Parar de destruir banca *(não depende de achar edge)*
+
+**Esta é a única onda cujo benefício não depende de nenhuma hipótese ser verdadeira.**
+
+| # | ação | por quê |
+|---|---|---|
+| **0.1** | **Sair do 2,79× Kelly.** Reduzir risco/trade, alavancagem e o teto agregado ajustado por correlação | É **aritmética**, não opinião: com edge zero o drag é −55,4% a f=3% e **−100% na config atual**; a f=0,5% é −2,2%. Isso é o orçamento de sobrevivência enquanto se procura sinal |
+| 0.2 | Corrigir `trades.risco_inicial` (§5.1, **confirmado**) | sem isso o R-múltiplo mente, e é a métrica que decidiria se há edge por trade |
+| 0.3 | Tirar `avaliar_saida` do laço quente (§5.2, **confirmado**) | ~48 requisições/min que fecharam **zero** posições em 10 dias |
+| 0.4 | Alinhar os textos de propósito (§4.2, §4.3) | o módulo que executa ainda declara que espera perder |
+
+⚠️ **O item 0.1 mexe em risco: é assinatura do dono, não de agente** (`CLAUDE.md` §2).
+
+## 8B.3 Onda 1 — Baixar o dado *(R$ 0, ~70 min, destrava tudo)*
+
+| # | ação | ganho |
+|---|---|---|
+| **1.1** | **Dump `metrics` do `data.binance.vision`** | anos de OI + long/short + taker ratio em 5 min. Derruba o muro do `NORTE.md` |
+| **1.2** | **`taker_buy_volume` já vem nos klines gratuitos** | dá para backtestar o **nosso portão de fluxo** em **anos** — hoje temos 10 dias e um p=0,58 |
+| 1.3 | O bucket **guarda os pares deslistados** (FTT, LUNA, SRM) | mata o viés de sobrevivência, medido por Ammann et al. em **62,19% a.a.** |
+| 1.4 | Tabela de features por sinal (§7.3) | o que não tem dump (book, paredes) só existe se for coletado agora |
+
+⚠️ **Duas armadilhas já descobertas:** o `metrics` vem com **linhas fora de ordem cronológica**
+(246 de 288 no arquivo testado) e o header dos klines é **inconsistente entre meses**. Ordene e
+valide na ingestão.
+
+## 8B.4 Onda 2 — Consertar a régua antes de emitir mais veredito
+
+| # | ação |
+|---|---|
+| 2.1 | **CPCV no lugar do walk-forward** — `skfolio` (BSD-3, grátis, atualizada em 29/08/2026). ⚠️ **`mlfinlab` é proprietária, £100/mês** — não é o caminho |
+| 2.2 | **PBO/CSCV** e `n_trials` efetivo por PCA no DSR |
+| 2.3 | Registrar o orçamento de tentativas: 3 anos ≈ 14 configs independentes, e já passamos disso |
+
+**Por que antes de procurar sinal:** se a régua tem controle de falso positivo deficiente, cada
+tentativa nova da Onda 3 gasta orçamento estatístico produzindo veredito em que não se pode confiar.
+
+## 8B.5 Onda 3 — Procurar sinal, com o critério certo
+
+**O critério mudou: turnover baixo não é efeito colateral, é o alvo.** Bysik & Ślepaczuk (2026,
+70k barras horárias de BTCUSDT, 27 folds, 10 bps): estratégias ingênuas colapsam sob custo, e o que
+**restaurou** a lucratividade foi um filtro de magnitude que cortou o turnover de **10.619 para 251
+trades (−97,6%)**. É o *"menos trades, mais certos"* do dono, com evidência peer-reviewed.
+
+| # | ação | nota |
+|---|---|---|
+| 3.1 | **Filtro de magnitude / corte de turnover em uma ordem de grandeza** | a ideia com melhor razão evidência/esforço |
+| 3.2 | **Testar o sinal INVERTIDO** | temos expectativa negativa medida. ⚠️ **Pré-registrar e testar FORA da amostra onde o negativo foi descoberto** — senão é double-dipping puro |
+| 3.3 | **Carry/basis como ranking cross-sectional**, não gatilho de reversão por moeda | |
+| 3.4 | Momentum intradiário de horário fixo | |
+| 3.5 | Re-medir o portão de fluxo **contínuo** (não binário) em 4–12h | com os anos de dado da Onda 1, não com 10 dias |
+
+## 8B.6 Onda 4 — Execução, medida no NOSSO log
+
+⚠️ **Aqui há uma contradição direta entre a pesquisa e a nossa própria medição, e ela não tem
+síntese limpa.** Os nossos `[CX-1]`/`[CX-4]` mediram que maker na entrada vale +R$840/3 anos. Mas
+Albers et al. rodaram um **experimento ao vivo** no perp de BTC e concluem que postar maker **na
+direção do sinal** é *"highly unprofitable"* — você só é preenchido quando o mercado vai contra.
+
+**O nosso próprio veredito já tinha apontado esse buraco** (*"backtest não responde se a Binance
+preenche postOnly nesses instantes"*). Agora dá para fechá-lo com dado nosso:
+
+| # | ação |
+|---|---|
+| **4.1** | **Markout pós-fill** nas ordens post-only. A tabela `ordens` já grava `preco_ref` e `preco_limite` — falta medir o preço N minutos depois do fill. **É isto que resolve a contradição**, e o post-only já está ligado gerando os dados |
+| 4.2 | Maker + desconto BNB = **0,018%/lado** — três vezes mais perto de zero do que dos 0,05% de hoje |
+| 4.3 | ⚠️ **Saída de emergência NUNCA post-only.** Stop e liquidação são ordem a mercado por natureza; o `[CX-4]` já modela assim, e a pesquisa reforça que confundir isso é perigoso |
+
+## 8B.7 Onda 5 — Engenharia
+
+| # | ação | nota |
+|---|---|---|
+| 5.1 | **Websocket via `ccxt.pro`** | 📏 **É GRÁTIS e MIT desde out/2022** (fundido no `ccxt` v1.95+). Sites de comparação ainda anunciam US$ 29/mês — **está errado** |
+| 5.2 | Cache incremental de candles | hoje rebaixa 200 candles quando 1–2 bastariam |
+| 5.3 | Worker em processo separado da API | |
+| 5.4 | Tabela de auditoria de config | hoje não dá para saber quando o `auto_trade` foi religado |
+| 5.5 | Cronometrar o `scan()` (§5.3) | ainda hipótese; 34% de saídas por gap é indício |
+
+## 8B.8 Onda 6 — O segundo papel do produto
+
+A tela de análise por criptoativo do `NORTE.md`: consolidar técnica + fluxo + posicionamento +
+notícias com o *porquê* à vista.
+
+---
+
+## 8B.9 🚫 O que a pesquisa manda NÃO fazer — **inclusive corrigindo duas recomendações minhas**
+
+| não fazer | por quê | quem eu contradigo |
+|---|---|---|
+| **CVD como sinal** | **nenhum paper existe** sobre CVD preditivo | ❌ **eu**, no §8/4.5 do plano antigo |
+| **Meta-labeling como primeiro passo** | o método pressupõe **alta recall e baixa precisão**. O nosso primário tem drift negativo **nos dois grupos** (aprovado e rejeitado), o que aponta para **custo > drift**, não para filtrabilidade. Se for isso, a conclusão certa é **trocar o primário**, não empilhar um segundo modelo | ❌ **eu**, no §8/4.1 |
+| Insistir na confluência técnica | 25 anos de literatura contra | — |
+| OI e long/short ratio como sinal | os "4 quadrantes" **não têm uma única fonte com número**; o "top trader" da Binance é o top 20% **por margem, não por lucro** | ✅ **vindica o nosso `[CX-2]`**, que mediu que o portão de OI piorou tudo |
+| Comprar heatmap de liquidação | o stream `forceOrder` envia **1 ordem/s/símbolo, só a maior** — incompleto por design **exatamente durante as cascatas** | — |
+| Fear & Greed como gatilho | evidência de 2026: **retorno Granger-causa sentimento**, não o contrário | — |
+| Equity curve trading como filtro de alfa | melhora em **22 de 80 casos**, e só onde a curva já era negativa | — |
+
+## 8B.10 ⚠️ Contradições que ficam declaradas, não resolvidas
+
+1. **Vol targeting pode FABRICAR Sharpe** sem que o sinal melhore (Kim/Tse/Wald, 2016). Se ligarmos
+   e o número melhorar, **isso não valida a entrada**. ➡️ Exige **teste de placebo com sinais
+   aleatórios** antes de acreditar.
+2. **Maker na direção do sinal:** nosso backtest diz que vale; o experimento ao vivo de Albers et
+   al. diz que é adversamente selecionado. ➡️ Só o **markout do nosso próprio log** (4.1) decide.
+3. **Meta-labeling pode não se aplicar** — ver 8B.9.
+
+## 8B.11 A ordem, em uma linha
+
+**Onda 0 primeiro, e ela sozinha já muda o destino do dinheiro** — porque é a única que funciona
+sendo o sinal bom ou ruim. Depois a Onda 1, que é grátis e derruba o muro de dado. Só então
+procurar sinal, com a régua consertada e o turnover como critério.
 
 ---
 
