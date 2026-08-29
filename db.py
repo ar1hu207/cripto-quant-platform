@@ -4,6 +4,7 @@ Tabelas: sinais, posicoes, trades, equity, config, banca.
 """
 import math
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -734,10 +735,34 @@ def _prova_p2_11(dias=365):
     ix1 = indices()
     init_db()                                   # 2a rodada no MESMO banco, ja com esquema
     ix2 = indices()
-    check("init_db roda 2x sem quebrar e sem duplicar indice", ix1 == ix2 and len(ix1) == 3,
-          str(ix1) + " vs " + str(ix2))
-    check("os 3 indices existem com o nome esperado",
-          ix1 == ["idx_equity_dia", "idx_equity_ts", "idx_trades_fechado"], str(ix1))
+    # [A-1] A expectativa era a LISTA LITERAL de tres nomes, e ela envelheceu calada: o [EX-1]
+    # acrescentou `idx_ordens_status` ao `INDICES` e ninguem veio aqui. A prova passou a falhar
+    # na `main`, e como `tests/test_provas_existentes.py` a roda por subprocesso, a suite
+    # INTEIRA ficava vermelha por um numero desatualizado -- o pior tipo de vermelho, o que
+    # ensina a ignorar o vermelho.
+    #
+    # O conserto nao e trocar 3 por 4: seria a mesma linha esperando envelhecer de novo. A
+    # expectativa passa a ser DERIVADA do `INDICES`, que e a declaracao, e a pergunta que a
+    # prova faz muda para a que importa -- "tudo que foi DECLARADO foi de fato CRIADO no
+    # banco?". Essa e a que pega migracao que nao rodou, e ela nao envelhece.
+    #
+    # E a derivacao sozinha seria tautologica (apagar um indice do `INDICES` continuaria
+    # passando), entao o piso fica explicito em `ESPERADOS`: os indices de que o sistema
+    # DEPENDE, com o motivo de cada um. Some um deles e a prova quebra. A lista cresce por
+    # decisao de quem acrescenta indice; ela nunca precisa ser corrigida por quem so o declarou.
+    declarados = sorted(re.findall(r"CREATE INDEX IF NOT EXISTS (\w+)", " ".join(INDICES)))
+    ESPERADOS = [
+        "idx_equity_dia",       # baseline do dia da trava diaria (indice de EXPRESSAO)
+        "idx_equity_ts",        # janelas da poda e da curva de equity
+        "idx_ordens_status",    # [EX-1] varredura de ordens pendentes a cada ciclo de 15s
+        "idx_trades_fechado",   # cooldown do auto-trader e metricas por dia
+    ]
+    check("init_db roda 2x sem quebrar e sem duplicar indice",
+          ix1 == ix2 and len(ix1) == len(declarados), str(ix1) + " vs " + str(ix2))
+    check("todo indice DECLARADO em INDICES foi criado no banco", ix1 == declarados,
+          str(ix1) + " vs declarados " + str(declarados))
+    check("e nenhum indice de que o sistema depende sumiu",
+          all(nome in ix1 for nome in ESPERADOS), str(ix1))
 
     # ---------- dado sintetico de 1 ano: 1 snapshot a cada 15s, como o worker grava
     agora = datetime(2026, 8, 22, 12, 0, 0)     # instante FIXO: prova nao depende do relogio
