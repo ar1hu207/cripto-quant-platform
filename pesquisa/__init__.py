@@ -37,5 +37,12 @@ declarava desonesta -- cacar config no periodo inteiro, ou trocar de moeda sem t
 periodo. Numa arvore onde o trabalho e feito por sessoes de agente sem memoria, script
 executavel com aparencia de ferramenta oficial e armadilha, nao historico. O historico fica
 no git. Restam aqui os dois modulos que a plataforma de pesquisa usa de verdade
-(`validacao`, `backtest_plataforma`) mais o `dados`.
+(`validacao`, `backtest_plataforma`) mais os dois baixadores, `dados` e `dados_bulk`.
+
+**Os dois baixadores nao se sobrepoem, e a diferenca e a FONTE.** O `dados` fala com o
+REST da exchange via ccxt: e o caminho para OHLCV recente de qualquer par. O `dados_bulk`
+le os dumps publicos do `data.binance.vision`, que e o unico lugar onde existem (a) o
+`metrics` -- open interest e long/short ratios em 5 min desde 2020-09, contra os ~30 dias
+que o REST serve, e (b) os pares JA DESLISTADOS, sem os quais todo backtest deste repo
+mede so quem sobreviveu. Nenhum dos dois substitui o outro.
 """
