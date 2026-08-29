@@ -4,6 +4,7 @@ Tabelas: sinais, posicoes, trades, equity, config, banca.
 """
 import math
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -33,7 +34,23 @@ CREATE TABLE IF NOT EXISTS posicoes(
   -- `exec_modo=post_only` as ordens novas entram como maker enquanto posicoes antigas, abertas
   -- a mercado, ainda estao vivas. Cobrar a taxa de hoje sobre a entrada de ontem inventaria
   -- lucro que nao houve.
-  taxa_entrada REAL);
+  taxa_entrada REAL,
+  -- [F-1][N-13] As DUAS ancoras imutaveis da abertura. Existem porque `stop` NAO e imutavel:
+  -- o trailing o reescreve a cada ciclo e o persiste (`simulador._marcar_uma`). Toda pergunta
+  -- da forma "quanto eu arrisquei ao ENTRAR" respondida a partir de `stop` responde outra
+  -- coisa -- "onde o stop estava agora" -- e o erro tem sinal fixo em cada trade, so que nao
+  -- o MESMO sinal em todos: o trailing primeiro aproxima o stop da entrada (denominador menor,
+  -- R-multiplo inflado) e depois o leva alem dela (denominador maior, R-multiplo deflacionado,
+  -- ate o cap da margem -- e dali vem o maximo de R$177,55 medido em producao).
+  --   `stop_abertura`  = o preco do stop no instante da abertura. E a GEOMETRIA: 1R em preco
+  --                      e `abs(entrada - stop_abertura)`, e e dele que o trailing em R vive.
+  --   `risco_abertura` = o risco-ate-o-stop em R$ no instante da abertura, ja capado pela
+  --                      margem. E o DINHEIRO: e o denominador do R-multiplo.
+  -- Sao duas colunas e nao uma porque respondem a duas perguntas, e as duas sao gravadas de
+  -- uma vez so na abertura -- nenhuma das duas e recalculada depois de campo que se move.
+  -- NULL = posicao aberta antes destas colunas existirem. NULL e ausencia de medicao, nao
+  -- zero: quem le tem de distinguir os dois ([P2-10], [P2-36]).
+  stop_abertura REAL, risco_abertura REAL);
 
 -- [EX-1] Ordens post-only pendentes: o sinal vira uma ordem que DESCANSA no livro e so vira
 -- posicao se o preco vier ate ela. Se nao vier ate `expira_em`, a ordem morre e o sinal MORRE
@@ -114,13 +131,60 @@ CONFIG_PADRAO = {
     "auto_fechar_saida": "1",     # bot fecha sozinho em reversão com lucro (gestor de saída)
     "auto_freshness_min": "12",   # só opera sinais com até N minutos (price/stop envelhecem)
     "auto_cooldown_min": "30",    # após fechar um ativo, não reabre por N minutos (evita churn)
-    "auto_lev_modo": "conviccao", # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
+    # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
+    # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
+    # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o
+    # win% por faixa faz 63 -> 38 -> 45 -> 50 -> 47, que e serrilha e nao escada. A faixa
+    # 80-90, que a escala premiava com ~12x, e a PIOR das cinco.
+    #
+    # O que isso torna caro: a escala mapeia 60 -> `auto_lev_min` e 99 -> `auto_lev_max`, ou
+    # seja 20 pontos de um score que medimos nao prever acerto viravam 5,5x mais dinheiro em
+    # risco. Isso nao e agressividade -- e alavancagem espalhada sobre ruido, e o dinheiro
+    # espalhado ali e o que falta quando aparecer a oportunidade que MERECE 20x (NORTE.md,
+    # PLANO-V2 Parte 0). Desligar aqui e REALOCAR risco, nao reduzi-lo.
+    #
+    # O modo "conviccao" continua inteiro no `autotrader._alavancagem`, dormindo. Apagar o
+    # mecanismo seria destruir a peca que a meta do dono precisa: o `N-10b` esta encarregado de
+    # construir um medidor que passe no teste do [Q-13] (win% monotonico por faixa, em amostra
+    # FORA da usada para construi-lo), e no dia em que passar a escala volta com fundamento --
+    # ligada por config, sem re-implementar nada.
+    "auto_lev_modo": "fixo",      # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
     "auto_lev_min": "2",          # alavancagem na convicção mínima
     "auto_lev_max": "20",         # TETO de alavancagem (na convicção máxima)
                                   # [Q-3] DIVERGE da base, e encosta no ponto de virada da
                                   # aproximação de liquidação (ARQUITETURA.md §10a)
     "trailing_ativo": "1",        # trailing stop: deixa o lucro correr, trava o ganho (sobe o stop atrás do preço)
-    "trailing_dist": "0.02",      # distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
+    # [N-13] A UNIDADE do trailing, e por que ela virou config em vez de um numero trocado.
+    #
+    # Ate aqui o trailing morava em espaco-PRECO (`trailing_dist=0.02`) enquanto o stop mora em
+    # ATR (3xATR). Duas unidades para a mesma geometria, e a conta que isso produz e ruim de
+    # duas maneiras opostas ao mesmo tempo:
+    #   - o gatilho vira ROE quando multiplicado pela alavancagem: 2% de preco sao 4% de ROE a
+    #     2x e 40% a 20x. O trailing DESARMA justamente onde a aposta e maior;
+    #   - e em unidade de risco ele e arbitrario: com stop curto 2% de preco sao 3R ou mais
+    #     (arma tarde demais); com stop largo sao meio R (arma cedo demais). O mesmo numero
+    #     significa coisas diferentes a cada trade.
+    # A medicao: 19 dos 20 trades que foram de lucro a prejuizo NUNCA armaram o trailing
+    # (INVESTIGACAO-MOTOR-2026-08-24 §8). E a cauda direita e exatamente o que a meta do dono
+    # pede -- destrui-la por erro de unidade e o oposto de aproveitar oportunidade.
+    #
+    # "R" poe o trailing na MESMA unidade do stop: 1R = a distancia entrada->stop DA ABERTURA
+    # (`posicoes.stop_abertura`, imutavel). E a mesma correcao de unidade que a pesquisa ja
+    # havia adotado do seu lado -- `be_em_R` e `trailing_k_atr` em `pesquisa/backtest_plataforma`
+    # ja sao medidos em R e em ATR, e o `preco` fixo era o que sobrava do lado vivo.
+    #
+    # Nao existe unidade "atr" aqui, e a ausencia e decisao: o stop de entrada JA e 3xATR
+    # (`signal_engine`), entao 1R ~= 3 ATR por construcao. Uma unidade "atr" seria um multiplo
+    # constante de uma que ja temos, e custaria guardar o ATR da entrada na posicao -- dado que
+    # hoje nao existe -- para nao ganhar informacao nenhuma.
+    #
+    # "preco" continua inteiro, com o default historico intacto, e nao e enfeite: e o que as
+    # posicoes abertas ANTES destas colunas continuam usando (sem `stop_abertura` nao ha R
+    # medivel, e inventar um seria o defeito do F-1 nascendo de novo noutra funcao).
+    "trailing_unidade": "R",      # "R" = multiplo do risco-ate-o-stop da ABERTURA | "preco" = fração do preço
+    "trailing_arma_r": "1",       # [unidade=R] lucro, em R, que ARMA o trailing (1R => stop vai ao zero-a-zero)
+    "trailing_dist_r": "1",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
+    "trailing_dist": "0.02",      # [unidade=preco] distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
     "telegram_token": "",
     "telegram_chat_id": "",
 }
@@ -238,10 +302,17 @@ def _migrar(c):
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
-                              ("taxa_entrada", "REAL")],
+                              ("taxa_entrada", "REAL"),
+                              ("stop_abertura", "REAL"), ("risco_abertura", "REAL")],
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
                             ("risco_inicial", "REAL"), ("funding", "REAL"),
-                            ("ret_pct_liq", "REAL")]}
+                            ("ret_pct_liq", "REAL"),
+                            # [F-1] a copia do `posicoes.risco_abertura` no fechamento. Coluna
+                            # NOVA, e nao um conserto do `risco_inicial`: as 62 linhas ja
+                            # gravadas significam "risco no stop da SAIDA", e reescrever o
+                            # significado delas coalharia duas series com o mesmo nome -- que
+                            # e pior que o defeito, e e a licao do [P2-40].
+                            ("risco_abertura", "REAL")]}
     for tabela, novas in faltantes.items():
         existentes = {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}
         for nome, tipo in novas:
@@ -382,6 +453,19 @@ def serie_equity(max_linhas=50000):
         return [dict(r) for r in c.execute(q, p)]
 
 
+def _estat_r(rmults):
+    """Expectância e SQN de uma lista de R-múltiplos. Devolve (0, 0) para lista vazia.
+
+    [F-2] Vira função porque passaram a existir DUAS séries de R (o denominador legado e o
+    `risco_abertura`) e a conta é a mesma nas duas. Duas cópias da fórmula divergiriam um dia,
+    e divergiriam em silêncio — as duas continuariam devolvendo um número plausível."""
+    if not rmults:
+        return 0, 0
+    mr = sum(rmults) / len(rmults)
+    sr = math.sqrt(sum((r - mr) ** 2 for r in rmults) / len(rmults))
+    return round(mr, 3), (round(mr / sr * math.sqrt(min(len(rmults), 100)), 2) if sr > 0 else 0)
+
+
 def metricas():
     """Estatísticas pra tunar: win rate, profit factor, e win rate POR convicção."""
     with conectar() as c:
@@ -394,7 +478,8 @@ def metricas():
     base = {"n_trades": 0, "n_sem_pnl": 0, "win_rate": 0, "pnl_total": 0, "taxa_total": 0,
             "profit_factor": 0, "ganho_medio": 0, "perda_media": 0, "por_conviccao": [],
             "sqn": 0, "sortino": 0, "sharpe": 0, "max_drawdown": 0, "max_drawdown_pct": 0,
-            "max_dd_mtm_pct": 0, "calmar": 0, "expectancia": 0, "expectancia_r": 0, "sqn_r": 0}
+            "max_dd_mtm_pct": 0, "calmar": 0, "expectancia": 0, "expectancia_r": 0, "sqn_r": 0,
+            "expectancia_r_ab": 0, "sqn_r_ab": 0, "n_r_ab": 0}
     if not trades:
         return base
     # [P2-36] `pnl_reais` NULL é MEDIÇÃO AUSENTE, e ausente não é zero.
@@ -443,15 +528,33 @@ def metricas():
     neg = [p for p in pnls if p < 0]
     ddv = math.sqrt(sum(p * p for p in neg) / nn) if neg else 0            # downside deviation
     sortino = round(media / ddv * cap, 2) if ddv > 0 else 0
-    # R-múltiplos (só trades com risco_inicial gravado — pnl / risco-até-o-stop; isola QUALIDADE do tamanho)
+    # R-múltiplos (só trades com risco gravado — pnl / risco-até-o-stop; isola QUALIDADE do tamanho)
+    #
+    # [F-2] DUAS séries, e a distinção é a entrega do card. O denominador antigo
+    # (`risco_inicial`) é lido de `pos["stop"]` no `fechar()`, e `pos["stop"]` é reescrito pelo
+    # trailing a cada ciclo: quanto melhor o trade correu, MAIOR o risco que ele parece ter
+    # corrido. O viés não é aleatório — ele encolhe o R-múltiplo dos vencedores e deixa o dos
+    # perdedores intacto, então `expectancia_r` e `sqn_r` saem enviesados para PARECER
+    # melhores. Provado em produção: `risco_inicial` máximo de R$177,55 contra um teto
+    # matemático de R$49,86, com casos de `risco ≈ pnl` (177,55 contra 174,81).
+    #
+    # `risco_abertura` é o denominador que não se move — gravado no `abrir()`/`_abrir_da_ordem()`
+    # e apenas COPIADO no fechamento. É ele que restabelece a paridade com o backtest, que fixa
+    # `pos["risco"] = abs(e - stop0)` na entrada (`pesquisa/backtest_plataforma.py:307`): sem
+    # isso o R-múltiplo do vivo e o do backtest não são a mesma grandeza [F-3].
+    #
+    # Trade antigo NÃO entra na série nova: `risco_abertura` NULL é medição AUSENTE, e derivá-la
+    # de `risco_inicial` seria fabricar o número que o card existe para desconfiar. `n_r_ab` diz
+    # quantos trades sustentam a série honesta — hoje zero, e isso é informação, não falha.
+    #
+    # A série velha FICA, com os mesmos nomes, pelo motivo do [P2-40]: `expectancia_r` já é
+    # consumida (`web/index.html`, `pesquisa/backtest_portfolio.py`) e trocar o significado dela
+    # por baixo é o que aquele card recusou fazer com `ret_pct`. Aposentá-la é o passo seguinte,
+    # e está declarado no relatório do card — não é esquecimento.
     rmults = [t["pnl_reais"] / t["risco_inicial"] for t in medidos if t.get("risco_inicial")]
-    if rmults:
-        mr = sum(rmults) / len(rmults)
-        sr = math.sqrt(sum((r - mr) ** 2 for r in rmults) / len(rmults))
-        expectancia_r = round(mr, 3)
-        sqn_r = round(mr / sr * math.sqrt(min(len(rmults), 100)), 2) if sr > 0 else 0
-    else:
-        expectancia_r = sqn_r = 0
+    rmults_ab = [t["pnl_reais"] / t["risco_abertura"] for t in medidos if t.get("risco_abertura")]
+    expectancia_r, sqn_r = _estat_r(rmults)
+    expectancia_r_ab, sqn_r_ab = _estat_r(rmults_ab)
     # max drawdown da curva REALIZADA (banca_ini + cumsum) — base do Calmar
     cum = peak = banca_ini
     maxdd = maxdd_pct = 0.0
@@ -488,6 +591,10 @@ def metricas():
         "por_conviccao": por_conv,
         "expectancia": round(media, 2), "expectancia_r": expectancia_r,
         "sqn": sqn, "sqn_r": sqn_r, "sortino": sortino, "sharpe": sharpe,
+        # [F-2] a série sobre o denominador que NÃO se move. `n_r_ab` é publicado junto de
+        # propósito: expectância-R de 3 trades e de 300 são o mesmo número com confianças
+        # incomparáveis, e quem lê o painel não tem outra forma de saber.
+        "expectancia_r_ab": expectancia_r_ab, "sqn_r_ab": sqn_r_ab, "n_r_ab": len(rmults_ab),
         "max_drawdown": round(maxdd, 2), "max_drawdown_pct": round(maxdd_pct, 1),
         "max_dd_mtm_pct": round(dd_mtm, 1), "calmar": calmar,
     }
@@ -628,10 +735,34 @@ def _prova_p2_11(dias=365):
     ix1 = indices()
     init_db()                                   # 2a rodada no MESMO banco, ja com esquema
     ix2 = indices()
-    check("init_db roda 2x sem quebrar e sem duplicar indice", ix1 == ix2 and len(ix1) == 3,
-          str(ix1) + " vs " + str(ix2))
-    check("os 3 indices existem com o nome esperado",
-          ix1 == ["idx_equity_dia", "idx_equity_ts", "idx_trades_fechado"], str(ix1))
+    # [A-1] A expectativa era a LISTA LITERAL de tres nomes, e ela envelheceu calada: o [EX-1]
+    # acrescentou `idx_ordens_status` ao `INDICES` e ninguem veio aqui. A prova passou a falhar
+    # na `main`, e como `tests/test_provas_existentes.py` a roda por subprocesso, a suite
+    # INTEIRA ficava vermelha por um numero desatualizado -- o pior tipo de vermelho, o que
+    # ensina a ignorar o vermelho.
+    #
+    # O conserto nao e trocar 3 por 4: seria a mesma linha esperando envelhecer de novo. A
+    # expectativa passa a ser DERIVADA do `INDICES`, que e a declaracao, e a pergunta que a
+    # prova faz muda para a que importa -- "tudo que foi DECLARADO foi de fato CRIADO no
+    # banco?". Essa e a que pega migracao que nao rodou, e ela nao envelhece.
+    #
+    # E a derivacao sozinha seria tautologica (apagar um indice do `INDICES` continuaria
+    # passando), entao o piso fica explicito em `ESPERADOS`: os indices de que o sistema
+    # DEPENDE, com o motivo de cada um. Some um deles e a prova quebra. A lista cresce por
+    # decisao de quem acrescenta indice; ela nunca precisa ser corrigida por quem so o declarou.
+    declarados = sorted(re.findall(r"CREATE INDEX IF NOT EXISTS (\w+)", " ".join(INDICES)))
+    ESPERADOS = [
+        "idx_equity_dia",       # baseline do dia da trava diaria (indice de EXPRESSAO)
+        "idx_equity_ts",        # janelas da poda e da curva de equity
+        "idx_ordens_status",    # [EX-1] varredura de ordens pendentes a cada ciclo de 15s
+        "idx_trades_fechado",   # cooldown do auto-trader e metricas por dia
+    ]
+    check("init_db roda 2x sem quebrar e sem duplicar indice",
+          ix1 == ix2 and len(ix1) == len(declarados), str(ix1) + " vs " + str(ix2))
+    check("todo indice DECLARADO em INDICES foi criado no banco", ix1 == declarados,
+          str(ix1) + " vs declarados " + str(declarados))
+    check("e nenhum indice de que o sistema depende sumiu",
+          all(nome in ix1 for nome in ESPERADOS), str(ix1))
 
     # ---------- dado sintetico de 1 ano: 1 snapshot a cada 15s, como o worker grava
     agora = datetime(2026, 8, 22, 12, 0, 0)     # instante FIXO: prova nao depende do relogio

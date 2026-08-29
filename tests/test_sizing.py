@@ -378,3 +378,74 @@ def test_p1_11_stop_dist_e_a_unica_fonte_da_geometria(entrada, stop, esperado):
     garantia "liquidacao atras do stop" valeria com um numero e a margem seria dimensionada
     com outro. Os casos degenerados devolvem 0.0 -- ausencia de geometria, nao erro."""
     assert autotrader._stop_dist(entrada, stop) == pytest.approx(esperado)
+
+
+# ============================================================ [N-10] a escala DORME, nao morre
+#
+# O [Q-13] mediu a premissa da escala de conviccao em 2.945 sinais de tendencia com desfecho
+# marcado, e ela nao se sustenta: os sinais que bateram no STOP tinham conviccao MEDIA MAIOR
+# (67,10) que os que bateram no alvo (66,47), e o win% por faixa faz 63 -> 38 -> 45 -> 50 -> 47
+# -- serrilha, nao escada. A faixa 80-90, que a escala premiava com ~12x, e a pior das cinco.
+#
+# O que o card desliga e o DEFAULT, nunca o mecanismo. A diferenca importa porque o `N-10b`
+# vai construir um medidor que passe no teste do [Q-13] (win% monotonico por faixa, em amostra
+# FORA da usada para construi-lo), e no dia em que passar a escala precisa estar inteira para
+# voltar por config -- nao reimplementada de memoria por quem nunca leu este card. Os dois
+# testes abaixo travam as duas metades: o default mudou, e a escala continua funcionando.
+
+def test_n10_o_default_vivo_da_alavancagem_e_fixo(banco):
+    """O default do repositorio E o que o worker carrega num banco novo -- as duas pontas, e
+    nao so o dicionario: quem le `CONFIG_PADRAO` sem conferir o banco esta lendo a intencao,
+    e o que decide o dinheiro e o que o `init_db` gravou."""
+    import db
+    assert db.CONFIG_PADRAO["auto_lev_modo"] == "fixo"
+    assert db.get_config()["auto_lev_modo"] == "fixo"
+
+
+def test_n10_no_default_a_conviccao_deixa_de_virar_alavancagem(banco):
+    """A consequencia medivel do card, e a razao dele: a escala mapeava 60 -> `auto_lev_min` e
+    99 -> `auto_lev_max`, entao 20 pontos de um score que NAO preve acerto viravam 5,5x mais
+    dinheiro em risco. No default de hoje o mesmo par de sinais recebe a mesma alavancagem.
+
+    Nao e "ficar seguro": e parar de espalhar 20x sobre sinais que a medicao nao distingue
+    entre si. O risco que sai daqui e o que sobra para a oportunidade que se souber medir."""
+    import db
+    cfg = db.get_config()
+    assert autotrader._alavancagem(cfg, 62) == autotrader._alavancagem(cfg, 99)
+    assert autotrader._alavancagem(cfg, 99) == float(cfg["alavancagem_padrao"])
+
+
+def test_n10_o_modo_conviccao_continua_inteiro_quando_ligado_de_proposito(banco):
+    """A metade que costuma sumir: ninguem prova que o codigo desligado ainda funciona, e um
+    ano depois ele nao funciona mais. Com `auto_lev_modo=conviccao` gravado na config VIVA (e
+    nao num dict de teste), a escala tem de entregar piso, teto e a rampa entre eles.
+
+    Se este teste quebrar, o mecanismo morreu -- e ai o `N-10b` nao tem para onde voltar."""
+    import db
+    db.set_config("auto_lev_modo", "conviccao")
+    cfg = db.get_config()
+    assert autotrader._alavancagem(cfg, 60) == 2.0                   # piso = auto_lev_min
+    assert autotrader._alavancagem(cfg, 100) == 20.0                 # teto = auto_lev_max
+    assert autotrader._alavancagem(cfg, 80) == 11.0                  # rampa: 2 + 0,5x(20-2)
+    assert autotrader._alavancagem(cfg, 100, 0.095) == 7.0           # e o cap [P1-11] por cima
+
+
+def test_n10_o_perfil_experimento_nao_declara_o_modo_e_isso_esta_registrado(banco):
+    """⚠️ O que este card NAO conseguiu entregar, travado com um teste em vez de uma nota.
+
+    O plano manda `auto_lev_modo` nascer "fixo" no `CONFIG_PADRAO` **e no perfil
+    `experimento`**. A primeira metade esta feita; a segunda esbarra em
+    `tests/test_config.py::test_todo_parametro_de_perfil_tem_racional_escrito`, que exige que
+    TODA chave do perfil tenha verbete em `api.CONFIG_RACIONAL` -- e `api.py` nao e territorio
+    do T-RISCO. Acrescentar a chave aqui deixaria a suite vermelha num territorio `toca-risco`,
+    que e o pior lugar possivel para entregar teste quebrado.
+
+    Enquanto isso, `perfil_ativo()` NAO enxerga o modo: um sistema com `auto_lev_modo=conviccao`
+    vivo continua sendo rotulado 'experimento'. E a mesma classe de mentira de rotulo que o
+    [Q-3] documentou, e por isso fica medida aqui em vez de anotada num relatorio que ninguem
+    reabre. Quando o verbete entrar no `api.py`, este teste quebra -- e e o gatilho para
+    promover a chave ao perfil."""
+    import db
+    assert "auto_lev_modo" not in db.PERFIS_RISCO["experimento"]
+    db.set_config("auto_lev_modo", "conviccao")
+    assert db.perfil_ativo() == "experimento"     # o rotulo nao acusa: e o buraco, medido
