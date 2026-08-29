@@ -51,6 +51,7 @@ O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado
     liberdade). A variante roda em `sensibilidade()`, que imprime as duas lado a lado sempre
     -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
+import datetime
 import hashlib
 import json
 import math
@@ -939,6 +940,145 @@ def _nucleo(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste_ms
             "cfgs": list(por_cfg.keys()), "block": block, "n_boot": n_boot, "seed": seed}
 
 
+# ============================ [N-9 / F10] O LOG DE TENTATIVAS ============================
+#
+# `n_trials` entra no Deflated Sharpe, logo entra no VEREDITO. E ele e hoje um PISO CONTADO A
+# MAO: alguem abriu `tune.py`, `sweep.py`, `experimentos.py` e os `validar_*` e somou os grids
+# (ver o comentario do `N_TRIALS`). Contagem a mao envelhece no dia seguinte e nao tem como ser
+# auditada -- ninguem consegue provar que a proxima varredura foi somada.
+#
+# A `REVISAO-ITEM1.md` F10 prescreveu a correcao PARA FRENTE, e disse que ela "tem mais valor
+# cientifico que o Reality Check inteiro": um JSONL append-only escrito pelo PROPRIO runner, com
+# hash do grid, timestamp, seed e resultado, em toda varredura. Daqui a um ano `n_trials` deixa
+# de ser estimativa e passa a ser medida.
+#
+# Tres decisoes que nao se deduzem do codigo:
+#
+#   * **Append-only, uma linha por varredura, nunca reescrita.** Um JSON unico que se
+#     re-serializa a cada rodada permite perder tentativa por corrida de escrita, e permite
+#     "limpar" o historico sem deixar rastro. O ponto do registro e justamente ser
+#     inconveniente de encolher.
+#   * **A varredura que FALHOU tambem entra.** Poucos trades, veredito INCONCLUSIVO, erro no
+#     meio: voce olhou para o dado do mesmo jeito. Registrar so o que deu certo e o vies de
+#     publicacao aplicado a si mesmo, e ele empurra `n_trials` para baixo -- ou seja, empurra o
+#     DSR para cima, que e a direcao confortavel.
+#   * **Teste e golden NAO contam.** Um painel sintetico de 3 configs nao e uma tentativa de
+#     data-snooping contra o mercado; deixar o pytest escrever aqui encheria o contador de ruido
+#     e o numero deixaria de significar o que promete.
+#
+# O arquivo NAO e versionado (mora no `dados_cache/`, ignorado). Isso e limitacao declarada, nao
+# descuido: um log append-only versionado gera conflito em toda rodada e a contagem passa a ser
+# a de quem pushou por ultimo. A consequencia -- ele conta as varreduras DESTA maquina -- esta
+# no relatorio do card, para quem for decidir onde o registro definitivo deve morar.
+#
+#     python -m pesquisa.validacao tentativas        # le o log e conta
+
+CAMINHO_TENTATIVAS = os.environ.get(
+    "REGUA_TENTATIVAS",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "tentativas.jsonl"))
+
+REGISTRAR_TENTATIVAS = True     # desligado sob pytest e dentro do golden -- ver a secao acima
+
+
+def _deve_registrar():
+    return REGISTRAR_TENTATIVAS and "PYTEST_CURRENT_TEST" not in os.environ
+
+
+def registrar_tentativa(rotulo, grid, n_trials, resultado, caminho=None):
+    """Acrescenta UMA linha ao log append-only. Devolve o registro, ou None se nao gravou.
+
+    Nunca levanta: um log que derruba a varredura que ele veio medir seria pior que nao ter
+    log. Falha de escrita vira `None` e a regua segue.
+    """
+    reg = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),   # naive, SP
+           "rotulo": rotulo,
+           "n_cfgs": len(grid),
+           "grid_hash": _digest(grid),
+           "padrao_hash": _digest(PADRAO),
+           "seed": PADRAO["seed"],
+           "criterio": PADRAO["criterio"],
+           "n_folds": N_FOLDS,
+           "n_trials_declarado": n_trials,
+           # o que a varredura de fato consumiu de orcamento estatistico: cada fold escolhe
+           # uma config entre `n_cfgs`, e sao `N_FOLDS` escolhas.
+           "selecoes": len(grid) * N_FOLDS,
+           "resultado": resultado}
+    try:
+        alvo = caminho or CAMINHO_TENTATIVAS
+        os.makedirs(os.path.dirname(alvo), exist_ok=True)
+        with open(alvo, "a", encoding="utf-8", newline="\n") as f:
+            f.write(_json_canonico(reg) + "\n")
+        return reg
+    except OSError:
+        return None
+
+
+def _resultado_para_registro(res):
+    """O resumo do que a varredura devolveu -- o suficiente para reler o log daqui a um ano e
+    saber o que cada tentativa produziu, sem guardar a serie inteira."""
+    if "erro" in res:
+        return {"veredito": res["veredito"]["classe"], "erro": res["erro"]}
+    b, a = res["bloco_b"], res["bloco_a"]
+    return {"veredito": res["veredito"]["classe"],
+            "sharpe_anualizado": b["sharpe_anualizado"],
+            "ic_sharpe_anualizado": b["ic_sharpe_anualizado"],
+            "rc_p": a["reality_check"]["p_valor"],
+            "spa_p": a["spa"]["p_valor"],
+            "dsr_melhor_is": a["dsr_melhor_is"]["dsr"],
+            "mds": b["mds"], "T": b["T"], "T_efetivo": b["T_efetivo"],
+            "n_oos": len(res["oos"]),
+            "pnl_oos": round(sum(t["pnl"] for t in res["oos"]), 2)}
+
+
+def ler_tentativas(caminho=None):
+    """Le o log. Linha corrompida nao derruba a leitura -- e contada em `_ilegiveis`, porque
+    sumir com ela em silencio seria mentir para baixo no numero que este log existe para dar."""
+    alvo = caminho or CAMINHO_TENTATIVAS
+    regs, ilegiveis = [], 0
+    if not os.path.exists(alvo):
+        return regs, ilegiveis
+    with open(alvo, encoding="utf-8") as f:
+        for linha in f:
+            linha = linha.strip()
+            if not linha:
+                continue
+            try:
+                regs.append(json.loads(linha))
+            except ValueError:
+                ilegiveis += 1
+    return regs, ilegiveis
+
+
+def contar_tentativas(caminho=None):
+    """O que o log ja sabe dizer. `selecoes` e o numero que um dia substitui o `N_TRIALS`
+    contado a mao -- quando o log cobrir historico suficiente para nao subestimar o passado."""
+    regs, ilegiveis = ler_tentativas(caminho)
+    grids = {r.get("grid_hash") for r in regs}
+    return {"varreduras": len(regs),
+            "selecoes": sum(int(r.get("selecoes") or 0) for r in regs),
+            "grids_distintos": len(grids),
+            "linhas_ilegiveis": ilegiveis,
+            "primeira": regs[0]["ts"] if regs else None,
+            "ultima": regs[-1]["ts"] if regs else None,
+            "caminho": caminho or CAMINHO_TENTATIVAS}
+
+
+def relatorio_tentativas(caminho=None):
+    c = contar_tentativas(caminho)
+    print(f"\n-- LOG DE TENTATIVAS (append-only) [N-9/F10] --\n   {c['caminho']}")
+    if not c["varreduras"]:
+        print("   vazio -- nenhuma varredura registrada nesta maquina ainda.")
+        return c
+    print(f"   varreduras: {c['varreduras']} | selecoes (cfgs x folds): {c['selecoes']} | "
+          f"grids distintos: {c['grids_distintos']}")
+    print(f"   de {c['primeira']} a {c['ultima']}"
+          + (f" | linhas ilegiveis: {c['linhas_ilegiveis']}" if c["linhas_ilegiveis"] else ""))
+    print(f"   `N_TRIALS` em uso continua {N_TRIALS} (PISO CONTADO a mao). Este log e o que um "
+          f"dia\n   o substitui por numero MEDIDO -- e ele so conta desta maquina, e so daqui "
+          f"pra frente.")
+    return c
+
+
 def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONTROLE_NULO):
     """A regua. Roda SEMPRE sob `PADRAO` -- nao ha argumento que mude o criterio ([F3]).
 
@@ -965,8 +1105,14 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
     por_cfg = {cfg: gerar_trades(cfg) for cfg in grid}
     base = _nucleo(por_cfg, **PADRAO)
     if base is None:
-        return {"rotulo": rotulo, "erro": "poucos trades -- sem dados pra walk-forward",
-                "veredito": {"classe": "INCONCLUSIVO", "motivo": "amostra insuficiente"}}
+        vazio = {"rotulo": rotulo,
+                 "erro": "poucos trades -- sem dados pra walk-forward",
+                 "veredito": {"classe": "INCONCLUSIVO", "motivo": "amostra insuficiente"}}
+        # [N-9] A varredura que nao deu em nada TAMBEM entra no log: voce olhou para o dado do
+        # mesmo jeito, e so registrar o que deu certo e vies de publicacao contra si mesmo.
+        if _deve_registrar():
+            registrar_tentativa(rotulo, grid, n_trials, _resultado_para_registro(vazio))
+        return vazio
 
     block, n_boot, seed = PADRAO["block"], PADRAO["n_boot"], PADRAO["seed"]
     # [Q-7] A calibracao e computada ANTES do veredito, e o veredito le. Medir e nao comparar
@@ -1029,6 +1175,12 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
     res.update({k: base[k] for k in ("oos", "por_fold", "serie_oos", "naive_cfg",
                                      "matriz_is", "grade", "grade_oos")})
     res["veredito"] = _veredito(res)
+    # [N-9/F10] Uma linha por varredura, no log append-only. E o unico ponto do projeto por
+    # onde TODA varredura passa -- registrar aqui e o que torna `n_trials` contavel amanha em
+    # vez de estimado para sempre. O registro nao entra no `res`: o golden do [N-6] congela o
+    # que a regua CALCULA, e um timestamp ali dentro tornaria o resultado irreproduzivel.
+    if _deve_registrar():
+        registrar_tentativa(rotulo, grid, n_trials, _resultado_para_registro(res))
     return res
 
 
@@ -2012,11 +2164,22 @@ def carregar_golden_entrada(caminho=None):
 
 
 def rodar_golden(caminho_entrada=None):
-    """Roda a regua sobre o painel congelado, exatamente como o relatorio a roda."""
-    por_cfg, meta = carregar_golden_entrada(caminho_entrada)
-    grid = list(por_cfg.keys())
-    return walk_forward(lambda cfg, _p=por_cfg: _p[cfg], grid,
-                        n_trials=meta["n_trials"], rotulo=meta["rotulo"])
+    """Roda a regua sobre o painel congelado, exatamente como o relatorio a roda.
+
+    [N-9] Com o log de tentativas DESLIGADO: conferir uma regressao sobre painel sintetico nao
+    e uma tentativa de data-snooping contra o mercado, e deixar o CI encher o contador faria
+    `n_trials` medir ruido de suite em vez de orcamento estatistico gasto.
+    """
+    global REGISTRAR_TENTATIVAS
+    antes = REGISTRAR_TENTATIVAS
+    REGISTRAR_TENTATIVAS = False
+    try:
+        por_cfg, meta = carregar_golden_entrada(caminho_entrada)
+        grid = list(por_cfg.keys())
+        return walk_forward(lambda cfg, _p=por_cfg: _p[cfg], grid,
+                            n_trials=meta["n_trials"], rotulo=meta["rotulo"])
+    finally:
+        REGISTRAR_TENTATIVAS = antes
 
 
 def _diferencas(esp, atu, caminho="raiz", fora=None, teto=30):
@@ -2081,6 +2244,9 @@ def gravar_golden(caminho_entrada=None, caminho_saida=None):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "tentativas":
+        relatorio_tentativas()                        # [N-9] o log append-only, lido de volta
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "golden":
         # [N-6] O teste de regressao da regua, fora do pytest. `--gravar` e ato deliberado.
         if "--gravar" in sys.argv:

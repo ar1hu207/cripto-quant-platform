@@ -26,6 +26,7 @@ louvor. O que define teste calibrado e UNIFORMIDADE dos p-valores, e e isso que
 """
 import json
 import math
+import os
 
 import numpy as np
 import pandas as pd
@@ -1556,3 +1557,172 @@ def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
                               sinal_fn=sinal_em([60]))
     assert trades, "o motor nao gerou trade -- o teste nao esta medindo o que promete"
     assert V.exposicao_liquida(trades)["liquida"] is not None
+
+
+# ============================ [N-9] log append-only de tentativas ========================
+def _grid3():
+    return [(50, 22), (55, 22), (65, 25)]
+
+
+def _resumo():
+    return {"veredito": "SEM_EVIDENCIA", "sharpe_anualizado": 0.1}
+
+
+def test_o_log_e_APPEND_only_e_a_linha_antiga_nao_muda(tmp_path):
+    """[N-9/F10] Append-only nao e detalhe de implementacao: e a propriedade inteira.
+
+    Um JSON unico re-serializado a cada rodada perde tentativa por corrida de escrita e deixa
+    "limpar" o historico sem rastro. O registro existe justamente para ser inconveniente de
+    encolher, e o teste afirma isso: a primeira linha tem de sobreviver byte a byte a segunda
+    escrita.
+    """
+    alvo = str(tmp_path / "t.jsonl")
+    V.registrar_tentativa("primeira", _grid3(), 100, _resumo(), caminho=alvo)
+    primeira = open(alvo, encoding="utf-8").readlines()[0]
+    V.registrar_tentativa("segunda", _grid3(), 100, _resumo(), caminho=alvo)
+    linhas = open(alvo, encoding="utf-8").readlines()
+    assert len(linhas) == 2
+    assert linhas[0] == primeira
+    assert json.loads(linhas[0])["rotulo"] == "primeira"
+    assert json.loads(linhas[1])["rotulo"] == "segunda"
+
+
+def test_o_registro_traz_o_que_o_F10_pediu(tmp_path):
+    """"hash do grid + timestamp + seed + resultado" -- o parecer foi literal."""
+    alvo = str(tmp_path / "t.jsonl")
+    reg = V.registrar_tentativa("r", _grid3(), 100, _resumo(), caminho=alvo)
+    for chave in ("ts", "grid_hash", "seed", "resultado", "n_cfgs", "n_trials_declarado",
+                  "selecoes", "padrao_hash", "criterio", "n_folds"):
+        assert chave in reg, chave
+    assert reg["seed"] == V.PADRAO["seed"]
+    assert reg["selecoes"] == len(_grid3()) * V.N_FOLDS
+    assert len(reg["grid_hash"]) == 64                       # sha256 em hex
+
+
+def test_grids_iguais_dao_o_MESMO_hash_e_grids_diferentes_nao(tmp_path):
+    """Sem isso o log nao distingue "rodei de novo o mesmo grid" de "abri um grid novo" -- e
+    essa e a diferenca entre repetir uma tentativa e gastar outra."""
+    alvo = str(tmp_path / "t.jsonl")
+    a = V.registrar_tentativa("a", _grid3(), 100, _resumo(), caminho=alvo)
+    b = V.registrar_tentativa("b", list(_grid3()), 100, _resumo(), caminho=alvo)
+    c = V.registrar_tentativa("c", _grid3() + [(70, 30)], 100, _resumo(), caminho=alvo)
+    assert a["grid_hash"] == b["grid_hash"]
+    assert a["grid_hash"] != c["grid_hash"]
+
+
+def test_contar_tentativas_soma_as_SELECOES_e_nao_so_as_linhas(tmp_path):
+    """O numero que um dia substitui o `N_TRIALS` contado a mao nao e "quantas vezes rodei" --
+    e quantas ESCOLHAS de parametro o procedimento fez: `n_cfgs x N_FOLDS` por varredura."""
+    alvo = str(tmp_path / "t.jsonl")
+    for _ in range(4):
+        V.registrar_tentativa("r", _grid3(), 100, _resumo(), caminho=alvo)
+    c = V.contar_tentativas(alvo)
+    assert c["varreduras"] == 4
+    assert c["selecoes"] == 4 * len(_grid3()) * V.N_FOLDS
+    assert c["grids_distintos"] == 1
+
+
+def test_linha_corrompida_e_CONTADA_e_nao_engolida(tmp_path):
+    """Engolir a linha ilegivel seria mentir PARA BAIXO justamente no numero que este log
+    existe para dar -- e para baixo em `n_trials` significa DSR para cima, que e a direcao
+    confortavel."""
+    alvo = tmp_path / "t.jsonl"
+    V.registrar_tentativa("boa", _grid3(), 100, _resumo(), caminho=str(alvo))
+    with open(alvo, "a", encoding="utf-8") as f:
+        f.write("{isto nao e json\n\n")
+    c = V.contar_tentativas(str(alvo))
+    assert c["varreduras"] == 1 and c["linhas_ilegiveis"] == 1
+
+
+def test_log_que_nao_pode_escrever_NAO_derruba_a_varredura(tmp_path, monkeypatch):
+    """Um log que derruba a varredura que ele veio medir e pior do que nao ter log."""
+    def explode(*a, **k):
+        raise OSError("disco somente leitura")
+    monkeypatch.setattr(V.os, "makedirs", explode)
+    assert V.registrar_tentativa("r", _grid3(), 100, _resumo(),
+                                 caminho=str(tmp_path / "t.jsonl")) is None
+
+
+def test_o_pytest_NAO_escreve_no_log_de_verdade():
+    """Um painel sintetico de 3 configs nao e tentativa de data-snooping contra o mercado.
+
+    Deixar a suite escrever encheria o contador de ruido e o numero deixaria de significar o
+    que promete. A guarda e esta, e ela esta ligada agora mesmo -- este teste roda sob pytest.
+    """
+    assert V._deve_registrar() is False
+    antes = V.contar_tentativas()["varreduras"]
+    _res_sintetico(mu=0.0, seed=31, n_dias=300)
+    assert V.contar_tentativas()["varreduras"] == antes
+
+
+def test_o_runner_escreve_UMA_linha_por_varredura(tmp_path, monkeypatch):
+    """A outra metade: fora do pytest, `walk_forward` -- o unico ponto por onde TODA varredura
+    passa -- grava sozinho. Sem isso o log dependeria de alguem lembrar de chamar."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    alvo = str(tmp_path / "t.jsonl")
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", alvo)
+    assert V._deve_registrar() is True
+    _res_sintetico(mu=0.0, seed=32, n_dias=300)
+    c = V.contar_tentativas(alvo)
+    assert c["varreduras"] == 1
+    reg = V.ler_tentativas(alvo)[0][0]
+    assert reg["resultado"]["veredito"] in ("SEM_EVIDENCIA", "INCONCLUSIVO", "EDGE")
+    assert reg["resultado"]["rc_p"] is not None
+
+
+def test_a_varredura_que_FALHOU_tambem_entra_no_log(tmp_path, monkeypatch):
+    """Registrar so o que deu certo e vies de publicacao aplicado a si mesmo.
+
+    E ele empurra `n_trials` para BAIXO, ou seja, o DSR para cima -- a direcao confortavel.
+    Poucos trades, veredito INCONCLUSIVO: voce olhou para o dado do mesmo jeito.
+    """
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    alvo = str(tmp_path / "t.jsonl")
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", alvo)
+    por_cfg = {(50, 22): trades_diarios([1.0] * 5)}
+    r = V.walk_forward(gerador_constante(por_cfg), [(50, 22)], n_trials=100, rotulo="curta")
+    assert "erro" in r
+    regs, _ = V.ler_tentativas(alvo)
+    assert len(regs) == 1 and regs[0]["resultado"]["veredito"] == "INCONCLUSIVO"
+    assert "erro" in regs[0]["resultado"]
+
+
+def test_o_golden_NAO_conta_como_tentativa(tmp_path, monkeypatch):
+    """Conferir regressao sobre painel congelado nao gasta orcamento estatistico. Se contasse,
+    cada rodada de CI inflaria `n_trials` e o numero mediria ruido de suite."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    alvo = str(tmp_path / "t.jsonl")
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", alvo)
+    ok, _ = V.conferir_golden()
+    assert ok
+    assert V.contar_tentativas(alvo)["varreduras"] == 0
+    assert V.REGISTRAR_TENTATIVAS is True            # e a flag volta ao que era
+
+
+def test_o_registro_NAO_entra_no_resultado_e_por_isso_nao_quebra_o_golden(tmp_path, monkeypatch):
+    """O timestamp e a unica coisa irreproduzivel que este card introduz. Ele mora no arquivo,
+    nunca no dicionario que `walk_forward` devolve -- se morasse, o golden do [N-6] passaria a
+    falhar a cada segundo e a "solucao" seria tirar do golden o que ele veio congelar."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", str(tmp_path / "t.jsonl"))
+    res = _res_sintetico(mu=0.0, seed=33, n_dias=300)
+    assert not any("tentativa" in k or "registro" in k for k in res)
+    assert "ts" not in res
+
+
+def test_relatorio_de_tentativas_diz_que_o_N_TRIALS_ainda_e_PISO(capsys, tmp_path):
+    """O log nao substitui o `N_TRIALS` hoje -- ele so conta desta maquina e so daqui pra
+    frente. Um relatorio que nao dissesse isso convidaria a trocar um piso honesto por uma
+    contagem que subestima todo o passado do projeto."""
+    alvo = str(tmp_path / "t.jsonl")
+    V.registrar_tentativa("r", _grid3(), 100, _resumo(), caminho=alvo)
+    V.relatorio_tentativas(alvo)
+    saida = capsys.readouterr().out
+    assert "PISO CONTADO" in saida and str(V.N_TRIALS) in saida
+    assert "desta maquina" in saida
+
+
+def test_log_inexistente_le_vazio_sem_quebrar(tmp_path):
+    """Primeira maquina, primeira rodada: o log ainda nao existe e isso nao e erro."""
+    assert V.ler_tentativas(str(tmp_path / "nao-existe.jsonl")) == ([], 0)
+    assert V.contar_tentativas(str(tmp_path / "nao-existe.jsonl"))["varreduras"] == 0
