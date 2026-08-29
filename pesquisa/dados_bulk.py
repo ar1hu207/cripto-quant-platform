@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Baixador dos dumps publicos do `data.binance.vision` -- [N-1].
+Baixador dos dumps publicos do `data.binance.vision` -- [N-1], [N-2].
 
 Rodar (da RAIZ do repo):  python -m pesquisa.dados_bulk
 
@@ -11,11 +11,15 @@ devolve INCONCLUSIVO por falta de PODER, nao por falta de sinal. Este modulo exi
 **esse muro e do REST, nao do bucket**: o `data.binance.vision` serve o mesmo dado desde
 2020-09, de graca e sem chave de API. Os dois convivem; nenhum substitui o outro.
 
-**[N-1]** `metrics`: open interest, os tres long/short ratios e o taker ratio em
-granularidade de 5 min desde 2020-09-01.
+O que ele destrava:
+
+* **[N-1]** `metrics`: open interest, os tres long/short ratios e o taker ratio em
+  granularidade de 5 min desde 2020-09-01.
+* **[N-2]** `taker_buy_volume` ja vem dentro dos klines. Permite backtestar o portao de
+  fluxo do bot em ANOS, contra os 10 dias que produziram o p=0,58.
 
 --------------------------------------------------------------------------------------
-AS DUAS ARMADILHAS DO `metrics` -- ambas MEDIDAS, nenhuma suposta
+AS QUATRO ARMADILHAS DESTE BUCKET -- todas MEDIDAS, nenhuma suposta
 --------------------------------------------------------------------------------------
 
 1. **O `metrics` vem fora de ordem cronologica.** Nao e teoria: `BTCUSDT-metrics-2024-08-08`
@@ -28,29 +32,42 @@ AS DUAS ARMADILHAS DO `metrics` -- ambas MEDIDAS, nenhuma suposta
    dobra o peso de um instante em qualquer media ou regressao. `normalizar_metrics`
    deduplica por timestamp.
 
+3. **O header dos klines e inconsistente entre meses.** Em `futures/um` os arquivos ate
+   **2021-12** vem SEM linha de cabecalho e a partir de **2022-01** vem COM. Sem tratar,
+   a primeira barra de cada mes antigo vira o nome das colunas, ou o cabecalho vira uma
+   barra de precos absurdos.
+
+4. **Os klines de `spot` trocaram a UNIDADE do timestamp em 2025-01, de milissegundo para
+   MICROssegundo.** Esta nao estava no briefing e e a pior das quatro, porque nada a
+   sinaliza: mesmo numero de colunas (12), sem header dos dois lados. `unit="ms"` aplicado
+   a um arquivo de 2025 devolve datas no ano ~57000 -- sem excecao, sem aviso. Por isso a
+   unidade aqui e **detectada pela grandeza do numero** (`_unidade_epoch`), nunca fixada.
+   `futures/um` seguiu em milissegundo; ou seja, cada mercado tem a SUA inconsistencia, e
+   elas nao coincidem.
+
 --------------------------------------------------------------------------------------
 DECISOES QUE NAO SE DEDUZEM DO CODIGO
 --------------------------------------------------------------------------------------
 
 * **Timestamps naive, em UTC de exchange** -- exatamente como o `pesquisa/dados.py` faz
   (`pd.to_datetime(..., unit="ms")`, sem fuso). O `CLAUDE.md` §1 fala de hora de Sao Paulo
-  para o BANCO da plataforma; a pesquisa consome dado de exchange e o modulo irmao ja
+  para o BANCO da plataforma; a pesquisa consome candle de exchange e o modulo irmao ja
   fixou essa convencao. Divergir aqui criaria duas escalas de tempo dentro do MESMO pacote,
   que e pior que qualquer uma das duas.
 
 * **O cache guarda o .zip cru, e o nome NAO leva a data do download.** O `dados.py` poe a
-  data no nome porque a janela do REST anda todo dia. Aqui e o contrario: dump de dia
-  fechado e imutavel depois de publicado, entao carimbar a data do download quebraria o
-  cache de graca e baixaria de novo o mesmo byte.
+  data no nome porque a janela do REST anda todo dia. Aqui e o contrario: dump de mes ou
+  dia fechado e imutavel depois de publicado, entao carimbar a data do download quebraria
+  o cache de graca e baixaria de novo o mesmo byte.
 
-* **`baixar_metrics` NAO explode quando falta periodo** -- devolve o que existe e lista o
-  que faltou em `df.attrs["ausentes"]`. Buraco no historico e um fato do bucket, e quem
+* **`baixar_*` NAO explode quando falta periodo** -- devolve o que existe e lista o que
+  faltou em `df.attrs["ausentes"]`. Buraco no historico e um fato do bucket, e quem
   precisa de serie fechada passa `exigir_completo=True`.
 
 * **Este modulo constroi o baixador; ele nao baixa o acervo.** Tudo e parametrizado por
-  simbolo e periodo, e a prova do `__main__` roda num recorte pequeno (poucos arquivos,
-  ~dezenas de KB). Baixar historico completo e decisao de quem for rodar a pesquisa, nao
-  efeito colateral de importar isto.
+  simbolo/mercado/intervalo/periodo, e a prova do `__main__` roda num recorte pequeno
+  (poucos arquivos, ~centenas de KB). Baixar historico completo e decisao de quem for
+  rodar a pesquisa, nao efeito colateral de importar isto.
 """
 import hashlib
 import io
@@ -66,6 +83,26 @@ BASE = "https://data.binance.vision"
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "bulk")
 
+# Prefixo de cada mercado dentro do bucket. `futures_um` = USD-M perpetuo, que e o que a
+# plataforma opera; `spot` entra porque tem historico mais longo (BTCUSDT desde 2017-08).
+MERCADOS = {
+    "futures_um": "futures/um",
+    "futures_cm": "futures/cm",
+    "spot": "spot",
+}
+
+# As 12 colunas do kline, na ordem em que o bucket as escreve. `taker_buy_volume` -- a
+# coluna que o [N-2] persegue -- e a decima.
+COLUNAS_KLINES = [
+    "open_time", "open", "high", "low", "close", "volume",
+    "close_time", "quote_volume", "count",
+    "taker_buy_volume", "taker_buy_quote_volume", "ignore",
+]
+
+# Sem estas o arquivo nao serve para nada que este modulo promete, e falhar alto e melhor
+# que devolver NaN que so aparece 200 linhas depois, dentro do backtest.
+ESSENCIAIS_KLINES = ["open_time", "open", "high", "low", "close", "volume", "taker_buy_volume"]
+
 COLUNAS_METRICS = [
     "create_time", "symbol",
     "sum_open_interest", "sum_open_interest_value",
@@ -73,8 +110,6 @@ COLUNAS_METRICS = [
     "count_long_short_ratio", "sum_taker_long_short_vol_ratio",
 ]
 
-# Sem estas o arquivo nao serve para nada que este modulo promete, e falhar alto e melhor
-# que devolver NaN que so aparece 200 linhas depois, dentro do backtest.
 ESSENCIAIS_METRICS = [
     "create_time",
     "sum_open_interest",
@@ -82,8 +117,29 @@ ESSENCIAIS_METRICS = [
     "count_long_short_ratio", "sum_taker_long_short_vol_ratio",
 ]
 
+# Nomes que ja apareceram no header do bucket para a mesma coluna.
+ALIAS_KLINES = {
+    "opentime": "open_time", "closetime": "close_time",
+    "quote_asset_volume": "quote_volume",
+    "number_of_trades": "count", "trades": "count",
+    "taker_buy_base_asset_volume": "taker_buy_volume",
+    "taker_buy_quote_asset_volume": "taker_buy_quote_volume",
+}
+
 
 # ------------------------------------------------------------------ chaves do bucket
+
+def _mercado(mercado):
+    if mercado not in MERCADOS:
+        raise ValueError(f"mercado {mercado!r} desconhecido; use um de {sorted(MERCADOS)}")
+    return MERCADOS[mercado]
+
+
+def chave_klines(simbolo, intervalo="1h", periodo="2024-01", mercado="futures_um"):
+    """Chave do dump MENSAL de klines. `periodo` = 'YYYY-MM'."""
+    m = _mercado(mercado)
+    return f"data/{m}/monthly/klines/{simbolo}/{intervalo}/{simbolo}-{intervalo}-{periodo}.zip"
+
 
 def chave_metrics(simbolo, dia="2024-01-15"):
     """Chave do dump de `metrics`. `dia` = 'YYYY-MM-DD'.
@@ -120,7 +176,7 @@ def baixar_zip(chave, usar_cache=True, verificar_hash=True):
 
     `verificar_hash` confere o sha256 contra o `.zip.CHECKSUM` que o proprio bucket
     publica ao lado de cada arquivo. E barato e e o padrao da casa (`CLAUDE.md` §7:
-    confira o hash) -- um zip truncado por rede ruim vira um dia de dado faltando no meio
+    confira o hash) -- um zip truncado por rede ruim vira um mes de dado faltando no meio
     do backtest, e nada avisa.
     """
     destino = os.path.join(CACHE_DIR, chave.replace("/", os.sep))
@@ -159,7 +215,7 @@ def texto_do_zip(conteudo):
 # ------------------------------------------------------------------ normalizacao
 
 def _tem_cabecalho(texto):
-    """True se a primeira linha e header.
+    """True se a primeira linha e header. Armadilha 3.
 
     O teste e "o primeiro campo e um inteiro?". Nao se pergunta ao nome da coluna se ele
     esta numa lista conhecida: header novo com nome que a lista nao preve seria lido como
@@ -177,7 +233,7 @@ def _tem_cabecalho(texto):
 
 
 def _unidade_epoch(valor):
-    """Descobre se um epoch inteiro esta em s, ms, us ou ns.
+    """Descobre se um epoch inteiro esta em s, ms, us ou ns. Armadilha 4.
 
     Escolhe a unidade que poe o instante numa janela plausivel de mercado (2009-2100) --
     grandeza, nao contagem de digitos. Contar digitos e a mesma conta escrita de um jeito
@@ -213,6 +269,46 @@ def _ordenar_unico(df, coluna):
     df = df.sort_values(coluna, kind="mergesort")     # estavel: empate mantem a ordem do arquivo
     df = df[~df[coluna].duplicated(keep="first")]
     return df.reset_index(drop=True)
+
+
+def normalizar_klines(texto):
+    """CSV cru de klines -> DataFrame com as 12 colunas canonicas + `datetime`.
+
+    Trata as armadilhas 3 (header presente ou nao) e 4 (unidade do timestamp), e devolve
+    SEMPRE o mesmo conjunto de colunas, venha o arquivo de 2020 ou de 2026.
+    """
+    if not texto.strip():
+        raise ValueError("CSV de klines vazio")
+
+    tem_header = _tem_cabecalho(texto)
+    df = pd.read_csv(io.StringIO(texto), header=0 if tem_header else None)
+
+    if tem_header:
+        nomes = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+        df.columns = [ALIAS_KLINES.get(n, n) for n in nomes]
+    else:
+        # Sem header a unica informacao e a POSICAO. O bucket escreve na ordem canonica.
+        n = df.shape[1]
+        if n > len(COLUNAS_KLINES):
+            raise ValueError(
+                f"kline sem header com {n} colunas; canonicas sao {len(COLUNAS_KLINES)}")
+        df.columns = COLUNAS_KLINES[:n]
+
+    faltando = [c for c in ESSENCIAIS_KLINES if c not in df.columns]
+    if faltando:
+        raise ValueError(f"kline sem colunas essenciais {faltando}; veio {list(df.columns)}")
+
+    for c in COLUNAS_KLINES:
+        if c not in df.columns:
+            df[c] = pd.NA                      # "ignore" sumindo nao invalida o arquivo
+    df = df[COLUNAS_KLINES].copy()
+
+    for c in COLUNAS_KLINES:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["datetime"] = _para_datetime(df["open_time"])
+    df = df.dropna(subset=["datetime"])
+    return _ordenar_unico(df, "datetime")
 
 
 def normalizar_metrics(texto):
@@ -256,6 +352,12 @@ def estritamente_crescente(serie):
 
 # ------------------------------------------------------------------ periodos
 
+def meses(inicio, fim):
+    """['2024-01', '2024-02', ...] inclusive nas duas pontas."""
+    return [d.strftime("%Y-%m")
+            for d in pd.date_range(f"{inicio}-01", f"{fim}-01", freq="MS")]
+
+
 def dias(inicio, fim):
     """['2024-01-15', '2024-01-16', ...] inclusive nas duas pontas."""
     return [d.strftime("%Y-%m-%d") for d in pd.date_range(inicio, fim, freq="D")]
@@ -270,6 +372,26 @@ def _juntar(partes, ausentes, coluna="datetime"):
         df = _ordenar_unico(pd.concat(partes, ignore_index=True), coluna)
     df.attrs["ausentes"] = ausentes
     return df
+
+
+def baixar_klines(simbolo="BTCUSDT", intervalo="1h", inicio="2024-01", fim="2024-02",
+                  mercado="futures_um", usar_cache=True, exigir_completo=False):
+    """[N-2] Klines mensais concatenados, normalizados e ordenados.
+
+    Traz `taker_buy_volume` de graca -- e o [N-2]: o portao de fluxo do bot passa a ser
+    backtestavel em anos, contra os 10 dias que produziram o p=0,58. Mes ausente nao
+    interrompe: vai para `df.attrs["ausentes"]`.
+    """
+    partes, ausentes = [], []
+    for periodo in meses(inicio, fim):
+        bruto = baixar_zip(chave_klines(simbolo, intervalo, periodo, mercado), usar_cache)
+        if bruto is None:
+            ausentes.append(periodo)
+            continue
+        partes.append(normalizar_klines(texto_do_zip(bruto)))
+    if exigir_completo and ausentes:
+        raise RuntimeError(f"{simbolo}: meses ausentes {ausentes}")
+    return _juntar(partes, ausentes)
 
 
 def baixar_metrics(simbolo="BTCUSDT", inicio="2024-01-15", fim="2024-01-16",
@@ -291,10 +413,11 @@ def baixar_metrics(simbolo="BTCUSDT", inicio="2024-01-15", fim="2024-01-16",
     return _juntar(partes, ausentes)
 
 
+
 # ------------------------------------------------------------------ prova de rede
 
 if __name__ == "__main__":
-    print("PROVA DE REDE -- pesquisa/dados_bulk.py  ([N-1])")
+    print("PROVA DE REDE -- pesquisa/dados_bulk.py  ([N-1] [N-2])")
     print("Recorte pequeno de proposito: o modulo e o baixador, nao o acervo.\n")
 
     # ---- [N-1] metrics: as colunas prometidas existem -------------------------------
@@ -336,6 +459,36 @@ if __name__ == "__main__":
     assert estritamente_crescente(tratado2["datetime"])
     print(f"      cru {n_cru} linhas -> tratado {len(tratado2)} | "
           f"estritamente crescente={estritamente_crescente(tratado2['datetime'])}")
+
+    # ---- [N-2] klines: duas epocas, mesmas colunas, taker_buy_volume ----------------
+    print("\n[N-2] klines de DUAS EPOCAS normalizam para o mesmo conjunto de colunas")
+    a = baixar_klines("BTCUSDT", "1h", "2020-09", "2020-09")      # SEM header no arquivo
+    b = baixar_klines("BTCUSDT", "1h", "2025-06", "2025-06")      # COM header no arquivo
+    assert list(a.columns) == list(b.columns), "as duas epocas divergiram nas colunas"
+    assert "taker_buy_volume" in a.columns and "taker_buy_volume" in b.columns
+    assert a["taker_buy_volume"].notna().all() and b["taker_buy_volume"].notna().all()
+    assert estritamente_crescente(a["datetime"]) and estritamente_crescente(b["datetime"])
+    assert a["datetime"].iloc[0].year == 2020 and b["datetime"].iloc[0].year == 2025
+    print(f"      2020-09 (arquivo SEM header): {len(a):4d} barras | "
+          f"{a['datetime'].iloc[0]} -> {a['datetime'].iloc[-1]}")
+    print(f"      2025-06 (arquivo COM header): {len(b):4d} barras | "
+          f"{b['datetime'].iloc[0]} -> {b['datetime'].iloc[-1]}")
+    print(f"      colunas identicas: {list(a.columns)}")
+    print(f"      taker_buy_volume medio: 2020-09={a['taker_buy_volume'].mean():.2f}"
+          f"  2025-06={b['taker_buy_volume'].mean():.2f}")
+
+    # ---- armadilha 4: a unidade do timestamp no spot --------------------------------
+    print("\n[armadilha 4] spot trocou ms -> MICROssegundo em 2025-01, sem header e sem aviso")
+    s1 = baixar_klines("BTCUSDT", "1h", "2024-12", "2024-12", mercado="spot")
+    s2 = baixar_klines("BTCUSDT", "1h", "2025-01", "2025-01", mercado="spot")
+    assert s1["datetime"].iloc[0].year == 2024 and s2["datetime"].iloc[0].year == 2025, \
+        "a deteccao de unidade falhou -- e o erro sairia como ano ~57000, calado"
+    print(f"      2024-12 open_time cru={int(s1['open_time'].iloc[0])} "
+          f"-> {s1['datetime'].iloc[0]}")
+    print(f"      2025-01 open_time cru={int(s2['open_time'].iloc[0])} "
+          f"-> {s2['datetime'].iloc[0]}")
+    print(f"      com unit='ms' fixo, 2025-01 daria: "
+          f"{pd.to_datetime(int(s2['open_time'].iloc[0]), unit='ms')}")
 
     print("\nTODAS AS AFIRMACOES PASSARAM.")
     print(f"cache em: {CACHE_DIR}")

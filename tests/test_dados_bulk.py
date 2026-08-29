@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Testes de PARSING e NORMALIZACAO do `pesquisa/dados_bulk.py`. [N-1]
+"""Testes de PARSING e NORMALIZACAO do `pesquisa/dados_bulk.py`. [N-1] [N-2]
 
 **Nenhum teste daqui toca a rede, e isso e requisito, nao preferencia.** A suite inteira
 roda antes de todo merge (`CLAUDE.md` §0); teste que baixa arquivo transforma queda de
@@ -22,6 +22,30 @@ from pesquisa import dados_bulk as db
 
 
 # ------------------------------------------------------------------ fixtures literais
+
+# BTCUSDT-1h-2020-09.zip (futures/um) -- SEM linha de cabecalho. Ate 2021-12 e assim.
+KLINES_SEM_HEADER = (
+    "1598918400000,11658.11,11675.00,11531.34,11618.27,15015.299,"
+    "1598921999999,174112062.33123,48351,6666.854,77327235.25097,0\n"
+    "1598922000000,11618.27,11643.75,11593.00,11634.31,4410.780,"
+    "1598925599999,51261715.25539,18795,2151.537,25008941.58982,0\n"
+)
+
+# BTCUSDT-1h-2025-06.zip (futures/um) -- COM cabecalho. De 2022-01 em diante e assim.
+KLINES_COM_HEADER = (
+    "open_time,open,high,low,close,volume,close_time,quote_volume,count,"
+    "taker_buy_volume,taker_buy_quote_volume,ignore\n"
+    "1748736000000,104544.60,104599.60,104277.30,104408.70,3438.526,"
+    "1748739599999,358998670.72560,71534,1691.726,176614558.10500,0\n"
+    "1748739600000,104408.70,104500.00,104300.00,104450.00,2000.000,"
+    "1748743199999,208900000.00000,50000,1000.000,104450000.00000,0\n"
+)
+
+# BTCUSDT-1h-2025-01.zip (spot) -- sem header E com timestamp em MICROssegundo.
+KLINES_SPOT_MICROSSEGUNDO = (
+    "1735689600000000,93548.80,94449.20,93460.20,94363.60,5744.609,"
+    "1735693199999999,539615914.46460,105263,3278.334,308056781.54270,0\n"
+)
 
 _M_HDR = ("create_time,symbol,sum_open_interest,sum_open_interest_value,"
           "count_toptrader_long_short_ratio,sum_toptrader_long_short_ratio,"
@@ -199,6 +223,93 @@ def test_checksum_que_bate_deixa_passar(monkeypatch):
     assert db.baixar_zip("data/qualquer.zip", usar_cache=False) == conteudo
 
 
+# ------------------------------------------------------------------ armadilha 3: header
+
+def test_kline_sem_header_recebe_as_colunas_canonicas():
+    """Ate 2021-12 o arquivo comeca direto no dado. Sem tratar, a primeira BARRA vira o
+    nome das colunas e o mes perde o candle de abertura em silencio."""
+    df = db.normalizar_klines(KLINES_SEM_HEADER)
+    assert list(df.columns) == db.COLUNAS_KLINES + ["datetime"]
+    assert len(df) == 2                        # as duas linhas sao dado, nenhuma e header
+    assert df["open"].iloc[0] == pytest.approx(11658.11)
+
+
+def test_kline_com_header_nao_le_o_cabecalho_como_barra():
+    df = db.normalizar_klines(KLINES_COM_HEADER)
+    assert list(df.columns) == db.COLUNAS_KLINES + ["datetime"]
+    assert len(df) == 2
+    assert df["open"].iloc[0] == pytest.approx(104544.60)
+
+
+def test_as_duas_epocas_normalizam_para_o_mesmo_conjunto_de_colunas():
+    """O criterio de aceite do [N-2], em memoria: 2020 (sem header) e 2025 (com header)
+    tem que sair identicos, senao concatenar os dois cria coluna pela metade."""
+    antigo = db.normalizar_klines(KLINES_SEM_HEADER)
+    novo = db.normalizar_klines(KLINES_COM_HEADER)
+    assert list(antigo.columns) == list(novo.columns)
+    assert "taker_buy_volume" in antigo.columns
+    assert pd.concat([antigo, novo]).notna().all().all()
+
+
+def test_taker_buy_volume_chega_com_o_valor_certo():
+    """E a coluna inteira do [N-2]: e ela que permite backtestar o portao de fluxo em
+    anos, contra os 10 dias que deram p=0,58."""
+    assert db.normalizar_klines(KLINES_SEM_HEADER)["taker_buy_volume"].iloc[0] \
+        == pytest.approx(6666.854)
+    assert db.normalizar_klines(KLINES_COM_HEADER)["taker_buy_volume"].iloc[0] \
+        == pytest.approx(1691.726)
+
+
+# ------------------------------------------------------------------ armadilha 4: unidade
+
+def test_spot_em_microssegundo_nao_vira_ano_57000():
+    """Armadilha 4. O spot trocou ms por us em 2025-01 sem mudar coluna nem header.
+    Com `unit="ms"` fixo o mesmo numero daria 56971-10-25 -- sem excecao e sem aviso."""
+    df = db.normalizar_klines(KLINES_SPOT_MICROSSEGUNDO)
+    assert df["datetime"].iloc[0] == pd.Timestamp("2025-01-01 00:00:00")
+
+
+def test_futures_em_milissegundo_continua_certo():
+    """A deteccao nao pode "consertar" quem ja estava certo."""
+    df = db.normalizar_klines(KLINES_COM_HEADER)
+    assert df["datetime"].iloc[0] == pd.Timestamp("2025-06-01 00:00:00")
+
+
+# ------------------------------------------------------------------ klines invalidos
+
+def test_kline_sem_coluna_essencial_falha_alto():
+    truncado = "1598918400000,11658.11,11675.00,11531.34,11618.27,15015.299\n"
+    with pytest.raises(ValueError, match="essenciais"):
+        db.normalizar_klines(truncado)
+
+
+def test_kline_com_colunas_demais_falha_alto():
+    with pytest.raises(ValueError):
+        db.normalizar_klines("1," * 13 + "1\n")
+
+
+def test_kline_vazio_falha_alto():
+    with pytest.raises(ValueError):
+        db.normalizar_klines("   ")
+
+
+def test_chave_klines_por_mercado():
+    assert db.chave_klines("BTCUSDT", "1h", "2024-01", "futures_um") == (
+        "data/futures/um/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2024-01.zip")
+    assert db.chave_klines("BTCUSDT", "1h", "2024-01", "spot") == (
+        "data/spot/monthly/klines/BTCUSDT/1h/BTCUSDT-1h-2024-01.zip")
+
+
+def test_mercado_desconhecido_falha_alto():
+    with pytest.raises(ValueError):
+        db.chave_klines("BTCUSDT", "1h", "2024-01", "futuros")
+
+
+def test_meses_e_inclusivo_nas_duas_pontas():
+    assert db.meses("2024-11", "2025-01") == ["2024-11", "2024-12", "2025-01"]
+    assert db.meses("2024-01", "2024-01") == ["2024-01"]
+
+
 # ------------------------------------------------------------------ concatenacao
 
 def test_metrics_concatena_dias_em_ordem(monkeypatch):
@@ -242,3 +353,24 @@ def test_tudo_ausente_devolve_dataframe_vazio_e_nao_None(monkeypatch):
     df = db.baixar_metrics("BTCUSDT", "2024-01-15", "2024-01-15")
     assert len(df) == 0
     assert df.attrs["ausentes"] == ["2024-01-15"]
+
+
+def test_meses_de_klines_concatenados_saem_ordenados_e_sem_repeticao(monkeypatch):
+    """Cada mes vem ordenado, mas a CONCATENACAO tambem precisa vir -- e o limite de mes e
+    onde a sobreposicao aparece."""
+    por_mes = {
+        "2020-09": KLINES_SEM_HEADER,
+        "2020-10": KLINES_SEM_HEADER + KLINES_SEM_HEADER,   # repete o mesmo instante
+    }
+
+    def falso(chave, usar_cache=True, verificar_hash=True):
+        for mes, texto in por_mes.items():
+            if mes in chave:
+                return _zipar("k.csv", texto)
+        return None
+    monkeypatch.setattr(db, "baixar_zip", falso)
+
+    df = db.baixar_klines("BTCUSDT", "1h", "2020-09", "2020-10")
+    assert db.estritamente_crescente(df["datetime"])
+    assert len(df) == 2
+    assert df.attrs["ausentes"] == []
