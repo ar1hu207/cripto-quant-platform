@@ -24,7 +24,9 @@ smoke test, nao calibracao -- um bug que faca V* grande demais produz p~1 sempre
 louvor. O que define teste calibrado e UNIFORMIDADE dos p-valores, e e isso que
 `test_reality_check_calibrado` afirma.
 """
+import json
 import math
+import os
 
 import numpy as np
 import pandas as pd
@@ -1245,3 +1247,482 @@ def test_a_politica_nao_muda_a_paridade_de_entrada():
     for pol in B.POLITICAS:
         assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fraco,
                                 saida=pol, adx_min=25) == []
+
+
+# ============================ [N-6] golden file ============================
+def test_golden_reproduz_a_saida_congelada_bit_a_bit():
+    """[N-6 / F2] O teste que a `REVISAO-ITEM1.md` §E chamou de "o mais importante da lista e
+    o unico ausente".
+
+    Todo o resto deste arquivo prova PECAS: o bootstrap de bloco, o MDS, a purga, o FDR. Uma
+    regua pode ter todas as pecas certas e mesmo assim mudar o veredito porque a ordem de
+    duas delas trocou, ou porque um `round()` virou outro. Este e o unico teste que roda a
+    regua PONTA A PONTA sobre uma entrada congelada e exige o mesmo numero de volta.
+
+    Se ele quebrar, a pergunta NAO e "como faco ele passar" -- e "que numero mudou, e eu
+    queria que mudasse?". Regravar (`python -m pesquisa.validacao golden --gravar`) e ato
+    deliberado, e o commit que regrava tem de dizer por que.
+    """
+    ok, difs = V.conferir_golden()
+    assert ok, "a regua mudou o numero congelado:\n  " + "\n  ".join(difs)
+
+
+def test_golden_congela_NUMERO_e_nao_a_frase_do_veredito():
+    """A versao-sintoma deste item seria gravar o texto do veredito e chamar de teste.
+
+    "SEM_EVIDENCIA" continua saindo igual mesmo que o Sharpe anualizado va de -1,1 para +1,4:
+    a classe do veredito e uma de tres strings, e tres strings nao detectam regressao. O que
+    o golden guarda tem de ser a serie numerica -- e e isso que este teste afirma, para que
+    ninguem "simplifique" o snapshot depois.
+    """
+    snap = json.load(open(V.GOLDEN_SAIDA, encoding="utf-8"))["snapshot"]
+    assert len(snap["serie_oos"]) > 500                      # a serie diaria OOS inteira
+    assert snap["bloco_b"]["T"] == len(snap["serie_oos"])
+    for chave in ("reality_check", "spa", "dsr_melhor_is", "p_melhor_sozinha"):
+        assert chave in snap["bloco_a"], chave
+    for chave in ("ic_bloco", "ic_iid", "psr", "sharpe_anualizado",
+                  "ic_sharpe_anualizado", "mds", "acf", "concentracao"):
+        assert chave in snap["bloco_b"], chave
+    assert set(snap["digest"]) == {"oos", "por_cfg", "matriz_is", "serie_naive"}
+    # e a PROSA fica de fora, de proposito: golden que quebra por virgula e golden regravado
+    # sem ler.
+    assert "veredito_motivo" not in snap and "motivo" not in snap.get("veredito_numeros", {})
+
+
+def test_golden_exercita_o_caminho_inteiro_e_nao_um_atalho():
+    """Golden de painel curto congelaria o portao de poder, nao o teste de edge.
+
+    O painel foi construido para que TODOS os portoes sejam atravessados e o veredito seja de
+    fato EMITIDO: MDS abaixo do limite (ha poder), controle nulo calibrado (o portao do [Q-7]
+    nao bloqueia), purga ATIVA (ha `ts_saida`), e mais de uma config escolhida ao longo dos
+    folds (a selecao walk-forward esta mesmo selecionando). Se algum desses deixar de valer,
+    o golden passa a congelar menos regua do que aparenta.
+    """
+    snap = json.load(open(V.GOLDEN_SAIDA, encoding="utf-8"))["snapshot"]
+    assert snap["veredito_classe"] == "SEM_EVIDENCIA"        # veredito EMITIDO, nao INCONCLUSIVO
+    assert snap["bloco_b"]["mds"] <= V.MDS_LIMITE
+    assert snap["bloco_b"]["T_efetivo"] >= V.T_EFETIVO_MINIMO
+    assert snap["calibracao"]["classe"] == "CALIBRADO"
+    assert snap["purga_ativa"] is True
+    escolhidas = {tuple(f[1]) for f in snap["por_fold"]}
+    assert len(escolhidas) > 1, "os folds escolheram sempre a mesma config"
+
+
+def test_golden_PEGA_uma_mudanca_de_numero(monkeypatch):
+    """Golden que passa nao prova nada; golden que REPROVA uma mutacao prova.
+
+    A mutacao aqui e a seed do `PADRAO` -- ela nao muda a estrategia nem os dados, so o
+    sorteio de todos os bootstraps. Um golden que so olhasse a classe do veredito passaria
+    (continua `SEM_EVIDENCIA`); este tem de reprovar, porque os p-valores mudam.
+
+    Foi escolhida uma mutacao que comprovadamente move o numero: numa auditoria anterior uma
+    mutacao "obvia" nao quebrou nada porque uma guarda acima a tornava equivalente.
+    """
+    monkeypatch.setitem(V.PADRAO, "seed", V.PADRAO["seed"] + 1)
+    ok, difs = V.conferir_golden()
+    assert not ok, "o golden NAO pegou uma troca de seed -- ele nao esta medindo nada"
+    caminhos = " ".join(difs)
+    assert "reality_check" in caminhos or "calibracao" in caminhos or "ic_bloco" in caminhos
+
+
+def test_golden_PEGA_uma_mudanca_de_constante_do_PADRAO(monkeypatch):
+    """A segunda mutacao, num eixo diferente: `block`, o comprimento do bloco do bootstrap.
+
+    Seed troca o sorteio; `block` troca a ESTATISTICA (quanto de autocorrelacao o IC
+    preserva). Se o golden so pegasse a seed, ele estaria travando o gerador de numeros
+    aleatorios e nao a regua.
+    """
+    monkeypatch.setitem(V.PADRAO, "block", 20)
+    ok, difs = V.conferir_golden()
+    assert not ok, "o golden NAO pegou block=5 -> 20"
+    assert any("ic_bloco" in d or "block" in d for d in difs), difs
+
+
+def test_golden_le_a_entrada_do_disco_e_nao_regera_por_seed(tmp_path):
+    """A entrada e congelada em ARQUIVO de proposito.
+
+    Um painel regerado por `default_rng(seed)` faria o golden depender do fluxo de numeros do
+    numpy continuar identico para sempre -- e ai o teste passaria a medir o numpy junto com a
+    regua. Prova: mexer no arquivo muda o resultado, ou seja, e ele que manda.
+    """
+    por_cfg, meta = V.carregar_golden_entrada()
+    assert meta["n_trials"] == V.GOLDEN_N_TRIALS and len(por_cfg) == len(V.GOLDEN_CFGS)
+    d = json.load(open(V.GOLDEN_ENTRADA, encoding="utf-8"))
+    d["painel"][0]["trades"][0]["pnl"] += 1.0                # um centavo em um trade
+    alt = tmp_path / "entrada.json"
+    alt.write_text(json.dumps(d), encoding="utf-8")
+    ok, _ = V.conferir_golden(caminho_entrada=str(alt))
+    assert not ok, "trocar a entrada nao mudou o resultado -- o golden nao a esta lendo"
+
+
+# ============================ [N-5] benchmark no Reality Check ============================
+def _matriz_drift(mu_bench, mu_extra, T=500, seed=0, k=3):
+    """Benchmark com drift `mu_bench` e K configs que sao o benchmark + `mu_extra` + ruido.
+
+    `mu_extra=0` e a estrategia que NAO tem alfa nenhum: ela e o benchmark com ruido em cima.
+    Contra ZERO ela parece otima; contra o proprio benchmark, nao e nada. E a demonstracao
+    literal do que a `REVISAO-ITEM1.md` §A.1 chamou de "estava comprado num bull".
+    """
+    rng = np.random.default_rng(seed)
+    bench = rng.normal(mu_bench, 3.0, size=T)
+    matriz = {(50 + i, 22): (bench + rng.normal(mu_extra, 1.0, size=T)).tolist()
+              for i in range(k)}
+    return matriz, bench.tolist()
+
+
+def test_benchmark_none_reproduz_o_numero_de_hoje_bit_a_bit():
+    """[N-5] O default nao pode mexer em nada. `None` NAO subtrai um vetor de zeros -- ele nao
+    subtrai coisa nenhuma --, e a prova de que isso bastou e o golden do [N-6], que continuou
+    verde depois deste card. Aqui fica a versao unitaria da mesma afirmacao.
+    """
+    matriz, _ = _matriz_drift(0.0, 0.0, seed=1)
+    assert V.reality_check(matriz) == V.reality_check(matriz, benchmark=None)
+
+
+def test_benchmark_de_zeros_e_identico_a_benchmark_none():
+    """Subtrair zero e a identidade -- se nao fosse, a compatibilidade seria acidental."""
+    matriz, _ = _matriz_drift(0.0, 0.0, seed=2)
+    T = len(next(iter(matriz.values())))
+    assert V.reality_check(matriz, benchmark=[0.0] * T) == V.reality_check(matriz)
+
+
+def test_estrategia_IDENTICA_ao_benchmark_da_diferenca_nula_e_p_maximo():
+    """Caso construido com resposta CONHECIDA: se a estrategia E o benchmark, `f_k,t` e zero
+    em todo t. Entao V = 0, V*_b = 0, e sob a regra `p = (1+#{>=})/(B+1)` com empate em toda
+    replica o p-valor tem de ser exatamente 1,0 -- nenhuma evidencia de superar a referencia.
+    """
+    _, bench = _matriz_drift(1.0, 0.0, seed=3)
+    matriz = {(50, 22): list(bench), (55, 22): list(bench)}
+    rc = V.reality_check(matriz, benchmark=bench)
+    assert rc["V"] == 0.0
+    assert rc["p_valor"] == 1.0
+
+
+def test_o_benchmark_e_o_que_separa_ALFA_de_BETA():
+    """O item bloqueante da V2, num teste so.
+
+    A mesma familia de configs, o mesmo dado: contra ZERO ela tem "edge" com folga; contra o
+    benchmark de que ela e uma copia ruidosa, nao tem nada. Se o p-valor nao mudasse, o
+    parametro seria decorativo.
+    """
+    matriz, bench = _matriz_drift(mu_bench=1.0, mu_extra=0.0, seed=4)
+    contra_zero = V.reality_check(matriz)["p_valor"]
+    contra_bench = V.reality_check(matriz, benchmark=bench)["p_valor"]
+    assert contra_zero <= 0.05, contra_zero          # "ganhou do zero"
+    assert contra_bench > 0.20, contra_bench         # "nao ganhou do benchmark"
+
+
+def test_alfa_de_verdade_sobrevive_ao_benchmark():
+    """O espelho do teste acima: quem tem alfa REAL continua passando depois de descontado o
+    beta. Sem este par, o teste anterior seria compativel com um benchmark que simplesmente
+    mata tudo."""
+    matriz, bench = _matriz_drift(mu_bench=1.0, mu_extra=0.6, seed=5)
+    assert V.reality_check(matriz, benchmark=bench)["p_valor"] <= 0.05
+
+
+def test_benchmark_de_tamanho_errado_e_erro_e_nao_corte_silencioso():
+    """Alinhar por corte seria comparar dias diferentes e nao avisar."""
+    matriz, bench = _matriz_drift(0.0, 0.0, T=300, seed=6)
+    with pytest.raises(ValueError, match="benchmark"):
+        V.reality_check(matriz, benchmark=bench[:200])
+
+
+# ============================ [N-5] exposicao liquida ============================
+def test_exposicao_liquida_e_ponderada_por_TEMPO_e_nao_por_contagem():
+    """Caso com resposta conhecida: 3 dias comprado + 1 dia vendido -> (3-1)/4 = +0,5.
+
+    Contando CABECAS o resultado seria 0,0 (um long e um short), que e a resposta errada e a
+    mais confortavel -- "sou neutro". A ponderacao por tempo e o que impede isso.
+    """
+    D = V.DIA_MS
+    trades = [{"ts": 0, "ts_saida": 3 * D, "direcao": 1, "pnl": 0.0},
+              {"ts": 3 * D, "ts_saida": 4 * D, "direcao": -1, "pnl": 0.0}]
+    assert V.exposicao_liquida(trades)["liquida"] == 0.5
+
+
+def test_exposicao_liquida_nos_extremos():
+    """+1 = comprado o tempo todo; -1 = vendido o tempo todo; 0 = simetrica no tempo."""
+    D = V.DIA_MS
+    so_long = [{"ts": i * D, "ts_saida": (i + 1) * D, "direcao": 1} for i in range(10)]
+    so_short = [{**t, "direcao": -1} for t in so_long]
+    assert V.exposicao_liquida(so_long)["liquida"] == 1.0
+    assert V.exposicao_liquida(so_short)["liquida"] == -1.0
+    assert V.exposicao_liquida(so_long[:5] + so_short[5:])["liquida"] == 0.0
+
+
+def test_exposicao_liquida_aceita_o_apelido_d_do_motor():
+    """`backtest_plataforma` chama o lado de `d` internamente; `scoring` chama de `direcao`."""
+    D = V.DIA_MS
+    assert V.exposicao_liquida([{"ts": 0, "ts_saida": D, "d": -1}])["liquida"] == -1.0
+
+
+def test_sem_direcao_a_exposicao_e_None_COM_MOTIVO_e_nunca_zero():
+    """Zero significa "direcionalmente neutra", que e uma afirmacao FORTE.
+
+    Emiti-la por falta de campo seria inventar a resposta mais conveniente que existe -- e
+    justamente a que faria o benchmark = 0 parecer justificado. O motivo tem de nomear o campo
+    que falta, senao quem le nao sabe o que consertar.
+    """
+    D = V.DIA_MS
+    ex = V.exposicao_liquida([{"ts": 0, "ts_saida": D, "pnl": 1.0}])
+    assert ex["liquida"] is None
+    assert "direcao" in ex["motivo"]
+    assert ex["cobertura"] is not None          # o BRUTO continua saindo: so depende do tempo
+
+
+def test_sem_ts_saida_nao_ha_ponderacao_por_tempo():
+    ex = V.exposicao_liquida([{"ts": 0, "pnl": 1.0, "direcao": 1}])
+    assert ex["liquida"] is None and "ts_saida" in ex["motivo"]
+
+
+def _res_com_direcao(n_dias=900, seed=21, cfgs=((50, 22), (55, 22))):
+    """Um walk-forward cujos trades trazem `direcao` -- 70% long, para dar exposicao != 0."""
+    D = V.DIA_MS
+    por_cfg = {}
+    for k, cfg in enumerate(cfgs):
+        rng = np.random.default_rng(seed + k)
+        tr = []
+        for i in range(n_dias):
+            d = 1 if rng.random() < 0.7 else -1
+            ts = int(T0 + i * D)
+            tr.append({"ts": ts, "ts_saida": ts + D, "direcao": d,
+                       "pnl": float(rng.normal(0.0, 10.0))})
+        por_cfg[cfg] = tr
+    return V.walk_forward(gerador_constante(por_cfg), list(cfgs), n_trials=100,
+                          rotulo="com direcao")
+
+
+def test_relatorio_imprime_a_exposicao_liquida_COM_NUMERO(capsys):
+    """[N-5] O criterio de aceite: a linha existe e traz numero, nao promessa."""
+    res = _res_com_direcao()
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "exposicao LIQUIDA ponderada por tempo em posicao" in saida
+    assert "NAO COMPUTAVEL" not in saida
+    assert "tempo em mercado" in saida
+    esperado = V.exposicao_liquida(res["oos"], res["grade_oos"])["liquida"]
+    assert esperado is not None and abs(esperado) > 0.2          # long-biased, como construido
+    assert f"{esperado:+.4f}" in saida
+
+
+def test_relatorio_declara_quando_a_exposicao_NAO_e_computavel(capsys):
+    """A rodada REAL cai neste ramo, e ele tem de falar alto.
+
+    O gerador de hoje grava `ts_saida` mas NAO grava `direcao` -- entao o relatorio de
+    producao imprime NAO COMPUTAVEL, nomeia o arquivo que precisa mudar, e carrega o portao
+    junto: sem exposicao liquida, veredito POSITIVO nao se emite. Omitir a linha, ou imprimir
+    0,0 e seguir a vida, seria a versao-sintoma deste item -- e a mais perigosa, porque 0,0 e
+    exatamente o numero que faria o `benchmark = 0` do Reality Check parecer justificado.
+    """
+    res = _res_com_direcao()
+    for t in res["oos"]:                              # a forma exata do trade de hoje
+        t.pop("direcao")
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "exposicao LIQUIDA ponderada por tempo em posicao: NAO COMPUTAVEL" in saida
+    assert "veredito POSITIVO nao se emite" in saida
+    assert "backtest_plataforma" in saida
+    assert "tempo em mercado" in saida                # o BRUTO continua saindo, com numero
+
+
+def test_relatorio_tambem_declara_quando_falta_ts_saida(capsys):
+    """O outro ramo: sem `ts_saida` nao ha nem duracao, entao nem o bruto sai. Duas faltas
+    diferentes, dois motivos diferentes -- um motivo generico mandaria consertar o campo
+    errado."""
+    V.relatorio(_res_sintetico(mu=0.0, seed=9))
+    saida = capsys.readouterr().out
+    assert "exposicao LIQUIDA ponderada por tempo em posicao: NAO COMPUTAVEL" in saida
+    assert "ts_saida" in saida
+    assert "tempo em mercado" not in saida
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "[N-5] o buraco que sobra: `pesquisa/backtest_plataforma.py` nao grava o lado da posicao "
+    "no `trades.append`, entao a exposicao liquida da rodada REAL sai NAO COMPUTAVEL. "
+    "Arquivo fora do territorio T-REGUA (Onda A) -- falta uma chave la"))
+def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
+    """XFAIL estrito, que nesta casa e card em aberto e nao teste quebrado (`CLAUDE.md` §6).
+
+    O dia em que o motor gravar `direcao` no trade, este teste vira XPASS e QUEBRA a suite de
+    proposito -- obrigando a promover a asercao em vez de deixar o buraco se fechar em
+    silencio, sem ninguem notar que o portao do veredito POSITIVO caiu.
+
+    Escrever isso como xfail em vez de so mencionar no relatorio e a diferenca entre uma
+    divida registrada e uma divida contada uma vez.
+    """
+    precos = [100.0] * 70
+    lows = list(precos)
+    lows[65] = 90.0                                    # fura o stop de 3% no candle 65
+    trades = B.backtest_ativo("X/USDT", 0, 100, 10, df=df_sintetico(precos, lows=lows),
+                              sinal_fn=sinal_em([60]))
+    assert trades, "o motor nao gerou trade -- o teste nao esta medindo o que promete"
+    assert V.exposicao_liquida(trades)["liquida"] is not None
+
+
+# ============================ [N-9] log append-only de tentativas ========================
+def _grid3():
+    return [(50, 22), (55, 22), (65, 25)]
+
+
+def _resumo():
+    return {"veredito": "SEM_EVIDENCIA", "sharpe_anualizado": 0.1}
+
+
+def test_o_log_e_APPEND_only_e_a_linha_antiga_nao_muda(tmp_path):
+    """[N-9/F10] Append-only nao e detalhe de implementacao: e a propriedade inteira.
+
+    Um JSON unico re-serializado a cada rodada perde tentativa por corrida de escrita e deixa
+    "limpar" o historico sem rastro. O registro existe justamente para ser inconveniente de
+    encolher, e o teste afirma isso: a primeira linha tem de sobreviver byte a byte a segunda
+    escrita.
+    """
+    alvo = str(tmp_path / "t.jsonl")
+    V.registrar_tentativa("primeira", _grid3(), 100, _resumo(), caminho=alvo)
+    primeira = open(alvo, encoding="utf-8").readlines()[0]
+    V.registrar_tentativa("segunda", _grid3(), 100, _resumo(), caminho=alvo)
+    linhas = open(alvo, encoding="utf-8").readlines()
+    assert len(linhas) == 2
+    assert linhas[0] == primeira
+    assert json.loads(linhas[0])["rotulo"] == "primeira"
+    assert json.loads(linhas[1])["rotulo"] == "segunda"
+
+
+def test_o_registro_traz_o_que_o_F10_pediu(tmp_path):
+    """"hash do grid + timestamp + seed + resultado" -- o parecer foi literal."""
+    alvo = str(tmp_path / "t.jsonl")
+    reg = V.registrar_tentativa("r", _grid3(), 100, _resumo(), caminho=alvo)
+    for chave in ("ts", "grid_hash", "seed", "resultado", "n_cfgs", "n_trials_declarado",
+                  "selecoes", "padrao_hash", "criterio", "n_folds"):
+        assert chave in reg, chave
+    assert reg["seed"] == V.PADRAO["seed"]
+    assert reg["selecoes"] == len(_grid3()) * V.N_FOLDS
+    assert len(reg["grid_hash"]) == 64                       # sha256 em hex
+
+
+def test_grids_iguais_dao_o_MESMO_hash_e_grids_diferentes_nao(tmp_path):
+    """Sem isso o log nao distingue "rodei de novo o mesmo grid" de "abri um grid novo" -- e
+    essa e a diferenca entre repetir uma tentativa e gastar outra."""
+    alvo = str(tmp_path / "t.jsonl")
+    a = V.registrar_tentativa("a", _grid3(), 100, _resumo(), caminho=alvo)
+    b = V.registrar_tentativa("b", list(_grid3()), 100, _resumo(), caminho=alvo)
+    c = V.registrar_tentativa("c", _grid3() + [(70, 30)], 100, _resumo(), caminho=alvo)
+    assert a["grid_hash"] == b["grid_hash"]
+    assert a["grid_hash"] != c["grid_hash"]
+
+
+def test_contar_tentativas_soma_as_SELECOES_e_nao_so_as_linhas(tmp_path):
+    """O numero que um dia substitui o `N_TRIALS` contado a mao nao e "quantas vezes rodei" --
+    e quantas ESCOLHAS de parametro o procedimento fez: `n_cfgs x N_FOLDS` por varredura."""
+    alvo = str(tmp_path / "t.jsonl")
+    for _ in range(4):
+        V.registrar_tentativa("r", _grid3(), 100, _resumo(), caminho=alvo)
+    c = V.contar_tentativas(alvo)
+    assert c["varreduras"] == 4
+    assert c["selecoes"] == 4 * len(_grid3()) * V.N_FOLDS
+    assert c["grids_distintos"] == 1
+
+
+def test_linha_corrompida_e_CONTADA_e_nao_engolida(tmp_path):
+    """Engolir a linha ilegivel seria mentir PARA BAIXO justamente no numero que este log
+    existe para dar -- e para baixo em `n_trials` significa DSR para cima, que e a direcao
+    confortavel."""
+    alvo = tmp_path / "t.jsonl"
+    V.registrar_tentativa("boa", _grid3(), 100, _resumo(), caminho=str(alvo))
+    with open(alvo, "a", encoding="utf-8") as f:
+        f.write("{isto nao e json\n\n")
+    c = V.contar_tentativas(str(alvo))
+    assert c["varreduras"] == 1 and c["linhas_ilegiveis"] == 1
+
+
+def test_log_que_nao_pode_escrever_NAO_derruba_a_varredura(tmp_path, monkeypatch):
+    """Um log que derruba a varredura que ele veio medir e pior do que nao ter log."""
+    def explode(*a, **k):
+        raise OSError("disco somente leitura")
+    monkeypatch.setattr(V.os, "makedirs", explode)
+    assert V.registrar_tentativa("r", _grid3(), 100, _resumo(),
+                                 caminho=str(tmp_path / "t.jsonl")) is None
+
+
+def test_o_pytest_NAO_escreve_no_log_de_verdade():
+    """Um painel sintetico de 3 configs nao e tentativa de data-snooping contra o mercado.
+
+    Deixar a suite escrever encheria o contador de ruido e o numero deixaria de significar o
+    que promete. A guarda e esta, e ela esta ligada agora mesmo -- este teste roda sob pytest.
+    """
+    assert V._deve_registrar() is False
+    antes = V.contar_tentativas()["varreduras"]
+    _res_sintetico(mu=0.0, seed=31, n_dias=300)
+    assert V.contar_tentativas()["varreduras"] == antes
+
+
+def test_o_runner_escreve_UMA_linha_por_varredura(tmp_path, monkeypatch):
+    """A outra metade: fora do pytest, `walk_forward` -- o unico ponto por onde TODA varredura
+    passa -- grava sozinho. Sem isso o log dependeria de alguem lembrar de chamar."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    alvo = str(tmp_path / "t.jsonl")
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", alvo)
+    assert V._deve_registrar() is True
+    _res_sintetico(mu=0.0, seed=32, n_dias=300)
+    c = V.contar_tentativas(alvo)
+    assert c["varreduras"] == 1
+    reg = V.ler_tentativas(alvo)[0][0]
+    assert reg["resultado"]["veredito"] in ("SEM_EVIDENCIA", "INCONCLUSIVO", "EDGE")
+    assert reg["resultado"]["rc_p"] is not None
+
+
+def test_a_varredura_que_FALHOU_tambem_entra_no_log(tmp_path, monkeypatch):
+    """Registrar so o que deu certo e vies de publicacao aplicado a si mesmo.
+
+    E ele empurra `n_trials` para BAIXO, ou seja, o DSR para cima -- a direcao confortavel.
+    Poucos trades, veredito INCONCLUSIVO: voce olhou para o dado do mesmo jeito.
+    """
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    alvo = str(tmp_path / "t.jsonl")
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", alvo)
+    por_cfg = {(50, 22): trades_diarios([1.0] * 5)}
+    r = V.walk_forward(gerador_constante(por_cfg), [(50, 22)], n_trials=100, rotulo="curta")
+    assert "erro" in r
+    regs, _ = V.ler_tentativas(alvo)
+    assert len(regs) == 1 and regs[0]["resultado"]["veredito"] == "INCONCLUSIVO"
+    assert "erro" in regs[0]["resultado"]
+
+
+def test_o_golden_NAO_conta_como_tentativa(tmp_path, monkeypatch):
+    """Conferir regressao sobre painel congelado nao gasta orcamento estatistico. Se contasse,
+    cada rodada de CI inflaria `n_trials` e o numero mediria ruido de suite."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    alvo = str(tmp_path / "t.jsonl")
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", alvo)
+    ok, _ = V.conferir_golden()
+    assert ok
+    assert V.contar_tentativas(alvo)["varreduras"] == 0
+    assert V.REGISTRAR_TENTATIVAS is True            # e a flag volta ao que era
+
+
+def test_o_registro_NAO_entra_no_resultado_e_por_isso_nao_quebra_o_golden(tmp_path, monkeypatch):
+    """O timestamp e a unica coisa irreproduzivel que este card introduz. Ele mora no arquivo,
+    nunca no dicionario que `walk_forward` devolve -- se morasse, o golden do [N-6] passaria a
+    falhar a cada segundo e a "solucao" seria tirar do golden o que ele veio congelar."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(V, "CAMINHO_TENTATIVAS", str(tmp_path / "t.jsonl"))
+    res = _res_sintetico(mu=0.0, seed=33, n_dias=300)
+    assert not any("tentativa" in k or "registro" in k for k in res)
+    assert "ts" not in res
+
+
+def test_relatorio_de_tentativas_diz_que_o_N_TRIALS_ainda_e_PISO(capsys, tmp_path):
+    """O log nao substitui o `N_TRIALS` hoje -- ele so conta desta maquina e so daqui pra
+    frente. Um relatorio que nao dissesse isso convidaria a trocar um piso honesto por uma
+    contagem que subestima todo o passado do projeto."""
+    alvo = str(tmp_path / "t.jsonl")
+    V.registrar_tentativa("r", _grid3(), 100, _resumo(), caminho=alvo)
+    V.relatorio_tentativas(alvo)
+    saida = capsys.readouterr().out
+    assert "PISO CONTADO" in saida and str(V.N_TRIALS) in saida
+    assert "desta maquina" in saida
+
+
+def test_log_inexistente_le_vazio_sem_quebrar(tmp_path):
+    """Primeira maquina, primeira rodada: o log ainda nao existe e isso nao e erro."""
+    assert V.ler_tentativas(str(tmp_path / "nao-existe.jsonl")) == ([], 0)
+    assert V.contar_tentativas(str(tmp_path / "nao-existe.jsonl"))["varreduras"] == 0

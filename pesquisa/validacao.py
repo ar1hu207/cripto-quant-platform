@@ -51,6 +51,9 @@ O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado
     liberdade). A variante roda em `sensibilidade()`, que imprime as duas lado a lado sempre
     -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
+import datetime
+import hashlib
+import json
 import math
 import os
 import sys
@@ -323,16 +326,28 @@ def bootstrap_ci(serie, n_boot=2000, modo="iid", eh_serie_temporal=False,
     return (round(float(lo), 4), round(float(hi), 4))
 
 
-def _boot_medias(matriz, n_boot, block, seed):
+def _boot_medias(matriz, n_boot, block, seed, benchmark=None):
     """Reamostragem compartilhada: um unico conjunto de indices por replica, aplicado a
     TODAS as configs. E o ponto critico do Reality Check -- indices por config destruiriam a
     correlacao cruzada entre elas e o quantil nulo sairia errado.
+
+    `benchmark` [N-5]: serie de referencia, do MESMO tamanho e na MESMA grade. O RC e definido
+    sobre performance RELATIVA (`f_k,t = pnl_k,t - pnl_benchmark,t`); subtrai-se antes de tudo,
+    e ai o resto do algoritmo nao muda uma linha. `None` NAO subtrai nada -- nem um vetor de
+    zeros -- para que o caminho de hoje continue bit a bit o de ontem.
 
     Devolve (cfgs, f, F_estrela) com F_estrela de forma (n_boot, n_cfgs).
     """
     cfgs = list(matriz.keys())
     M = np.asarray([matriz[c] for c in cfgs], dtype=float)      # (K, T)
     T = M.shape[1]
+    if benchmark is not None:
+        bm = np.asarray(benchmark, dtype=float)
+        if bm.shape != (T,):
+            raise ValueError(f"benchmark tem {bm.shape} e a matriz tem T={T} -- o RC compara "
+                             "series alinhadas na MESMA grade de periodos, nao alinhaveis "
+                             "por corte silencioso")
+        M = M - bm[None, :]
     rng = np.random.default_rng(seed)
     idx = block_bootstrap_idx(T, block=block, rng=rng, n_amostras=n_boot)   # (B, T)
     F = np.stack([M[k][idx].mean(axis=1) for k in range(M.shape[0])], axis=1)
@@ -349,15 +364,38 @@ def _p_bootstrap(cont, n_boot):
     return (1.0 + float(cont)) / (n_boot + 1.0)
 
 
-def reality_check(matriz, n_boot=2000, block=5, seed=42):
-    """White's Reality Check. H0: a MELHOR das N configs nao tem performance esperada > 0.
+def reality_check(matriz, n_boot=2000, block=5, seed=42, benchmark=None):
+    """White's Reality Check. H0 (composto): `max_k E[f_k] <= 0` -- NENHUMA config da familia
+    tem performance esperada positiva.
+
+    [A.1] O enunciado antigo desta docstring dizia "a MELHOR das N configs nao tem performance
+    esperada > 0", e convidava exatamente o erro que o teste existe para evitar: nao se
+    seleciona a melhor e depois se testa, testa-se a FAMILIA. O algoritmo sempre esteve certo;
+    a frase e que descrevia outro nulo.
 
     matriz: {config: serie de pnl por periodo} -- todas no MESMO grid e tamanho.
+
+    `benchmark` [N-5 / A.1]: serie de referencia na mesma grade, ou `None`. **Fixar benchmark
+    em zero e uma ESCOLHA, nao uma neutralidade** -- e numa estrategia direcional em cripto,
+    P&L positivo pode ser BETA. Com `None` o teste responde "ganhou do zero"; com uma serie,
+    responde "ganhou do benchmark", que e a diferenca entre ter alfa e ter estado comprado num
+    bull. Ver `exposicao_liquida()`: e ela que diz se a pergunta faz diferenca neste dado.
+
+    `None` continua sendo o default de proposito. Os vereditos negativos ja emitidos foram
+    contra zero e nao mudam: a estrategia e long-biased numa janela majoritariamente de alta e
+    MESMO ASSIM nao bateu o zero -- contra buy-and-hold iria pior, entao o "sem evidencia"
+    fica mais forte, nao mais fraco. O parametro e bloqueante para o veredito POSITIVO, que e
+    onde dinheiro real entraria.
     """
-    cfgs, f, F = _boot_medias(matriz, n_boot, block, seed)
+    cfgs, f, F = _boot_medias(matriz, n_boot, block, seed, benchmark)
     T = len(matriz[cfgs[0]])
     V = math.sqrt(T) * float(f.max())
     Vb = math.sqrt(T) * (F - f[None, :]).max(axis=1)
+    # O dicionario de volta NAO ganha uma chave "benchmark", e isso e deliberado: qualquer
+    # chave nova aqui quebraria o golden do [N-6] sem que numero nenhum tivesse mudado, e a
+    # unica saida seria regravar o golden -- exatamente o gesto que ele existe para tornar
+    # visivel. Quem chamou ja sabe o que passou; quem LE precisa da informacao, e ela esta no
+    # `relatorio()`, que e onde o parecer pediu que aparecesse.
     return {"p_valor": round(_p_bootstrap(int((Vb >= V).sum()), n_boot), 4),
             "melhor_cfg": cfgs[int(f.argmax())], "V": round(V, 4), "n_cfgs": len(cfgs)}
 
@@ -678,6 +716,70 @@ def controle_nulo_direto(matriz, M=M_CONTROLE_NULO, seed=42, alfa=0.05,
     return fora
 
 
+
+def exposicao_liquida(trades, grade=None):
+    """[N-5 / A.1] Exposicao LIQUIDA ponderada por TEMPO EM POSICAO. E a diferenca entre
+    "tem alfa" e "estava comprado num bull".
+
+    O Reality Check roda hoje contra benchmark = 0, e o parecer foi explicito: **isso e uma
+    escolha, nao uma neutralidade**. Numa estrategia direcional em cripto, P&L positivo pode
+    ser simplesmente beta. O numero que responde essa pergunta sem precisar de um benchmark
+    escolhido e este: se a exposicao liquida for ~+1, a estrategia esteve comprada o tempo
+    todo e o P&L dela e indistinguivel de buy-and-hold ate que alguem prove o contrario; se
+    for ~0, ela e direcionalmente neutra e o zero e um benchmark defensavel.
+
+    Ponderada por TEMPO em posicao, e nao por contagem de trades, porque um short de tres dias
+    e o triplo de exposicao de um short de um dia -- contar cabecas trata os dois igual e e a
+    forma mais facil de o numero mentir para o lado confortavel.
+
+        liquida = sum(direcao_i * duracao_i) / sum(duracao_i)      em [-1, +1]
+
+    Campos que o trade precisa trazer: `ts` e `ts_saida` (para a duracao) e `direcao` -- ou
+    `d`, que e como o motor a chama internamente -- em {+1, -1}. Faltando `direcao`, a funcao
+    devolve `liquida=None` COM O MOTIVO, e nunca 0.0: zero e "direcionalmente neutra", que e
+    uma afirmacao forte, e emiti-la por falta de dado seria inventar a resposta mais
+    conveniente que existe. O bruto (`cobertura`, `posicoes_medias`) continua saindo, porque
+    ele so depende do tempo.
+    """
+    if not trades:
+        return {"n": 0, "liquida": None, "cobertura": None, "posicoes_medias": None,
+                "dias_em_posicao": 0, "motivo": "nenhum trade"}
+    if not all("ts_saida" in t for t in trades):
+        return {"n": len(trades), "liquida": None, "cobertura": None,
+                "posicoes_medias": None, "dias_em_posicao": 0,
+                "motivo": "os trades nao trazem `ts_saida` -- sem duracao nao ha ponderacao "
+                          "por tempo em posicao"}
+
+    duracoes = [max(int(t["ts_saida"]) - int(t["ts"]), 0) for t in trades]
+    total = float(sum(duracoes))
+    dias = set()
+    for t in trades:
+        for d in range(int(t["ts"]) // DIA_MS, int(t["ts_saida"]) // DIA_MS + 1):
+            dias.add(d)
+    if grade:
+        dias &= set(grade)
+        janela = len(grade)
+    else:
+        janela = (max(int(t["ts_saida"]) for t in trades) // DIA_MS
+                  - min(int(t["ts"]) for t in trades) // DIA_MS + 1)
+    fora = {"n": len(trades), "dias_em_posicao": len(dias),
+            "cobertura": round(len(dias) / janela, 4) if janela else None,
+            "posicoes_medias": round(total / (janela * DIA_MS), 4) if janela else None,
+            "motivo": ""}
+
+    direcoes = [t.get("direcao", t.get("d")) for t in trades]
+    if any(d not in (1, -1) for d in direcoes):
+        fora["liquida"] = None
+        fora["motivo"] = ("os trades nao trazem `direcao` (nem `d`) em {+1,-1} -- "
+                          "`pesquisa/backtest_plataforma.py` grava conv/pnl/motivo/ts/ts_saida "
+                          "e joga fora o lado da posicao no `trades.append`")
+    elif total <= 0:
+        fora["liquida"] = None
+        fora["motivo"] = "duracao total zero -- nada a ponderar"
+    else:
+        fora["liquida"] = round(sum(d * u for d, u in zip(direcoes, duracoes)) / total, 4)
+    return fora
+
 def mds_sharpe(T, poder=0.80, alfa=0.05, ppa=PPA):
     """Sharpe ANUALIZADO minimo detectavel com `poder` a `alfa` unilateral, dado T periodos.
 
@@ -838,6 +940,145 @@ def _nucleo(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste_ms
             "cfgs": list(por_cfg.keys()), "block": block, "n_boot": n_boot, "seed": seed}
 
 
+# ============================ [N-9 / F10] O LOG DE TENTATIVAS ============================
+#
+# `n_trials` entra no Deflated Sharpe, logo entra no VEREDITO. E ele e hoje um PISO CONTADO A
+# MAO: alguem abriu `tune.py`, `sweep.py`, `experimentos.py` e os `validar_*` e somou os grids
+# (ver o comentario do `N_TRIALS`). Contagem a mao envelhece no dia seguinte e nao tem como ser
+# auditada -- ninguem consegue provar que a proxima varredura foi somada.
+#
+# A `REVISAO-ITEM1.md` F10 prescreveu a correcao PARA FRENTE, e disse que ela "tem mais valor
+# cientifico que o Reality Check inteiro": um JSONL append-only escrito pelo PROPRIO runner, com
+# hash do grid, timestamp, seed e resultado, em toda varredura. Daqui a um ano `n_trials` deixa
+# de ser estimativa e passa a ser medida.
+#
+# Tres decisoes que nao se deduzem do codigo:
+#
+#   * **Append-only, uma linha por varredura, nunca reescrita.** Um JSON unico que se
+#     re-serializa a cada rodada permite perder tentativa por corrida de escrita, e permite
+#     "limpar" o historico sem deixar rastro. O ponto do registro e justamente ser
+#     inconveniente de encolher.
+#   * **A varredura que FALHOU tambem entra.** Poucos trades, veredito INCONCLUSIVO, erro no
+#     meio: voce olhou para o dado do mesmo jeito. Registrar so o que deu certo e o vies de
+#     publicacao aplicado a si mesmo, e ele empurra `n_trials` para baixo -- ou seja, empurra o
+#     DSR para cima, que e a direcao confortavel.
+#   * **Teste e golden NAO contam.** Um painel sintetico de 3 configs nao e uma tentativa de
+#     data-snooping contra o mercado; deixar o pytest escrever aqui encheria o contador de ruido
+#     e o numero deixaria de significar o que promete.
+#
+# O arquivo NAO e versionado (mora no `dados_cache/`, ignorado). Isso e limitacao declarada, nao
+# descuido: um log append-only versionado gera conflito em toda rodada e a contagem passa a ser
+# a de quem pushou por ultimo. A consequencia -- ele conta as varreduras DESTA maquina -- esta
+# no relatorio do card, para quem for decidir onde o registro definitivo deve morar.
+#
+#     python -m pesquisa.validacao tentativas        # le o log e conta
+
+CAMINHO_TENTATIVAS = os.environ.get(
+    "REGUA_TENTATIVAS",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "tentativas.jsonl"))
+
+REGISTRAR_TENTATIVAS = True     # desligado sob pytest e dentro do golden -- ver a secao acima
+
+
+def _deve_registrar():
+    return REGISTRAR_TENTATIVAS and "PYTEST_CURRENT_TEST" not in os.environ
+
+
+def registrar_tentativa(rotulo, grid, n_trials, resultado, caminho=None):
+    """Acrescenta UMA linha ao log append-only. Devolve o registro, ou None se nao gravou.
+
+    Nunca levanta: um log que derruba a varredura que ele veio medir seria pior que nao ter
+    log. Falha de escrita vira `None` e a regua segue.
+    """
+    reg = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),   # naive, SP
+           "rotulo": rotulo,
+           "n_cfgs": len(grid),
+           "grid_hash": _digest(grid),
+           "padrao_hash": _digest(PADRAO),
+           "seed": PADRAO["seed"],
+           "criterio": PADRAO["criterio"],
+           "n_folds": N_FOLDS,
+           "n_trials_declarado": n_trials,
+           # o que a varredura de fato consumiu de orcamento estatistico: cada fold escolhe
+           # uma config entre `n_cfgs`, e sao `N_FOLDS` escolhas.
+           "selecoes": len(grid) * N_FOLDS,
+           "resultado": resultado}
+    try:
+        alvo = caminho or CAMINHO_TENTATIVAS
+        os.makedirs(os.path.dirname(alvo), exist_ok=True)
+        with open(alvo, "a", encoding="utf-8", newline="\n") as f:
+            f.write(_json_canonico(reg) + "\n")
+        return reg
+    except OSError:
+        return None
+
+
+def _resultado_para_registro(res):
+    """O resumo do que a varredura devolveu -- o suficiente para reler o log daqui a um ano e
+    saber o que cada tentativa produziu, sem guardar a serie inteira."""
+    if "erro" in res:
+        return {"veredito": res["veredito"]["classe"], "erro": res["erro"]}
+    b, a = res["bloco_b"], res["bloco_a"]
+    return {"veredito": res["veredito"]["classe"],
+            "sharpe_anualizado": b["sharpe_anualizado"],
+            "ic_sharpe_anualizado": b["ic_sharpe_anualizado"],
+            "rc_p": a["reality_check"]["p_valor"],
+            "spa_p": a["spa"]["p_valor"],
+            "dsr_melhor_is": a["dsr_melhor_is"]["dsr"],
+            "mds": b["mds"], "T": b["T"], "T_efetivo": b["T_efetivo"],
+            "n_oos": len(res["oos"]),
+            "pnl_oos": round(sum(t["pnl"] for t in res["oos"]), 2)}
+
+
+def ler_tentativas(caminho=None):
+    """Le o log. Linha corrompida nao derruba a leitura -- e contada em `_ilegiveis`, porque
+    sumir com ela em silencio seria mentir para baixo no numero que este log existe para dar."""
+    alvo = caminho or CAMINHO_TENTATIVAS
+    regs, ilegiveis = [], 0
+    if not os.path.exists(alvo):
+        return regs, ilegiveis
+    with open(alvo, encoding="utf-8") as f:
+        for linha in f:
+            linha = linha.strip()
+            if not linha:
+                continue
+            try:
+                regs.append(json.loads(linha))
+            except ValueError:
+                ilegiveis += 1
+    return regs, ilegiveis
+
+
+def contar_tentativas(caminho=None):
+    """O que o log ja sabe dizer. `selecoes` e o numero que um dia substitui o `N_TRIALS`
+    contado a mao -- quando o log cobrir historico suficiente para nao subestimar o passado."""
+    regs, ilegiveis = ler_tentativas(caminho)
+    grids = {r.get("grid_hash") for r in regs}
+    return {"varreduras": len(regs),
+            "selecoes": sum(int(r.get("selecoes") or 0) for r in regs),
+            "grids_distintos": len(grids),
+            "linhas_ilegiveis": ilegiveis,
+            "primeira": regs[0]["ts"] if regs else None,
+            "ultima": regs[-1]["ts"] if regs else None,
+            "caminho": caminho or CAMINHO_TENTATIVAS}
+
+
+def relatorio_tentativas(caminho=None):
+    c = contar_tentativas(caminho)
+    print(f"\n-- LOG DE TENTATIVAS (append-only) [N-9/F10] --\n   {c['caminho']}")
+    if not c["varreduras"]:
+        print("   vazio -- nenhuma varredura registrada nesta maquina ainda.")
+        return c
+    print(f"   varreduras: {c['varreduras']} | selecoes (cfgs x folds): {c['selecoes']} | "
+          f"grids distintos: {c['grids_distintos']}")
+    print(f"   de {c['primeira']} a {c['ultima']}"
+          + (f" | linhas ilegiveis: {c['linhas_ilegiveis']}" if c["linhas_ilegiveis"] else ""))
+    print(f"   `N_TRIALS` em uso continua {N_TRIALS} (PISO CONTADO a mao). Este log e o que um "
+          f"dia\n   o substitui por numero MEDIDO -- e ele so conta desta maquina, e so daqui "
+          f"pra frente.")
+    return c
+
+
 def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONTROLE_NULO):
     """A regua. Roda SEMPRE sob `PADRAO` -- nao ha argumento que mude o criterio ([F3]).
 
@@ -864,8 +1105,14 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
     por_cfg = {cfg: gerar_trades(cfg) for cfg in grid}
     base = _nucleo(por_cfg, **PADRAO)
     if base is None:
-        return {"rotulo": rotulo, "erro": "poucos trades -- sem dados pra walk-forward",
-                "veredito": {"classe": "INCONCLUSIVO", "motivo": "amostra insuficiente"}}
+        vazio = {"rotulo": rotulo,
+                 "erro": "poucos trades -- sem dados pra walk-forward",
+                 "veredito": {"classe": "INCONCLUSIVO", "motivo": "amostra insuficiente"}}
+        # [N-9] A varredura que nao deu em nada TAMBEM entra no log: voce olhou para o dado do
+        # mesmo jeito, e so registrar o que deu certo e vies de publicacao contra si mesmo.
+        if _deve_registrar():
+            registrar_tentativa(rotulo, grid, n_trials, _resultado_para_registro(vazio))
+        return vazio
 
     block, n_boot, seed = PADRAO["block"], PADRAO["n_boot"], PADRAO["seed"]
     # [Q-7] A calibracao e computada ANTES do veredito, e o veredito le. Medir e nao comparar
@@ -928,6 +1175,12 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
     res.update({k: base[k] for k in ("oos", "por_fold", "serie_oos", "naive_cfg",
                                      "matriz_is", "grade", "grade_oos")})
     res["veredito"] = _veredito(res)
+    # [N-9/F10] Uma linha por varredura, no log append-only. E o unico ponto do projeto por
+    # onde TODA varredura passa -- registrar aqui e o que torna `n_trials` contavel amanha em
+    # vez de estimado para sempre. O registro nao entra no `res`: o golden do [N-6] congela o
+    # que a regua CALCULA, e um timestamp ali dentro tornaria o resultado irreproduzivel.
+    if _deve_registrar():
+        registrar_tentativa(rotulo, grid, n_trials, _resultado_para_registro(res))
     return res
 
 
@@ -1641,6 +1894,26 @@ def relatorio(res):
     print(f"   PSR (sem deflacao, SR*=0): {b['psr']['psr']}  (sr/dia = {b['psr']['sr']})")
     print(f"   Sharpe ANUALIZADO: {b['sharpe_anualizado']}   IC95% (bloco): "
           f"{b['ic_sharpe_anualizado']}")
+    # [N-5 / A.1] A linha que separa alfa de beta -- e a advertencia de que o RC acima rodou
+    # contra ZERO, que e uma escolha e nao uma neutralidade.
+    ex = exposicao_liquida(res["oos"], res.get("grade_oos"))
+    if ex["liquida"] is None:
+        print(f"   exposicao LIQUIDA ponderada por tempo em posicao: NAO COMPUTAVEL")
+        print(f"     -> {ex['motivo']}.")
+        print(f"     -> sem ela o Reality Check acima (benchmark = ZERO) nao separa alfa de "
+              f"beta [F-4].\n        Enquanto faltar, veredito POSITIVO nao se emite: em "
+              f"cripto, P&L positivo pode ser so\n        ter estado comprado num bull.")
+    else:
+        print(f"   exposicao LIQUIDA ponderada por tempo em posicao: {ex['liquida']:+.4f}   "
+              f"(+1 = comprado o tempo todo, 0 = neutra, -1 = vendida)")
+        print(f"     -> o Reality Check acima usa benchmark = ZERO. Com exposicao liquida "
+              f"longe de 0, parte\n        deste P&L e BETA, e o zero deixa de ser um "
+              f"benchmark defensavel [A.1]. `reality_check(...,\n        benchmark=serie)` "
+              f"e por onde se responde a outra pergunta.")
+    if ex["cobertura"] is not None:
+        print(f"   tempo em mercado: {ex['dias_em_posicao']} dos {b['T']} dias OOS "
+              f"({ex['cobertura']:.1%}) | posicoes simultaneas medias: "
+              f"{ex['posicoes_medias']}")
     piso = b.get("mds_piso")
     marca = " -- e um PISO" if piso else ""
     print(f"   MDS (Sharpe anualizado minimo detectavel, 80% de poder, alfa=0,05, "
@@ -1738,7 +2011,254 @@ def relatorio_sensibilidade(sens):
         print(f"   {bl:>14}  {str(ic):>24}")
 
 
+# ============================ [N-6] GOLDEN FILE: o teste de regressao da regua ============
+#
+# Por que ele existe, e por que ele veio ANTES de qualquer outra coisa nesta onda.
+#
+# A `validacao.py` foi refatorada muitas vezes (F1..F19, [Q-1], [Q-7], [Q-10], o modo taxa) e
+# NENHUMA dessas refatoracoes teve como provar que nao mudou o numero em silencio. Os testes
+# desta casa cobrem funcoes isoladas -- bootstrap, MDS, FDR, purga --, e uma regua pode ter
+# todas as pecas certas e mesmo assim mudar o veredito porque a ORDEM de duas delas trocou.
+# `REVISAO-ITEM1.md` §E chamou este de "o teste mais importante da lista e o unico ausente"
+# (F2), e prescreveu a ordem: seed -> congelar a saida -> so entao refatorar. Congelar depois
+# de mexer congela o numero ja alterado, e o teste de regressao nasce inutil.
+#
+# O que se congela, e o que NAO se congela. Congela-se a SERIE NUMERICA ponta a ponta: a
+# serie diaria OOS inteira, os p-valores, o DSR, a calibracao, o fold a fold, e digests
+# sha256 das estruturas grandes. NAO se congela a PROSA -- `veredito["motivo"]` e
+# `purga_motivo` sao frases derivadas de numeros que ja estao congelados aqui. Um golden que
+# guarda a frase quebra quando alguem conserta uma virgula, e golden que quebra por virgula e
+# golden que alguem regrava sem ler -- o que o torna decorativo. A versao-sintoma deste item
+# seria justamente a oposta: gravar o texto do veredito e chamar de teste. "SEM_EVIDENCIA"
+# continua saindo igual mesmo que o Sharpe mude de 0,6 para 1,4.
+#
+# A entrada tambem e congelada, em arquivo, e nao regerada por seed a cada rodada. Um painel
+# regerado por `default_rng(seed)` depende do fluxo de numeros do numpy continuar identico
+# para sempre; congelar o painel em disco tira essa dependencia do caminho e faz do golden um
+# lock de ponta a ponta do CODIGO, que e o que ele existe para medir.
+#
+# Reexecutavel fora do pytest (`ORQUESTRACAO-ORCA.md` §8, item 6):
+#     python -m pesquisa.validacao golden             # confere; sai != 0 se divergir
+#     python -m pesquisa.validacao golden --gravar    # regrava (ato deliberado, nunca no CI)
+
+GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "golden")
+GOLDEN_ENTRADA = os.path.join(GOLDEN_DIR, "entrada_walk_forward.json")
+GOLDEN_SAIDA = os.path.join(GOLDEN_DIR, "saida_walk_forward.json")
+
+# Parametros do painel congelado. So servem para REGRAVAR o golden; conferir le o arquivo.
+GOLDEN_SEED = 20260829
+GOLDEN_CFGS = ((50, 22), (55, 22), (65, 25))
+GOLDEN_DIAS = 1000
+GOLDEN_N_TRIALS = 100
+GOLDEN_ROTULO = "golden | painel sintetico congelado"
+
+
+def _canonico(o):
+    """Forma canonica e serializavel de qualquer pedaco do resultado.
+
+    Chave de tupla (as configs sao `(min_conv, adx_min)`) vira string; tipo do numpy vira
+    tipo do Python. Sem isto, dois resultados iguais poderiam serializar diferente e o golden
+    acusaria regressao que nao houve.
+    """
+    if isinstance(o, dict):
+        return {str(k): _canonico(v) for k, v in sorted(o.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(o, (list, tuple)):
+        return [_canonico(v) for v in o]
+    if isinstance(o, np.ndarray):
+        return [_canonico(v) for v in o.tolist()]
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.bool_):
+        return bool(o)
+    return o
+
+
+def _json_canonico(o):
+    return json.dumps(_canonico(o), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _digest(o):
+    """sha256 da forma canonica. E o que permite travar `oos`, `por_cfg` e `matriz_is` --
+    centenas de milhares de numeros -- sem transformar o golden num arquivo de megabytes que
+    ninguem le no diff."""
+    return hashlib.sha256(_json_canonico(o).encode("utf-8")).hexdigest()
+
+
+def _painel_golden(seed=GOLDEN_SEED, cfgs=GOLDEN_CFGS, n_dias=GOLDEN_DIAS):
+    """O painel sintetico do golden. Roda UMA vez, na gravacao; depois vive em disco.
+
+    Nao e ruido branco de proposito -- ele tem de exercitar o caminho inteiro da regua:
+
+      * tres configs com FREQUENCIA de trade diferente, porque o maximo de medias brutas do
+        Reality Check e dominado por quem mais opera ([F15]) e um golden de configs gemeas
+        nao veria isso mudar;
+      * cauda pesada (t de Student com 4 g.l.), porque foi a MARGINAL que o [Q-7] identificou
+        como causa da sub-rejeicao -- painel gaussiano nao acorda o portao de calibracao;
+      * `ts_saida` com duracao de 1 a 3 dias, para que a PURGA fique ATIVA e trades que
+        cruzam a borda do fold sejam de fato descartados do treino;
+      * ~1000 dias, para que o MDS fique abaixo de `MDS_LIMITE` e o veredito seja EMITIDO. Um
+        painel curto responderia INCONCLUSIVO e o golden congelaria o portao de poder em vez
+        do teste de edge.
+    """
+    t0 = 1_600_000_000_000 // DIA_MS * DIA_MS
+    por_cfg = {}
+    for k, cfg in enumerate(cfgs):
+        rng = np.random.default_rng(seed + k)
+        prob = 0.55 + 0.15 * k                       # frequencia de trade por config
+        trades = []
+        for i in range(n_dias):
+            if rng.random() > prob:
+                continue
+            ts = int(t0 + i * DIA_MS + int(rng.integers(0, DIA_MS)))
+            dur = int(rng.integers(1, 4))
+            trades.append({"ts": ts,
+                           "pnl": round(float(rng.standard_t(4) * 9.0 - 0.35), 6),
+                           "ts_saida": int(ts + dur * DIA_MS)})
+        por_cfg[cfg] = trades
+    return por_cfg
+
+
+def golden_snapshot(res):
+    """O retrato congelavel de um resultado de `walk_forward`.
+
+    Tudo que decide esta aqui como NUMERO. As estruturas grandes entram por digest, e a prosa
+    (`veredito["motivo"]`, `purga_motivo`) fica de fora -- ver o comentario da secao.
+    """
+    a, b = res["bloco_a"], res["bloco_b"]
+    v = res["veredito"]
+    return {
+        "n_trials": res["n_trials"],
+        "padrao": res["padrao"],
+        "purga_ativa": bool(res["purga_ativa"]),
+        "naive_cfg": res["naive_cfg"],
+        "por_fold": res["por_fold"],
+        "veredito_classe": v["classe"],
+        "veredito_numeros": {k: v.get(k) for k in ("nao_exclui", "mds", "mds_piso")},
+        "bloco_a": {k: x for k, x in a.items() if k != "serie_naive"},
+        "bloco_b": b,
+        "calibracao": res["calibracao"],
+        "sensibilidade_n_trials": res["sensibilidade_n_trials"],
+        "dsr_legado_trades": res["dsr_legado_trades"],
+        "serie_oos": res["serie_oos"],
+        "n_oos": len(res["oos"]),
+        "pnl_oos": round(sum(t["pnl"] for t in res["oos"]), 10),
+        "grade": [len(res["grade"]), res["grade"][0], res["grade"][-1]],
+        "grade_oos": [len(res["grade_oos"]), res["grade_oos"][0], res["grade_oos"][-1]],
+        "digest": {
+            "oos": _digest(res["oos"]),
+            "por_cfg": _digest(res["por_cfg"]),
+            "matriz_is": _digest(res["matriz_is"]),
+            "serie_naive": _digest(a["serie_naive"]),
+        },
+    }
+
+
+def carregar_golden_entrada(caminho=None):
+    """Le o painel congelado do disco. Devolve (por_cfg, meta)."""
+    with open(caminho or GOLDEN_ENTRADA, encoding="utf-8") as f:
+        d = json.load(f)
+    por_cfg = {tuple(bloco["cfg"]): bloco["trades"] for bloco in d["painel"]}
+    return por_cfg, d["meta"]
+
+
+def rodar_golden(caminho_entrada=None):
+    """Roda a regua sobre o painel congelado, exatamente como o relatorio a roda.
+
+    [N-9] Com o log de tentativas DESLIGADO: conferir uma regressao sobre painel sintetico nao
+    e uma tentativa de data-snooping contra o mercado, e deixar o CI encher o contador faria
+    `n_trials` medir ruido de suite em vez de orcamento estatistico gasto.
+    """
+    global REGISTRAR_TENTATIVAS
+    antes = REGISTRAR_TENTATIVAS
+    REGISTRAR_TENTATIVAS = False
+    try:
+        por_cfg, meta = carregar_golden_entrada(caminho_entrada)
+        grid = list(por_cfg.keys())
+        return walk_forward(lambda cfg, _p=por_cfg: _p[cfg], grid,
+                            n_trials=meta["n_trials"], rotulo=meta["rotulo"])
+    finally:
+        REGISTRAR_TENTATIVAS = antes
+
+
+def _diferencas(esp, atu, caminho="raiz", fora=None, teto=30):
+    """Onde o golden e o atual divergem -- caminho a caminho, e nao um "nao bate"."""
+    if fora is None:
+        fora = []
+    if len(fora) >= teto:
+        return fora
+    if isinstance(esp, dict) and isinstance(atu, dict):
+        for k in sorted(set(esp) | set(atu)):
+            if k not in esp:
+                fora.append(f"{caminho}.{k}: AUSENTE no golden -> {atu[k]!r}")
+            elif k not in atu:
+                fora.append(f"{caminho}.{k}: {esp[k]!r} -> AUSENTE no atual")
+            else:
+                _diferencas(esp[k], atu[k], f"{caminho}.{k}", fora, teto)
+        return fora
+    if isinstance(esp, list) and isinstance(atu, list):
+        if len(esp) != len(atu):
+            fora.append(f"{caminho}: tamanho {len(esp)} -> {len(atu)}")
+            return fora
+        for i, (e, a) in enumerate(zip(esp, atu)):
+            _diferencas(e, a, f"{caminho}[{i}]", fora, teto)
+        return fora
+    if esp != atu:
+        fora.append(f"{caminho}: {esp!r} -> {atu!r}")
+    return fora
+
+
+def conferir_golden(caminho_entrada=None, caminho_saida=None):
+    """(ok, diferencas). `ok` exige igualdade EXATA -- a reproducao bit-a-bit que o F2 pede."""
+    with open(caminho_saida or GOLDEN_SAIDA, encoding="utf-8") as f:
+        esperado = json.load(f)["snapshot"]
+    atual = json.loads(_json_canonico(golden_snapshot(rodar_golden(caminho_entrada))))
+    return esperado == atual, _diferencas(esperado, atual)
+
+
+def gravar_golden(caminho_entrada=None, caminho_saida=None):
+    """Regrava entrada e saida. ATO DELIBERADO: nunca roda no pytest nem no CI.
+
+    Quem regrava esta afirmando que a mudanca de numero foi PEDIDA e esta explicada no commit.
+    Regravar para "ficar verde" e o unico jeito de este arquivo deixar de valer alguma coisa.
+    """
+    ce = caminho_entrada or GOLDEN_ENTRADA
+    cs = caminho_saida or GOLDEN_SAIDA
+    os.makedirs(os.path.dirname(ce), exist_ok=True)
+    por_cfg = _painel_golden()
+    entrada = {"meta": {"seed": GOLDEN_SEED, "n_dias": GOLDEN_DIAS,
+                        "n_trials": GOLDEN_N_TRIALS, "rotulo": GOLDEN_ROTULO,
+                        "gerado_por": "pesquisa.validacao._painel_golden"},
+               "painel": [{"cfg": list(cfg), "trades": tr} for cfg, tr in por_cfg.items()]}
+    # a ENTRADA vai compacta: e fixture opaca, nunca se le linha a linha, e ela nao muda mais.
+    # A SAIDA vai indentada, porque ela e o que alguem le no diff quando o golden quebrar.
+    with open(ce, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(_canonico(entrada), f, sort_keys=True, separators=(",", ":"))
+        f.write("\n")
+    snap = golden_snapshot(rodar_golden(ce))
+    with open(cs, "w", encoding="utf-8", newline="\n") as f:
+        json.dump({"snapshot": _canonico(snap)}, f, sort_keys=True, indent=1)
+        f.write("\n")
+    return ce, cs
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "tentativas":
+        relatorio_tentativas()                        # [N-9] o log append-only, lido de volta
+        sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "golden":
+        # [N-6] O teste de regressao da regua, fora do pytest. `--gravar` e ato deliberado.
+        if "--gravar" in sys.argv:
+            ce, cs = gravar_golden()
+            print(f"golden GRAVADO:\n  {ce}\n  {cs}")
+            sys.exit(0)
+        ok, difs = conferir_golden()
+        print("golden: OK -- a regua reproduz o numero congelado bit a bit." if ok
+              else "golden: DIVERGIU -- a regua mudou o numero.")
+        for d in difs:
+            print(f"   {d}")
+        sys.exit(0 if ok else 1)
     if len(sys.argv) > 1 and sys.argv[1] == "politicas":
         comparar_politicas()                          # [P1-10] A x B x C, mesma regua
         sys.exit(0)
