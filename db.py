@@ -230,11 +230,31 @@ CONFIG_PADRAO = {
 #
 # Valores em STRING, como o CONFIG_PADRAO: e o que a tabela `config` guarda, e o que o
 # catalogo do `POST /config` valida. Perfil nao tem via expressa para o banco.
+# [N-10][P-3b] `auto_lev_modo` entra no `experimento` e NAO no `conservador`, e a assimetria
+# e decisao, nao esquecimento.
+#
+# No `experimento` ela fecha uma mentira de rotulo que o proprio [N-10] deixou medida em
+# `tests/test_sizing.py`: com o modo fora do perfil, um sistema rodando `auto_lev_modo=conviccao`
+# -- ou seja, 2x a 20x escalados por um score que o [Q-13] mediu NAO prever acerto -- continuava
+# sendo rotulado 'experimento' pelo painel. O perfil e o retrato do que esta vivo, e um retrato
+# que nao mostra o dial de alavancagem mostra outro sistema.
+#
+# No `conservador` ela seria AFROUXAMENTO, e por isso nao entra: sob aquele perfil
+# `auto_lev_min=1` e `auto_lev_max=2`, entao o modo "conviccao" entrega 1x na conviccao minima
+# enquanto "fixo" entrega `alavancagem_padrao`=2x SEMPRE. Declarar "fixo" ali subiria o piso de
+# alavancagem de 1x para 2x justamente no perfil alinhado a base -- a mesma base cuja §6.1 diz
+# que o unico regime que sobreviveu foi "trend-following SEM alavancagem". Apertar guarda pode;
+# afrouxar e do dono (CLAUDE.md §2), e nao e isto que o card pediu.
+#
+# O preco da assimetria fica dito: sob `conservador` o rotulo continua sem enxergar o modo. E um
+# buraco LIMITADO -- la os dois modos vivem dentro do mesmo teto de 2x --, e continua medido em
+# `tests/test_config.py` em vez de resolvido por conta propria.
 PERFIS_RISCO = {
     "experimento": {
         "risco_por_trade": "0.03",
         "risco_aberto_max": "0.10",
         "alavancagem_padrao": "10",
+        "auto_lev_modo": "fixo",
         "auto_lev_min": "2",
         "auto_lev_max": "20",
         "auto_max_posicoes": "5",

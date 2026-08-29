@@ -430,22 +430,23 @@ def test_n10_o_modo_conviccao_continua_inteiro_quando_ligado_de_proposito(banco)
     assert autotrader._alavancagem(cfg, 100, 0.095) == 7.0           # e o cap [P1-11] por cima
 
 
-def test_n10_o_perfil_experimento_nao_declara_o_modo_e_isso_esta_registrado(banco):
-    """⚠️ O que este card NAO conseguiu entregar, travado com um teste em vez de uma nota.
+def test_n10_o_perfil_experimento_declara_o_modo_e_o_rotulo_acusa(banco):
+    """✅ PROMOVIDO pelo `[P-3b]`. Ate 2026-08-29 este teste asseverava o BURACO: o plano
+    mandava `auto_lev_modo` nascer "fixo" no `CONFIG_PADRAO` **e no perfil `experimento`**, e
+    so a primeira metade tinha sido feita -- a segunda esbarrava em
+    `tests/test_config.py::test_todo_parametro_de_perfil_tem_racional_escrito`, que exige
+    verbete em `api.CONFIG_RACIONAL`, e `api.py` nao era territorio do T-RISCO.
 
-    O plano manda `auto_lev_modo` nascer "fixo" no `CONFIG_PADRAO` **e no perfil
-    `experimento`**. A primeira metade esta feita; a segunda esbarra em
-    `tests/test_config.py::test_todo_parametro_de_perfil_tem_racional_escrito`, que exige que
-    TODA chave do perfil tenha verbete em `api.CONFIG_RACIONAL` -- e `api.py` nao e territorio
-    do T-RISCO. Acrescentar a chave aqui deixaria a suite vermelha num territorio `toca-risco`,
-    que e o pior lugar possivel para entregar teste quebrado.
+    Com o verbete escrito, o teste virou XPASS ao contrario -- quebrou de proposito, que era
+    exatamente o mecanismo montado para obrigar a promocao em vez de deixar a nota apodrecer
+    num relatorio que ninguem reabre. A asserção foi VIRADA, nao apagada: o que ela media
+    (`perfil_ativo()` nao enxerga o modo) e o que ela agora prova que acabou.
 
-    Enquanto isso, `perfil_ativo()` NAO enxerga o modo: um sistema com `auto_lev_modo=conviccao`
-    vivo continua sendo rotulado 'experimento'. E a mesma classe de mentira de rotulo que o
-    [Q-3] documentou, e por isso fica medida aqui em vez de anotada num relatorio que ninguem
-    reabre. Quando o verbete entrar no `api.py`, este teste quebra -- e e o gatilho para
-    promover a chave ao perfil."""
+    A consequencia concreta: um sistema rodando `auto_lev_modo=conviccao` -- 2x a 20x
+    escalados por um score que o [Q-13] mediu nao prever acerto -- deixa de ser rotulado
+    'experimento' pelo painel e passa a ser 'personalizado', que e o que ele e."""
     import db
-    assert "auto_lev_modo" not in db.PERFIS_RISCO["experimento"]
+    assert db.PERFIS_RISCO["experimento"]["auto_lev_modo"] == "fixo"
+    assert db.perfil_ativo() == "experimento"     # banco novo: o default declarado
     db.set_config("auto_lev_modo", "conviccao")
-    assert db.perfil_ativo() == "experimento"     # o rotulo nao acusa: e o buraco, medido
+    assert db.perfil_ativo() == "personalizado"   # o rotulo acusa: o buraco fechou
