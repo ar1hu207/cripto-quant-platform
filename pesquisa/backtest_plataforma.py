@@ -79,7 +79,37 @@ POLITICAS = ("regime", "auto", "trailing")
 # outro valor passa por argumento, e o valor entra no rotulo da rodada.
 ALVO_ROE = 5.0
 ROE_MIN_LUCRO = 1.0
-TRAILING_DIST = 0.02
+
+# [P-1 / D-6] A UNIDADE do trailing, e por que a pesquisa mudou de unidade em 2026-08-29.
+#
+# Ate aqui este modulo tinha uma politica de trailing PROPRIA: `TRAILING_DIST = 0.02`, isto e,
+# arma em +2% de PRECO e trava 2% atras do extremo. O vivo fazia o mesmo -- ate o `[N-13]`
+# (`simulador._trailing_novo_stop`) trocar a unidade para R, com o dono assinando 1R para armar
+# e 1R de distancia (decisao `D-5`). No instante daquele merge, este arquivo passou a medir uma
+# politica de saida que o sistema NAO EXECUTA MAIS, e a decisao `D-6` do dono resolveu a
+# ambiguidade na direcao certa: **a pesquisa acompanha o vivo**.
+#
+# Por que R e nao preco -- e a razao e a mesma dos dois lados. Um gatilho em espaco-preco vira
+# ROE quando multiplicado pela alavancagem (2% de preco sao 4% de ROE a 2x e 40% a 20x), entao
+# o trailing desarmava justamente onde a aposta era maior; e em unidade de risco os mesmos 2%
+# valem 3R num stop curto e meio R num stop largo. Em R o gatilho significa a mesma coisa em
+# todo trade, qualquer que seja o ativo, a volatilidade ou a alavancagem -- que e por que o
+# `be_em_R` do [Q-11] ja era medido assim. 1R aqui e `abs(entrada - stop_de_abertura)`, fixado
+# na entrada e imutavel depois, espelhando o `stop_abertura` que o `[F-1]` criou no vivo.
+#
+# ⚠️ **O CUSTO ESTA DECLARADO E ACEITO (PLANO-V2 D.7/D-6):** os vereditos ja emitidos --
+# `VEREDITO-M4.md` e o `DSR = 0,060` da politica `C trailing` -- foram medidos sobre a politica
+# de PRECO. Eles continuam verdadeiros como historico e NAO se reescrevem; o que deixa de valer
+# e apresenta-los como "o veredito da politica de producao". Comparar um veredito novo com eles
+# e comparar duas politicas diferentes.
+#
+# `"preco"` continua inteiro, e nao por nostalgia: e o que mantem `POLITICAS_M4` reproduzindo os
+# numeros do M4 e a varredura de geometria do [Q-8]/[Q-9] rodando na unidade em que foi medida.
+TRAILING_UNIDADE = "R"
+TRAILING_ARMA_R = 1.0        # espelha `db.CONFIG_PADRAO["trailing_arma_r"]` (D-5)
+TRAILING_DIST_R = 1.0        # espelha `db.CONFIG_PADRAO["trailing_dist_r"]` (D-5)
+TRAILING_DIST = 0.02         # so no caminho `trailing_unidade="preco"` (a politica ANTIGA)
+UNIDADES_TRAILING = ("R", "preco")
 
 # [Q-10] Transcricao do cap geometrico do `autotrader` ([P1-11]). Nao se importa `autotrader`
 # aqui de proposito: `pesquisa/` nao depende da plataforma viva (ele importaria `db` e
@@ -93,11 +123,17 @@ FOLGA_LIQ = 0.8
 def _lev_conviccao(conv, lev_min, lev_max, conv_min, stop_dist):
     """Alavancagem por conviccao + cap geometrico -- espelho de `autotrader._alavancagem`.
 
-    [Q-10] Existe porque a regua roda com `LEV` FIXO (10x em `validacao.py`) e a producao roda
+    [Q-10] Existe porque a regua roda com `LEV` FIXO (10x em `validacao.py`) e a producao rodava
     de 2x a 20x pela conviccao. Todo achado que dependa da INTERACAO entre alavancagem e um
     limiar fixo em preco e invisivel num backtest de alavancagem constante -- e foi exatamente
-    um desses que a medicao de MFE de 2026-08-24 encontrou: o trailing so arma em +2% de preco,
-    o que a 14x significa 28% de ROE sem protecao nenhuma.
+    um desses que a medicao de MFE de 2026-08-24 encontrou: o trailing SO ARMAVA em +2% de
+    preco, o que a 14x significava 28% de ROE sem protecao nenhuma.
+
+    [P-1] As duas frases acima estao no PASSADO de proposito, e as duas caducaram no mesmo dia
+    (2026-08-29): o `[N-10]` fez `auto_lev_modo` nascer `"fixo"` e o `[N-13]` tirou o trailing
+    do espaco-preco. O achado que motivou este helper continua valendo como historia -- foi ele
+    que pagou os dois consertos --, e o helper continua existindo porque o modo `"conviccao"`
+    nao foi apagado, so desligado, esperando o medidor do `N-10b`.
     """
     frac = min(max((conv - conv_min) / max(100 - conv_min, 1), 0.0), 1.0)
     lev = lev_min + frac * (lev_max - lev_min)
@@ -149,7 +185,9 @@ def _roe(pos, preco, valor, lev, taxa):
 def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                    estrategia="tendencia", df=None, adx_min=25, adx_max_rev=22,
                    max_hold=20, taxa=TAXA, slip=0.0002, funding_8h=0.0, tf_horas=None,
-                   sinal_fn=None, saida="regime", trailing_dist=TRAILING_DIST,
+                   sinal_fn=None, saida="regime", trailing_unidade=TRAILING_UNIDADE,
+                   trailing_arma_r=TRAILING_ARMA_R, trailing_dist_r=TRAILING_DIST_R,
+                   trailing_dist=TRAILING_DIST,
                    trailing_k_atr=None, alvo_roe=ALVO_ROE, sd_min=0.0,
                    be_em_R=None, lev_modo="fixo", lev_min=2.0, lev_max=20.0, conv_min_lev=60.0):
     """Backtest com PARIDADE honesta: sinal no candle FECHADO i, execução no OPEN do
@@ -165,7 +203,16 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     |---|---|---|
     | `"regime"` (A) | stop 3×ATR fixo, liquidação, ou flip de regime | **não existe no vivo** — é a política do backtest |
     | `"auto"` (B) | stop 3×ATR fixo, liquidação, ou auto-saída | `auto_fechar_saida=1` **e** `trailing_ativo=0` (`autotrader.py:151`) |
-    | `"trailing"` (C) | stop que só sobe atrás do preço, ou liquidação | `trailing_ativo=1` — **o default de hoje** (`db.py:95`) |
+    | `"trailing"` (C) | stop que só sobe atrás do preço, ou liquidação | `trailing_ativo=1` — **o default de hoje** (`db.py`) |
+
+    **`trailing_unidade` — a unidade da política C, e ela mudou em 2026-08-29 ([P-1]/`D-6`).**
+    Default `"R"`, espelhando o `[N-13]` do vivo: arma quando a excursão favorável atinge
+    `trailing_arma_r` × 1R e trava `trailing_dist_r` × 1R atrás do extremo, com
+    `1R = abs(entrada − stop_de_abertura)` fixado na entrada. Com o `1R/1R` assinado pelo dono
+    (`D-5`), o stop cai exatamente no preço de entrada no instante em que arma — é o `be_em_R=1`
+    da pesquisa chegando ao vivo pela outra porta. `"preco"` é a política antiga
+    (`entrada·(1±td)` para armar, `extremo·(1∓td)` para o stop), preservada expressão por
+    expressão: é ela que faz `POLITICAS_M4` continuar reproduzindo os números do `VEREDITO-M4`.
 
     O flip de regime **não existe no sistema vivo**: nada em `simulador.atualizar()` nem em
     `autotrader.auto_executar()` fecha por inversão do scoring. Por isso B e C não o herdam —
@@ -185,6 +232,15 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     Com `trailing_k_atr=k` a distância vira `k·ATR/preço`, medida **na entrada** e fixa depois:
     coerente com o stop de entrada, e um número por trade, como o vivo. Recalculá-la a cada
     candle seria outra política, não a mesma em outra unidade.
+
+    ⚠️ **`trailing_k_atr` FORÇA `trailing_unidade="preco"`, e isso é declarado e não implícito.**
+    `k·ATR/preço` **é** uma distância em espaço-preço por construção; deixá-la conviver com o
+    default `"R"` daria duas unidades para a mesma geometria e uma delas seria ignorada em
+    silêncio — que é a doença que o `[N-13]` veio curar, renascida do outro lado. A alternativa
+    (levantar erro) reprovaria a varredura de geometria do `[Q-8]`/`[Q-9]`, que passa só `k` e
+    foi medida nesta unidade. Elas são quase a mesma coisa, aliás: como `stop_dist = 3·ATR/c`
+    (`scoring.py:53`), `k=3` é ≈ `dist_r=1` — o que a varredura de `k` já varreu foi, sem saber,
+    a vizinhança do 1R.
 
     **`sd_min` — o piso de distância do stop ([Q-9]).** Portão de CUSTO: recusa o sinal cujo
     stop está tão perto que o round-trip come o risco (`taxa/risco = 2·taxa_lado/sd`). Default
@@ -268,6 +324,11 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     """
     if saida not in POLITICAS:
         raise ValueError(f"saida deve ser uma de {POLITICAS}, veio {saida!r}")
+    if trailing_unidade not in UNIDADES_TRAILING:
+        raise ValueError(f"trailing_unidade deve ser uma de {UNIDADES_TRAILING}, "
+                         f"veio {trailing_unidade!r}")
+    if trailing_k_atr:                       # k.ATR E espaco-preco: ver o aviso na docstring
+        trailing_unidade = "preco"
     if df is None:
         df = preparar(baixar_ohlcv(ativo, tf, dias=dias))
     tfh = _horas_por_barra(df, tf_horas, tf)                    # medida no df, nao adivinhada
@@ -364,10 +425,33 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                         pos["stop"] = max(pos["stop"], be) if d == 1 else min(pos["stop"], be)
                         pos["be"] = be
                 if saida == "trailing":
-                    if d == 1 and highs[i] >= pos["e"] * (1 + pos["td"]):
-                        pos["stop"] = max(pos["stop"], highs[i] * (1 - pos["td"]))
-                    elif d == -1 and lows[i] <= pos["e"] * (1 - pos["td"]):
-                        pos["stop"] = min(pos["stop"], lows[i] * (1 + pos["td"]))
+                    # [P-1] Duas unidades, e a escolha e do chamador. Em "R" o gatilho e a
+                    # distancia saem do MESMO 1R do stop de abertura (`pos["risco"]`, fixado na
+                    # entrada e nunca relido do stop vigente -- reler seria o [F-1] renascendo
+                    # dentro do conserto: o R encolheria a cada candle e "1R" passaria a
+                    # significar um lucro menor a cada passada).
+                    #
+                    # A CATRACA (`max`/`min`) e a mesma nas duas unidades, e nao e detalhe: um
+                    # stop que anda para tras e um stop que o mercado escolhe. Espelha o
+                    # `simulador._marcar_uma`, que so aceita `novo` se ele andar a favor.
+                    #
+                    # `risco == 0` (sinal sem stop) NAO cai no caminho de preco: sem 1R
+                    # mensuravel nao ha politica em R para executar, e emprestar os 2% do modo
+                    # antigo inventaria uma politica para o caso degenerado. O vivo cai para
+                    # "preco" ali por outro motivo -- posicoes abertas ANTES de a coluna
+                    # `stop_abertura` existir --, e aqui nao ha posicao antiga.
+                    if trailing_unidade == "R" and pos["risco"] > 0:
+                        if d == 1 and highs[i] >= pos["e"] + trailing_arma_r * pos["risco"]:
+                            pos["stop"] = max(pos["stop"],
+                                              highs[i] - trailing_dist_r * pos["risco"])
+                        elif d == -1 and lows[i] <= pos["e"] - trailing_arma_r * pos["risco"]:
+                            pos["stop"] = min(pos["stop"],
+                                              lows[i] + trailing_dist_r * pos["risco"])
+                    elif trailing_unidade == "preco":
+                        if d == 1 and highs[i] >= pos["e"] * (1 + pos["td"]):
+                            pos["stop"] = max(pos["stop"], highs[i] * (1 - pos["td"]))
+                        elif d == -1 and lows[i] <= pos["e"] * (1 - pos["td"]):
+                            pos["stop"] = min(pos["stop"], lows[i] * (1 + pos["td"]))
             if saida_p is not None:
                 lev_p = pos["lev"]
                 saida_fill = saida_p if motivo == "liquidacao" else saida_p * (1 - d * slip)  # liq = preço de liq (= live)
@@ -452,9 +536,14 @@ def relatorio_politicas(por_politica, valor, lev):
 
 if __name__ == "__main__":
     MIN_CONV, VALOR, LEV = 25, 100, 10
+    # [P-1] as politicas de PRECO tem a unidade PINADA: sem `trailing_unidade="preco"` elas
+    # herdariam o default novo e o rotulo "2% fixo" passaria a nomear uma politica em R.
     POLITICAS_SMOKE = [("A stop+flip de regime", {"saida": "regime"}),
                        ("B auto-saida", {"saida": "auto"}),
-                       ("C trailing 2% fixo", {"saida": "trailing", "trailing_dist": 0.02}),
+                       ("C trailing 1R/1R (vivo)", {"saida": "trailing"}),
+                       ("C trailing 2% fixo", {"saida": "trailing",
+                                               "trailing_unidade": "preco",
+                                               "trailing_dist": 0.02}),
                        ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0})]
     print(f"BACKTEST INTEGRADO (paridade c/ a plataforma) | {len(ATIVOS)} ativos | {TF} | {DIAS}d | "
           f"corte>={MIN_CONV} | R${VALOR} @ {LEV}x")

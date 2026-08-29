@@ -998,7 +998,7 @@ def test_C_trailing_sobe_o_stop_atras_do_preco_e_fecha_EM_LUCRO():
 
     assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
                             saida="regime") == []       # A: stop fixo de 3% nao e tocado
-    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    t = _um_trade(df, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t["motivo"] == "trailing"
     assert t["pnl"] > 0
     assert t["ts_saida"] == T0 + 65 * TF_MS + TF_MS
@@ -1012,7 +1012,7 @@ def test_C_so_arma_o_trailing_depois_do_lucro_passar_da_distancia():
     lows = list(precos)
     lows[65] = 96.0
     df = df_com_indicadores(precos, lows=lows)
-    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    t = _um_trade(df, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t["motivo"] == "stop"                        # nunca armou: e o stop de entrada
     assert t["pnl"] < 0
 
@@ -1030,13 +1030,13 @@ def test_C_o_stop_do_trailing_so_se_move_para_o_candle_SEGUINTE():
     lows[63] = 100.0                                    # o fundo furaria o stop pos-trailing
     df = df_com_indicadores(precos, highs=highs, lows=lows)
     tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
-                          saida="trailing", trailing_dist=0.02)
+                          saida="trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert tr == []                                     # nao fechou dentro do candle do pico
     # ...mas o stop ficou armado em 108*0,98 = 105,84, e o candle SEGUINTE o encontra
     lows2 = list(lows)
     lows2[64] = 100.0
     df2 = df_com_indicadores(precos, highs=highs, lows=lows2)
-    t = _um_trade(df2, "trailing", trailing_dist=0.02)
+    t = _um_trade(df2, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t["motivo"] == "trailing" and t["pnl"] > 0
     assert t["ts_saida"] == T0 + 64 * TF_MS + TF_MS
 
@@ -1052,10 +1052,168 @@ def test_C_em_k_ATR_e_o_item_3_do_card_distancia_em_unidade_do_ATR():
     lows = list(precos)
     lows[65] = 102.5
     df = df_com_indicadores(precos, lows=lows, atr=[5.0] * len(precos))
-    t2 = _um_trade(df, "trailing", trailing_dist=0.02)
+    t2 = _um_trade(df, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t2["motivo"] == "trailing"                   # 2%: stop em 106*0,98 = 103,88 -> bate
     assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
                             saida="trailing", trailing_k_atr=1.0) == []   # 5%: 100,7 -> nao bate
+
+
+# ============================ [P-1 / D-6] trailing em R: a pesquisa acompanha o vivo =====
+def test_P1_o_DEFAULT_do_trailing_e_R_e_nao_mais_espaco_preco():
+    """[P-1] O default mudou, e o teste existe para que ele nao volte por descuido.
+
+    Ate 2026-08-29 o motor tinha politica de trailing PROPRIA (2% de preco). O `[N-13]` trocou
+    a unidade no vivo (1R para armar, 1R de distancia, assinado pelo dono na `D-5`) e a `D-6`
+    decidiu que a pesquisa acompanha. Um default e uma afirmacao sobre o que se mede por
+    omissao -- e este arquivo inteiro roda por omissao.
+    """
+    assert B.TRAILING_UNIDADE == "R"
+    assert (B.TRAILING_ARMA_R, B.TRAILING_DIST_R) == (1.0, 1.0)
+    assert B.UNIDADES_TRAILING == ("R", "preco")
+    with pytest.raises(ValueError, match="trailing_unidade deve ser"):
+        B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores([100.0] * 70),
+                         sinal_fn=sinal_em([60]), saida="trailing", trailing_unidade="atr")
+
+
+def test_P1_em_R_o_gatilho_e_a_distancia_saem_do_stop_de_ABERTURA():
+    """A resposta e conhecida por construcao, e e por isso que ela vale mais que dez asercoes
+    sobre dado real.
+
+    Entrada em ~100 com `stop_dist=2%` -> 1R = ~2,0 em preco. Com `arma_r=1` o trailing so
+    arma quando o preco toca ~102,0; com `dist_r=1` o stop vai para `pico - 1R`.
+
+      * pico 101,5 (menos de 1R): NAO arma. O stop segue em ~98,0 e a queda a 97 fecha por
+        `stop`, com prejuizo;
+      * pico 106,0 (3R): arma, stop = ~104,0. A volta a 104 fecha por `trailing`, com LUCRO --
+        e 104 e um numero que so existe se a distancia tiver saido do 1R de abertura.
+
+    Se a implementacao lesse o R do stop VIGENTE em vez do de abertura, a distancia encolheria
+    a cada candle -- o [F-1] renascendo dentro do proprio conserto.
+    """
+    fn = sinal_em([60], stop_dist=0.02)                 # 1R ~ 2,00 em preco
+
+    curto = [100.0] * 62 + [101.5] * 2 + [97.0] * 6     # pico 1,5 < 1R
+    t = B.backtest_ativo("X/USDT", 0, 100, 10,
+                         df=df_com_indicadores(curto, highs=list(curto), lows=list(curto)),
+                         sinal_fn=fn, saida="trailing")[0]
+    assert t["motivo"] == "stop" and t["pnl"] < 0
+
+    longo = [100.0] * 62 + [106.0] * 3 + [104.5] * 5    # pico 6,0 = 3R -> stop em ~104,0
+    lows = list(longo)
+    lows[65] = 103.9
+    df = df_com_indicadores(longo, highs=list(longo), lows=lows)
+    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")[0]
+    assert t["motivo"] == "trailing" and t["pnl"] > 0
+    # o MESMO df com 1R MAIOR (stop_dist=4% -> 1R~4,0): arma em 104 e poe o stop em ~102, que
+    # a queda a 103,9 nao encontra -- a posicao segue aberta. Prova que gatilho e distancia
+    # escalam com o R do trade, e nao com um numero fixo em preco.
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
+                            sinal_fn=sinal_em([60], stop_dist=0.04), saida="trailing") == []
+
+
+def test_P1_o_gatilho_em_R_NAO_muda_de_significado_com_a_alavancagem_F19():
+    """O F-19, que e a razao do card, dito como teste.
+
+    Em espaco-preco o gatilho vira ROE quando multiplicado pela alavancagem: 2% de preco sao
+    4% de ROE a 2x e 40% a 20x, entao a protecao desaparecia justamente onde a aposta era
+    maior. Em R o gatilho e a distancia sao os MESMOS precos em qualquer alavancagem -- o que
+    muda e so quanto dinheiro aquele mesmo movimento vale.
+
+    A asercao e literal: a 2x e a 20x, a MESMA trajetoria fecha no MESMO candle e pelo MESMO
+    motivo, e o P&L difere exatamente pelo fator de alavancagem (a taxa tambem escala com ela).
+    """
+    precos = [100.0] * 62 + [106.0] * 3 + [104.5] * 5
+    lows = list(precos)
+    lows[65] = 103.9
+    df = df_com_indicadores(precos, highs=list(precos), lows=lows)
+    fn = sinal_em([60], stop_dist=0.02)
+
+    def roda(lev):
+        return B.backtest_ativo("X/USDT", 0, 100, lev, df=df, sinal_fn=fn, saida="trailing")[0]
+
+    a, b = roda(2), roda(20)
+    assert a["motivo"] == b["motivo"] == "trailing"
+    assert a["ts_saida"] == b["ts_saida"]               # o MESMO candle fecha os dois
+    assert b["pnl"] == pytest.approx(a["pnl"] * 10, rel=1e-9)
+
+
+def test_P1_em_1R_1R_o_stop_cai_no_zero_a_zero_no_instante_em_que_ARMA():
+    """A consequencia da `D-5` que o dono assinou, e que so aparece quando arma_r == dist_r.
+
+    Ao armar, `preco = entrada + 1R` e o stop vai para `preco - 1R = entrada`. Ou seja: o
+    `1R/1R` E o `be_em_R=1` da pesquisa, chegando ao vivo pela outra porta. Aqui a trajetoria
+    sobe pouco mais de 1R, arma, e desaba muito abaixo do stop de entrada: sob a politica de
+    PRECO isso vai ao stop cheio, sob 1R/1R fecha perto do empate -- perdendo so a taxa do
+    round-trip, que o zero-a-zero do trailing nao cobre.
+
+    O `stop_dist=1%` e o que separa as duas politicas neste df: 1R vale 1,0 em preco, entao o
+    gatilho em R e +1% e o gatilho de 2% ainda nao chegou. Com `stop_dist=2%` os dois gatilhos
+    coincidem por aritmetica (1R = 2% da entrada) e o teste nao teria objeto -- e essa
+    coincidencia e exatamente o motivo de o defeito ter passado despercebido tanto tempo: nos
+    trades de stop MEDIO as duas unidades quase concordam, e so divergem nas caudas.
+    """
+    precos = [100.0] * 62 + [101.05] * 2 + [95.0] * 6   # 1R = 1,00: o pico mal passa de 1R
+    df = df_com_indicadores(precos, highs=list(precos), lows=list(precos))
+    fn = sinal_em([60], stop_dist=0.01)
+
+    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")[0]
+    cheio = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing",
+                             trailing_unidade="preco", trailing_dist=0.02)[0]
+    assert t["motivo"] == "trailing"                    # armou: o stop subiu ate a entrada
+    assert cheio["motivo"] == "stop"                    # em preco, +1,05% nao chega aos 2%
+    # o que sobra de perda no caso 1R/1R e a taxa do round-trip (2 x 0,05% x valor x lev = 1,00)
+    # e o slippage -- nao um R de prejuizo. O zero-a-zero do trailing e no PRECO de entrada, e
+    # nao cobre a taxa, ao contrario do `be_em_R`, que cobre de proposito (e a diferenca entre
+    # "empate" e "perda pequena com nome bonito").
+    assert t["pnl"] > cheio["pnl"]
+    assert abs(t["pnl"]) < 1.1                          # ~ a taxa, nao ~ 1R alavancado
+    assert cheio["pnl"] < -10                           # 1R a 10x = ~10% da margem, + taxa
+
+
+def test_P1_k_ATR_FORCA_espaco_preco_e_nao_convive_em_silencio_com_o_R():
+    """Duas unidades para a mesma geometria e a doenca que o [N-13] veio curar. `k*ATR/preco`
+    E espaco-preco por construcao, entao pedir `trailing_k_atr` com o default `"R"` nao pode
+    deixar uma das duas ser ignorada sem aviso.
+
+    A prova e comportamental e nao de flag: com ATR=5 e k=1 a distancia e 5% (~5,00 em preco),
+    enquanto 1R aqui vale ~3,00. O pico de 106 arma nos dois; o stop fica em ~101,0 sob k*ATR e
+    em ~103,0 sob R. A queda a 102,5 encontra SO o de R -- entao se o `k` estivesse sendo
+    ignorado, este trade teria fechado.
+    """
+    precos = [100.0] * 62 + [106.0] * 3 + [102.5] * 5
+    lows = list(precos)
+    lows[65] = 102.5
+    df = df_com_indicadores(precos, highs=list(precos), lows=lows, atr=[5.0] * len(precos))
+    fn = sinal_em([60], stop_dist=0.03)                 # 1R ~ 3,00
+
+    em_r = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")
+    assert [t["motivo"] for t in em_r] == ["trailing"]  # stop em ~103,0 -> a queda a 102,5 bate
+    # o mesmo df com k=1 (5%): stop em ~101,0, a queda a 102,5 NAO bate. E `trailing_k_atr`
+    # sozinho basta -- nao e preciso lembrar de passar `trailing_unidade`.
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing",
+                            trailing_k_atr=1.0) == []
+
+
+def test_P1_as_politicas_do_M4_continuam_reproduzindo_a_unidade_que_o_nome_promete():
+    """O risco especifico deste card: mudar um default e reescrever, em silencio, um numero ja
+    publicado. `POLITICAS_M4` e a tupla que o `VEREDITO-M4.md` mediu -- se a linha chamada
+    "C trailing 2% fixo" passasse a rodar em R, o veredito deixaria de ser reproduzivel por ela
+    e ninguem teria como notar pelo rotulo.
+
+    Entao as linhas de PRECO tem de trazer a unidade pinada, e a linha nova tem de ser a do
+    vivo. Este teste le a tupla, nao a documentacao.
+    """
+    por_nome = dict(V.POLITICAS_M4)
+    assert por_nome["C trailing 2% fixo"]["trailing_unidade"] == "preco"
+    assert por_nome["C trailing 2% fixo"]["trailing_dist"] == 0.02
+    assert por_nome["C trailing 1R/1R (vivo)"]["trailing_unidade"] == "R"
+    assert (por_nome["C trailing 1R/1R (vivo)"]["trailing_arma_r"],
+            por_nome["C trailing 1R/1R (vivo)"]["trailing_dist_r"]) == (1.0, 1.0)
+    # o k*ATR nao precisa pinar: ele forca a unidade sozinho (teste acima)
+    assert "trailing_unidade" not in por_nome["C trailing 3xATR"]
+    # e as cinco politicas continuam distintas duas a duas -- se colapsarem, a comparacao do
+    # marco perde o objeto
+    assert len({str(sorted(kw.items())) for _, kw in V.POLITICAS_M4}) == len(V.POLITICAS_M4)
 
 
 def test_Q9_sd_min_recusa_o_sinal_de_stop_curto_e_o_default_nao_recusa_nada():
@@ -1079,7 +1237,8 @@ def test_Q9_sd_min_recusa_o_sinal_de_stop_curto_e_o_default_nao_recusa_nada():
 
     def roda(**kw):
         return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
-                                saida="trailing", trailing_dist=0.02, **kw)
+                                saida="trailing", trailing_unidade="preco",
+                                trailing_dist=0.02, **kw)
 
     assert len(roda()) == 1                             # default: portao desligado
     assert len(roda(sd_min=0.0)) == 1                   # explicito e igual ao default
@@ -1123,7 +1282,14 @@ def test_Q11_zero_a_zero_arma_em_R_salva_o_trade_e_o_default_nao_arma_nada():
     ela, vai ao stop cheio. Mesmo df, mesmo sinal, mesma politica -- o unico fator e a guarda.
 
     O default `None` nao pode armar nada: e o que garante que as rodadas ja publicadas nao
-    mudem de numero."""
+    mudem de numero.
+
+    [P-1] `trailing_unidade="preco"` esta PINADO aqui, e a razao e o achado: sob o default novo
+    (`"R"`, 1R/1R) este teste nao teria objeto. O trailing em 1R/1R poe o stop no preco de
+    entrada no instante em que arma, isto e, ELE JA FAZ o zero-a-zero -- `sem` fecharia por
+    `trailing` e nao por `stop`, e a comparacao com `be_em_R=1` mediria a guarda contra uma
+    politica que ja a implementa. O [Q-11] mediu `be_em_R` CONTRA o trailing de 2%, e e essa a
+    pergunta que este teste guarda."""
     precos = [100.0] * 62 + [101.5] * 2 + [98.0] * 6
     highs, lows = list(precos), list(precos)
     lows[64] = 98.0
@@ -1132,7 +1298,8 @@ def test_Q11_zero_a_zero_arma_em_R_salva_o_trade_e_o_default_nao_arma_nada():
 
     def roda(**kw):
         return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
-                                saida="trailing", trailing_dist=0.02, **kw)
+                                saida="trailing", trailing_unidade="preco",
+                                trailing_dist=0.02, **kw)
 
     sem = roda()[0]
     assert sem["motivo"] == "stop" and sem["pnl"] < 0    # sem guarda: stop cheio

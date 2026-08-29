@@ -1435,8 +1435,9 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
     i+1, e os canais usam `.shift(1)` -- nada olha para a frente. E o que autoriza gerar a
     timeline inteira uma vez e fatiar depois.
 
-    `saida_kw` [P1-10] escolhe a POLITICA DE SAIDA (`saida`, `trailing_dist`,
-    `trailing_k_atr`). Ele nao toca em nada da entrada: os portoes de conviccao, ADX e
+    `saida_kw` [P1-10] escolhe a POLITICA DE SAIDA (`saida`, `trailing_unidade`,
+    `trailing_arma_r`/`trailing_dist_r`, `trailing_dist`, `trailing_k_atr`). Ele nao toca em
+    nada da entrada: os portoes de conviccao, ADX e
     n_fatores continuam os mesmos nas tres politicas, que e o que mantem a comparacao com um
     fator so.
     """
@@ -1458,13 +1459,33 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
 # [P1-10] As politicas que o card manda comparar, na mesma regua e nas mesmas janelas.
 #
 # A e a do backtest e NUNCA rodou ao vivo. B e o que gerou o historico local
-# (`auto_fechar_saida=1` com `trailing_ativo=0`). C e o default de HOJE (`db.py:95-96`), e a
-# quarta linha e o item 3 do card: a mesma politica C com a distancia em unidade de ATR, para
-# que a saida deixe de ser cega a volatilidade do ativo e a alavancagem.
+# (`auto_fechar_saida=1` com `trailing_ativo=0`). `C trailing 2% fixo` era o default do vivo
+# quando o M4 mediu, e `C trailing 3xATR` e o item 3 daquele card: a mesma politica C com a
+# distancia em unidade de ATR, para que a saida deixe de ser cega a volatilidade e a alavancagem.
+#
+# [P-1 / D-6] DUAS mudancas aqui, e as duas sao sobre o rotulo nao mentir:
+#
+#   * as politicas de PRECO ganharam `trailing_unidade="preco"` EXPLICITO. O default do
+#     `backtest_ativo` virou `"R"` (o `[N-13]` do vivo), entao sem pinar a unidade a linha
+#     chamada "C trailing 2% fixo" passaria a rodar em R e o `VEREDITO-M4` deixaria de ser
+#     reproduzivel por esta tupla -- mudanca de numero em silencio, dentro do arquivo cujo
+#     trabalho e impedir isso. Com a unidade pinada, as quatro linhas historicas seguem
+#     medindo exatamente o que os seus nomes dizem;
+#   * entrou uma QUINTA linha, `C trailing 1R/1R (vivo)`, que e a politica que o sistema
+#     executa desde a assinatura do dono (`D-5`). Sem ela, `python -m pesquisa.validacao
+#     politicas` compararia quatro politicas e NENHUMA seria a de producao -- exatamente o
+#     defeito que o [Q-12] existe para denunciar, renascido.
+#
+# ⚠️ O `VEREDITO-M4` (`DSR = 0,060` da politica C) continua sendo sobre a linha de 2% fixo, que
+# nao roda mais ao vivo. Ele e historico verdadeiro e nao se reescreve; o que nao vale mais e
+# apresenta-lo como o veredito da politica de producao (PLANO-V2 D.7).
 POLITICAS_M4 = (
     ("A stop+flip de regime", {"saida": "regime"}),
     ("B auto-saida", {"saida": "auto"}),
-    ("C trailing 2% fixo", {"saida": "trailing", "trailing_dist": 0.02}),
+    ("C trailing 1R/1R (vivo)", {"saida": "trailing", "trailing_unidade": "R",
+                                 "trailing_arma_r": 1.0, "trailing_dist_r": 1.0}),
+    ("C trailing 2% fixo", {"saida": "trailing", "trailing_unidade": "preco",
+                            "trailing_dist": 0.02}),
     ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0}),
 )
 
@@ -1553,8 +1574,12 @@ def varredura_geometria(dfs=None, funding_8h=FUNDING_8H):
     dfs = dfs if dfs is not None else baixar_paineis()
 
     print(f"\n[baseline] C trailing 2% fixo — {len(GRID)} configs", flush=True)
+    # [P-1] unidade PINADA: este baseline e o do [Q-8]/[Q-9], medido em espaco-preco. Deixa-lo
+    # herdar o default novo ("R") mudaria o baseline sem mudar o rotulo -- e o baseline existe
+    # justamente para o `k` varrido ser comparado contra o que ja estava medido.
     base = walk_forward(gerador_tendencia(dfs, "tendencia", funding_8h,
-                                          {"saida": "trailing", "trailing_dist": 0.02}),
+                                          {"saida": "trailing", "trailing_unidade": "preco",
+                                           "trailing_dist": 0.02}),
                         [_chave(g) for g in GRID], n_trials=N_TRIALS,
                         rotulo=f"C trailing 2% fixo | {TF} {DIAS}d | {LEV}x")
     relatorio(base)
@@ -1598,9 +1623,14 @@ def _trades_zaz(cfg):
     tr = []
     for c in COINS:
         try:
+            # [P-1] unidade PINADA em "preco": a grade do [Q-11] varre `be_em_R` CONTRA o
+            # trailing de 2% que existia entao. Sob o default novo ("R", 1R/1R) o proprio
+            # trailing ja poe o stop no zero-a-zero ao armar, e a varredura perderia o objeto
+            # -- mediria o be_em_R contra uma politica que ja faz be_em_R.
             tr += backtest_ativo(c, mc, VALOR, LEV, estrategia="tendencia", df=_DFS_W[c],
                                  adx_min=ax, funding_8h=_FUNDING_W, saida="trailing",
-                                 trailing_dist=0.02, be_em_R=be, lev_modo="conviccao")
+                                 trailing_unidade="preco", trailing_dist=0.02,
+                                 be_em_R=be, lev_modo="conviccao")
         except Exception:
             pass
     return cfg, tr
@@ -1692,11 +1722,13 @@ POLITICAS_M4_PROD = tuple(
     (f"{nome} [prod]", {**kw, "lev_modo": "conviccao"}) for nome, kw in POLITICAS_M4
 )
 
-# [F10] Piso contado, cumulativo no dia (ver N_TRIALS_ZAZ): 700 + 4 politicas x 6 configs x 5
-# folds = 820. A tabela de sensibilidade que o relatorio imprime SEMPRE recupera o DSR a
+# [F10] Piso contado, cumulativo no dia (ver N_TRIALS_ZAZ): 700 + politicas x 6 configs x 5
+# folds. Com as 4 politicas do M4 dava 820; o [P-1] acrescentou a quinta (`C trailing 1R/1R`),
+# entao sao 700 + 5 x 6 x 5 = 850. O piso so sobe, por construcao -- ele conta tentativas ja
+# gastas. A tabela de sensibilidade que o relatorio imprime SEMPRE recupera o DSR a
 # n_trials=100, que e o numero sob o qual o VEREDITO-M4 foi emitido -- entao subir o piso aqui
 # nao torna a comparacao com ele irrecuperavel, so a torna honesta por default.
-N_TRIALS_PROD = 820
+N_TRIALS_PROD = 700 + len(POLITICAS_M4) * len(GRID) * N_FOLDS
 
 
 def _trades_pol(par):
