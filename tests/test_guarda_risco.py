@@ -638,3 +638,117 @@ def test_f2_trade_antigo_sem_a_coluna_nova_NAO_entra_na_serie(banco):
     assert m["expectancia_r"] == pytest.approx(2.0)     # a serie legada continua respondendo
     assert m["n_r_ab"] == 0                             # e a nova diz, sem rodeio, que nao mediu
     assert m["expectancia_r_ab"] == 0 and m["sqn_r_ab"] == 0
+# ============================================ [N-13] o trailing na MESMA unidade do stop (F-19)
+#
+# `trailing_dist=0.02` e 2% de PRECO; o stop e 3xATR. Duas unidades para a mesma geometria, e a
+# conta que sai disso e ruim dos dois lados: multiplicada pela alavancagem, 2% de preco viram 4%
+# de ROE a 2x e 40% a 20x -- o trailing desarma justamente onde a aposta e maior --; e em unidade
+# de risco o mesmo 2% vale 3R num stop curto e meio R num stop largo. 19 dos 20 trades que foram
+# de lucro a prejuizo NUNCA armaram o trailing (INVESTIGACAO-MOTOR-2026-08-24 §8), e a cauda
+# direita e exatamente o que a meta do dono pede.
+#
+# Em R o gatilho passa a significar a mesma coisa em todo trade. E a identidade que o
+# `test_n13_o_gatilho_em_R_e_o_risco_da_posicao...` fixa: ROE de armacao = `lev x sd`, que e a
+# FRACAO DA MARGEM que o stop arrisca. O trailing arma quando o trade ganhou o que ele arrisca.
+
+
+def test_n13_o_default_arma_em_1R_e_leva_o_stop_ao_zero_a_zero(banco, sem_rede):
+    """Com `trailing_arma_r=1` e `trailing_dist_r=1`, no instante da armacao o stop cai
+    exatamente na entrada. Nao e coincidencia de numeros: e o `be_em_R=1` que a pesquisa ja
+    prescrevia do seu lado (`pesquisa/backtest_plataforma`), chegando ao vivo pela mesma porta."""
+    assert db.get_config()["trailing_unidade"] == "R"
+    pid = _abre_com_stop(sem_rede)                     # entrada 100, stop 98 => 1R = 2,00
+    sem_rede(102.0)                                    # +1R
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(100.0)
+
+
+def test_n13_com_stop_curto_o_R_arma_onde_os_2pct_de_preco_nao_armavam(banco, sem_rede):
+    """O conserto do F-19, no caso que produziu os 19 de 20.
+
+    Stop de 0,5% (1R = 0,50). A 101,00 o trade ja ganhou 2R e o trailing em R protege; a regra
+    velha so olharia para 102,00, e ate la 2% de preco a 10x sao 20% de ROE correndo SEM
+    protecao nenhuma. Mesmo preco, mesma posicao, so a unidade muda."""
+    pid = _abre_com_stop(sem_rede, stop=99.5)
+    sem_rede(101.0)
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(100.5)    # armou: 101 - 1R
+
+    db.set_config("trailing_unidade", "preco")          # a regra velha, mesmo preco
+    pid2 = _abre_com_stop(sem_rede, stop=99.5)
+    sem_rede(101.0)
+    simulador.atualizar()
+    assert _pos(pid2)["stop"] == pytest.approx(99.5)     # nao armou: 101 < 100 x 1,02
+
+
+def test_n13_a_unidade_preco_fica_preservada_expressao_por_expressao(banco, sem_rede):
+    """`preco` nao e caminho morto: e o comportamento historico, e e o que as posicoes sem
+    `stop_abertura` continuam usando. A 103,00 o stop vai para 103 x 0,98 = 100,94 -- o mesmo
+    numero que o codigo de antes deste card produzia."""
+    db.set_config("trailing_unidade", "preco")
+    pid = semear_posicao(entrada=100.0, valor_reais=100.0, alavancagem=10, stop=98.0)
+    sem_rede(103.0)
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(100.94)
+
+
+def test_n13_posicao_sem_ancora_cai_no_preco_em_vez_de_inventar_um_R(banco, sem_rede):
+    """Posicao aberta ANTES das colunas existirem (aqui: semeada direto, `stop_abertura` NULL).
+    Ela nasceu sob a regra de preco e continua sob ela -- escolher um R para ela exigiria
+    adivinhar o stop de entrada a partir do stop de agora, que e o defeito do [F-1] renascendo
+    dentro do proprio conserto."""
+    assert db.get_config()["trailing_unidade"] == "R"
+    pid = semear_posicao(entrada=100.0, valor_reais=100.0, alavancagem=10, stop=98.0)
+    assert _pos(pid)["stop_abertura"] is None
+    sem_rede(101.0)
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(98.0)      # 101 < 102: a regra de preco nao armou
+    sem_rede(103.0)
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(100.94)    # e quando arma, arma pela regra de preco
+
+
+def test_n13_a_catraca_vale_em_R_tambem(banco, sem_rede):
+    """O stop nunca anda para tras. Trocar a unidade nao pode reabrir essa porta: um trailing
+    que desce e um stop que o mercado escolhe."""
+    pid = _abre_com_stop(sem_rede)
+    sem_rede(110.0)
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(108.0)
+    sem_rede(109.0)                                     # o preco recuou; o stop nao segue
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(108.0)
+
+
+def test_n13_o_short_arma_em_R_do_lado_certo(banco, sem_rede):
+    """SHORT com entrada 100 e stop 102: 1R = 2,00, e o lucro e para BAIXO. A 98,00 arma e o
+    stop desce ao zero-a-zero. Sinal trocado aqui viraria um trailing que persegue a perda."""
+    pid = _abre_com_stop(sem_rede, stop=102.0, direcao="SHORT")
+    assert _pos(pid)["stop_abertura"] == pytest.approx(102.0)
+    sem_rede(98.0)
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(100.0)
+
+
+@pytest.mark.parametrize("lev", [2, 10, 20])
+@pytest.mark.parametrize("sd", [0.0074, 0.0367, 0.0950])   # min, mediana e max da TABELA_STOPS_P1_11
+def test_n13_o_gatilho_em_R_e_o_risco_da_posicao_e_nao_um_ROE_fixo(lev, sd):
+    """A TABELA DE EQUIVALENCIA, como identidade em vez de nota de rodape.
+
+    Regra velha: o trailing arma em `+trailing_dist` de PRECO, entao o ROE de armacao e
+    `0,02 x lev` -- 4% a 2x, 20% a 10x, 40% a 20x -- e NAO depende do stop. O mesmo gatilho para
+    um trade que arrisca 1,5% da margem e para outro que arrisca 95%.
+
+    Regra nova (1R): o ROE de armacao e `sd x lev`, que E a fracao da margem que o stop arrisca.
+    O trailing passa a armar quando o trade ganhou exatamente o que ele arrisca -- a mesma frase
+    para toda posicao, qualquer que seja o ativo, a volatilidade ou a alavancagem.
+
+    Roda sobre os stops MEDIDOS do [P1-11] (0,74% / 3,67% / 9,50%). Os numeros celula a celula
+    estao na tabela do relatorio do card; o que este teste trava e que os dois lados continuem
+    saindo destas duas formulas, e nao de um numero escolhido a mao."""
+    roe_arma_velho = 0.02 * lev
+    roe_arma_novo = sd * lev
+    assert (roe_arma_novo < roe_arma_velho) == (sd < 0.02)      # stop curto protege ANTES
+    # e o gatilho novo e, por identidade, o risco-ate-o-stop em fracao da margem
+    assert simulador._risco_posicao(100.0, lev, 100.0, 100.0 * (1 - sd)) / 100.0 == \
+        pytest.approx(min(roe_arma_novo, 1.0))

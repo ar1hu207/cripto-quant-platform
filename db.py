@@ -153,7 +153,37 @@ CONFIG_PADRAO = {
                                   # [Q-3] DIVERGE da base, e encosta no ponto de virada da
                                   # aproximação de liquidação (ARQUITETURA.md §10a)
     "trailing_ativo": "1",        # trailing stop: deixa o lucro correr, trava o ganho (sobe o stop atrás do preço)
-    "trailing_dist": "0.02",      # distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
+    # [N-13] A UNIDADE do trailing, e por que ela virou config em vez de um numero trocado.
+    #
+    # Ate aqui o trailing morava em espaco-PRECO (`trailing_dist=0.02`) enquanto o stop mora em
+    # ATR (3xATR). Duas unidades para a mesma geometria, e a conta que isso produz e ruim de
+    # duas maneiras opostas ao mesmo tempo:
+    #   - o gatilho vira ROE quando multiplicado pela alavancagem: 2% de preco sao 4% de ROE a
+    #     2x e 40% a 20x. O trailing DESARMA justamente onde a aposta e maior;
+    #   - e em unidade de risco ele e arbitrario: com stop curto 2% de preco sao 3R ou mais
+    #     (arma tarde demais); com stop largo sao meio R (arma cedo demais). O mesmo numero
+    #     significa coisas diferentes a cada trade.
+    # A medicao: 19 dos 20 trades que foram de lucro a prejuizo NUNCA armaram o trailing
+    # (INVESTIGACAO-MOTOR-2026-08-24 §8). E a cauda direita e exatamente o que a meta do dono
+    # pede -- destrui-la por erro de unidade e o oposto de aproveitar oportunidade.
+    #
+    # "R" poe o trailing na MESMA unidade do stop: 1R = a distancia entrada->stop DA ABERTURA
+    # (`posicoes.stop_abertura`, imutavel). E a mesma correcao de unidade que a pesquisa ja
+    # havia adotado do seu lado -- `be_em_R` e `trailing_k_atr` em `pesquisa/backtest_plataforma`
+    # ja sao medidos em R e em ATR, e o `preco` fixo era o que sobrava do lado vivo.
+    #
+    # Nao existe unidade "atr" aqui, e a ausencia e decisao: o stop de entrada JA e 3xATR
+    # (`signal_engine`), entao 1R ~= 3 ATR por construcao. Uma unidade "atr" seria um multiplo
+    # constante de uma que ja temos, e custaria guardar o ATR da entrada na posicao -- dado que
+    # hoje nao existe -- para nao ganhar informacao nenhuma.
+    #
+    # "preco" continua inteiro, com o default historico intacto, e nao e enfeite: e o que as
+    # posicoes abertas ANTES destas colunas continuam usando (sem `stop_abertura` nao ha R
+    # medivel, e inventar um seria o defeito do F-1 nascendo de novo noutra funcao).
+    "trailing_unidade": "R",      # "R" = multiplo do risco-ate-o-stop da ABERTURA | "preco" = fração do preço
+    "trailing_arma_r": "1",       # [unidade=R] lucro, em R, que ARMA o trailing (1R => stop vai ao zero-a-zero)
+    "trailing_dist_r": "1",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
+    "trailing_dist": "0.02",      # [unidade=preco] distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
     "telegram_token": "",
     "telegram_chat_id": "",
 }

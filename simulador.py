@@ -542,8 +542,7 @@ def atualizar():
     Trailing stop: quando a posição entra em lucro, o stop SOBE atrás do preço (nunca desce) —
     deixa o lucro correr e trava o ganho. Inverte a assimetria: ganha grande, perde pequeno."""
     cfg = db.get_config()
-    trail_on = str(cfg.get("trailing_ativo", "1")) in ("1", "true", "True")
-    trail_d = _cfg_float(cfg, "trailing_dist", 0.02)
+    trail = _trailing_cfg(cfg)
     eventos = []
     with db.conectar() as con:
         abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
@@ -553,7 +552,7 @@ def atualizar():
         # try POR POSIÇÃO, não em volta do for: uma moeda que falha não pode tirar as OUTRAS
         # posições da vigilância de stop/trailing/liquidação, nem derrubar o resto do ciclo.
         try:
-            _marcar_uma(pos, trail_on, trail_d, eventos)
+            _marcar_uma(pos, trail, eventos)
             ultima_marcacao["ok"] += 1
         except Exception as e:
             ultima_marcacao["falhas"] += 1
@@ -563,21 +562,85 @@ def atualizar():
     return eventos
 
 
-def _marcar_uma(pos, trail_on, trail_d, eventos):
+def _trailing_cfg(cfg):
+    """[N-13] A política de trailing da config, já resolvida em números.
+
+    Lida uma vez por ciclo em `atualizar()`, e não por posição: são leituras de config a menos,
+    e — o que importa mais — todas as posições de um mesmo ciclo passam a ser marcadas sob a
+    MESMA política. Reler a config dentro do `for` deixaria metade das posições sob uma regra e
+    metade sob outra no ciclo em que alguém mexesse no painel."""
+    return {"on": str(cfg.get("trailing_ativo", "1")) in ("1", "true", "True"),
+            "unidade": str(cfg.get("trailing_unidade", "R")).strip(),
+            "arma_r": _cfg_float(cfg, "trailing_arma_r", 1.0),
+            "dist_r": _cfg_float(cfg, "trailing_dist_r", 1.0),
+            "dist_preco": _cfg_float(cfg, "trailing_dist", 0.02)}
+
+
+def _r_abertura(pos):
+    """[N-13] 1R em PREÇO: a distância entrada→stop **da abertura**, lida de `stop_abertura`.
+
+    Sai da coluna imutável e nunca de `pos["stop"]`. Medir o R a partir do stop vigente seria o
+    defeito do [F-1] renascendo dentro do próprio conserto: o trailing move o stop, o R
+    encolheria a cada ciclo, e o gatilho "1R" passaria a significar um lucro menor a cada
+    passada — um trailing que se persegue e trava o vencedor cedo demais.
+
+    0.0 = não há R mensurável (posição aberta antes da coluna existir, ou sinal sem stop). Quem
+    chama trata isso como ausência, não como zero."""
+    try:
+        sa = pos["stop_abertura"]
+    except (KeyError, IndexError):                # posição montada à mão, sem SELECT *
+        return 0.0
+    if not sa or not pos["entrada"]:
+        return 0.0
+    return abs(float(pos["entrada"]) - float(sa))
+
+
+def _trailing_novo_stop(pos, preco, d, trail):
+    """[N-13] O stop que o trailing propõe, ou None enquanto ele não armou.
+
+    Duas unidades, e a escolha é da config (`trailing_unidade`):
+
+    **"R"** põe gatilho e distância na MESMA unidade do stop — 1R = `_r_abertura`. É o conserto
+    do F-19: em espaço-preço o gatilho vira ROE quando multiplicado pela alavancagem (2% de
+    preço são 4% de ROE a 2x e 40% a 20x), então o trailing desarmava justamente onde a aposta
+    era maior; e em unidade de risco os mesmos 2% valem 3R num stop curto e meio R num stop
+    largo. Em R o gatilho significa a mesma coisa em todo trade, qualquer que seja o ativo, a
+    volatilidade ou a alavancagem — que é a razão de o `be_em_R` da pesquisa já ser medido assim
+    (`pesquisa/backtest_plataforma`).
+
+    **"preco"** é o comportamento histórico, preservado expressão por expressão
+    (`entrada*(1±td)` e `preco*(1∓td)`, não uma reescrita algebricamente equivalente — igualdade
+    em ponto flutuante não sobrevive a "equivalente"). Ele também é o caminho das posições SEM
+    `stop_abertura`: elas nasceram sob esta política e continuam sob ela. Escolher um R para
+    elas exigiria adivinhar o stop de entrada a partir do stop de agora, que é exatamente a
+    adivinhação que este card veio remover."""
+    if not (trail["on"] and pos["stop"] and pos["entrada"]):
+        return None
+    r = _r_abertura(pos)
+    if trail["unidade"] == "R" and r:
+        if d == 1 and preco >= pos["entrada"] + trail["arma_r"] * r:
+            return preco - trail["dist_r"] * r
+        if d == -1 and preco <= pos["entrada"] - trail["arma_r"] * r:
+            return preco + trail["dist_r"] * r
+        return None
+    td = trail["dist_preco"]
+    if d == 1 and preco >= pos["entrada"] * (1 + td):
+        return preco * (1 - td)
+    if d == -1 and preco <= pos["entrada"] * (1 - td):
+        return preco * (1 + td)
+    return None
+
+
+def _marcar_uma(pos, trail, eventos):
     """Marca UMA posição no preço ao vivo. Extraído do for de atualizar() para que o
     try/except tenha a granularidade de uma posição — os `continue` viram `return`."""
     preco = preco_ao_vivo(pos["ativo"])
     d = 1 if pos["direcao"] == "LONG" else -1
-    # trailing: só sobe o stop (LONG) / só desce (SHORT), e só depois do preço passar +trail_d em lucro
-    if trail_on and pos["stop"] and pos["entrada"]:
-        if d == 1 and preco >= pos["entrada"] * (1 + trail_d):
-            novo = preco * (1 - trail_d)
-            if novo > pos["stop"]:
-                pos["stop"] = round(novo, 8)
-        elif d == -1 and preco <= pos["entrada"] * (1 - trail_d):
-            novo = preco * (1 + trail_d)
-            if novo < pos["stop"]:
-                pos["stop"] = round(novo, 8)
+    # trailing: só sobe o stop (LONG) / só desce (SHORT). O `novo` só é aceito se andar a favor —
+    # a catraca não muda de unidade, e um stop que anda para trás é um stop que o mercado escolhe.
+    novo = _trailing_novo_stop(pos, preco, d, trail)
+    if novo is not None and ((d == 1 and novo > pos["stop"]) or (d == -1 and novo < pos["stop"])):
+        pos["stop"] = round(novo, 8)
     liq = _preco_liquidacao(pos["entrada"], d, pos["alavancagem"])
     hit_liq = (d == 1 and preco <= liq) or (d == -1 and preco >= liq)
     hit_stop = pos["stop"] and ((d == 1 and preco <= pos["stop"]) or (d == -1 and preco >= pos["stop"]))
