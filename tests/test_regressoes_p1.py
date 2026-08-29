@@ -225,31 +225,44 @@ def corretora_contada(banco, monkeypatch):
     return fake
 
 
-# O ciclo do worker (`api.worker`) gasta, por posicao aberta:
-#   1x `simulador.atualizar()`  -> `preco_ao_vivo`      = 1 fetch_ticker
-#   1x `signal_engine.avaliar_saida()`                  = 1 fetch_ohlcv
+# O ciclo do worker (`api.worker`), depois do [F-11], gasta:
+#
+#   `simulador.atualizar()`                             = 1 requisicao, SEMPRE (constante)
+#       ate 1 posicao  -> `preco_ao_vivo`               = 1 fetch_ticker
+#       2 ou mais      -> `_precos_em_lote`             = 1 fetch_tickers pela lista inteira
+#   `signal_engine.avaliar_saida()`, POR POSICAO        = 1 fetch_ohlcv   (cacheado, [F-10])
 #                                 + `mercado.book()`    = 1 fetch_order_book + 1 fetch_trades
-CUSTO_POR_POSICAO = 4
+#
+# A separacao entre os dois numeros e o card: a marcacao deixou de crescer com o tamanho da
+# carteira, o gestor de saida nao. Um so `CUSTO_POR_POSICAO` juntava as duas coisas e
+# escondia justamente qual delas escala.
+CUSTO_MARCACAO = 1                      # [F-11] constante: nao depende de n_pos
+CUSTO_SAIDA_FRIO = 3                    # por posicao, cache de velas vazio
+CUSTO_SAIDA_REGIME = 2                  # [F-10] por posicao, com a vela ainda aberta
 
 
 @pytest.mark.parametrize("n_pos", [1, 3, 5])
 def test_f13_o_custo_de_rede_do_ciclo_cresce_por_posicao(corretora_contada, n_pos):
-    """[F-13] O ciclo e LINEAR no numero de posicoes, e o coeficiente e 4 requisicoes.
+    """[F-13] O ciclo continua LINEAR no numero de posicoes -- o coeficiente e que caiu.
 
     Medido com o relogio em 2026-08-29 (`python signal_engine.py --cronometro`, 5 posicoes,
-    a partir do Brasil): 20 requisicoes e **18,5 s** num ciclo cujo teto e 15 s -- ou seja o
-    ciclo ja estoura ANTES de o scan entrar. Este teste trava a metade determinista do
-    numero, para que a contagem nao volte a subir sem ninguem decidir que subiu.
+    a partir do Brasil): 20 requisicoes e **18,5 s** num ciclo cujo teto e 15 s, ou seja o
+    ciclo ja estourava ANTES de o scan entrar. Depois do [F-11] a mesma medicao deu **16
+    requisicoes e 11,8 s**, e o ciclo passou a caber.
+
+    [F-11] A marcacao saiu da conta linear: e 1 requisicao para qualquer carteira. O que
+    sobra crescendo com `n_pos` e o gestor de saida, que e exatamente o que o [F-9] mede.
     """
     for i in range(n_pos):
         semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
                        valor_reais=50.0, alavancagem=2)
     simulador.atualizar()
+    assert corretora_contada.total == CUSTO_MARCACAO      # 1, para 1 ou para 5 posicoes
     abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
     assert len(abertas) == n_pos                     # nada fechou: o stop esta longe
     for pos in abertas:
         signal_engine.avaliar_saida(pos)
-    assert corretora_contada.total == n_pos * CUSTO_POR_POSICAO
+    assert corretora_contada.total == CUSTO_MARCACAO + n_pos * CUSTO_SAIDA_FRIO
 
 
 def _um_ciclo():
@@ -265,19 +278,32 @@ def test_f10_o_ciclo_SEGUINTE_nao_rebaixa_o_candle_que_nao_mudou(corretora_conta
     """[F-10] O numero que interessa nao e o do primeiro ciclo -- e o do regime, porque o
     worker roda 5.760 ciclos por dia e so um deles e o primeiro.
 
-    Primeiro ciclo: 4 requisicoes por posicao (o cache esta frio). Do segundo em diante, 3 --
+    Primeiro ciclo: 3 requisicoes por posicao (o cache esta frio). Do segundo em diante, 2 --
     o candle sai do cache ate a vela fechar, que num TF de 15 min significa **59 dos 60
     ciclos**. E o mesmo sinal, nao um parecido: ver o argumento de igualdade em `_velas`.
+
+    A marcacao continua custando 1 nos dois ciclos: ela nao e cacheada e nao deve ser -- o
+    preco ao vivo e o que decide stop e liquidacao, e serve-lo de cache seria vigiar o
+    mercado por uma foto velha. O [F-11] tirou o N dela, nao a frequencia.
     """
     for i in range(n_pos):
         semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
                        valor_reais=50.0, alavancagem=2)
     _um_ciclo()
-    assert corretora_contada.total == n_pos * CUSTO_POR_POSICAO
+    assert corretora_contada.total == CUSTO_MARCACAO + n_pos * CUSTO_SAIDA_FRIO
     corretora_contada.n.clear()
+    # O cache de tickers do `mercado` vale 5 s, e existe para que os varios consumidores de UM
+    # ciclo nao pecam o mesmo preco varias vezes. Entre ciclos ele nunca vale: o worker dorme
+    # 15 s e a medicao do [F-13] poe o ciclo entre 11,8 s e 43,7 s, de modo que os 5 s sempre
+    # vencem no caminho. Dois `_um_ciclo()` colados num teste sao a unica cadencia em que ele
+    # sobreviveria -- limpa-lo aqui e o que faz o teste medir o REGIME de producao em vez de um
+    # cache que a producao nunca ve.
+    # O cache de VELAS ([F-10]) e o contrario e por isso NAO se toca aqui: ele vale ate a vela
+    # fechar, sobrevive entre ciclos de proposito, e e justamente ele que este teste mede.
+    mercado._tcache.clear()
     _um_ciclo()
-    assert corretora_contada.n.get("fetch_ohlcv") is None      # nenhum candio rebaixado
-    assert corretora_contada.total == n_pos * (CUSTO_POR_POSICAO - 1)
+    assert corretora_contada.n.get("fetch_ohlcv") is None      # nenhum candle rebaixado
+    assert corretora_contada.total == CUSTO_MARCACAO + n_pos * CUSTO_SAIDA_REGIME
 
 
 def test_f10_o_segundo_scan_dentro_da_mesma_vela_nao_gasta_requisicao(corretora_contada):
