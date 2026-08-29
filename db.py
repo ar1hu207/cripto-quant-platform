@@ -114,7 +114,24 @@ CONFIG_PADRAO = {
     "auto_fechar_saida": "1",     # bot fecha sozinho em reversão com lucro (gestor de saída)
     "auto_freshness_min": "12",   # só opera sinais com até N minutos (price/stop envelhecem)
     "auto_cooldown_min": "30",    # após fechar um ativo, não reabre por N minutos (evita churn)
-    "auto_lev_modo": "conviccao", # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
+    # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
+    # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
+    # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o
+    # win% por faixa faz 63 -> 38 -> 45 -> 50 -> 47, que e serrilha e nao escada. A faixa
+    # 80-90, que a escala premiava com ~12x, e a PIOR das cinco.
+    #
+    # O que isso torna caro: a escala mapeia 60 -> `auto_lev_min` e 99 -> `auto_lev_max`, ou
+    # seja 20 pontos de um score que medimos nao prever acerto viravam 5,5x mais dinheiro em
+    # risco. Isso nao e agressividade -- e alavancagem espalhada sobre ruido, e o dinheiro
+    # espalhado ali e o que falta quando aparecer a oportunidade que MERECE 20x (NORTE.md,
+    # PLANO-V2 Parte 0). Desligar aqui e REALOCAR risco, nao reduzi-lo.
+    #
+    # O modo "conviccao" continua inteiro no `autotrader._alavancagem`, dormindo. Apagar o
+    # mecanismo seria destruir a peca que a meta do dono precisa: o `N-10b` esta encarregado de
+    # construir um medidor que passe no teste do [Q-13] (win% monotonico por faixa, em amostra
+    # FORA da usada para construi-lo), e no dia em que passar a escala volta com fundamento --
+    # ligada por config, sem re-implementar nada.
+    "auto_lev_modo": "fixo",      # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
     "auto_lev_min": "2",          # alavancagem na convicção mínima
     "auto_lev_max": "20",         # TETO de alavancagem (na convicção máxima)
                                   # [Q-3] DIVERGE da base, e encosta no ponto de virada da
