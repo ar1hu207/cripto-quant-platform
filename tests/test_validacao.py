@@ -374,7 +374,7 @@ def test_veredito_edge_quando_o_drift_e_real_e_ha_poder():
     assert res["veredito"]["classe"] == "EDGE"
 
 
-def test_serie_oos_cobre_so_a_janela_oos_nao_a_timeline_inteira():
+def test_serie_oos_do_WALK_FORWARD_cobre_so_a_janela_oos_nao_a_timeline_inteira():
     """Bug que quase entrou no registro: a serie diaria OOS montada sobre a grade INTEIRA.
 
     O primeiro dos `N_FOLDS+1` segmentos e treino puro -- nunca foi testado, nao ha decisao a
@@ -384,17 +384,49 @@ def test_serie_oos_cobre_so_a_janela_oos_nao_a_timeline_inteira():
 
     O BLOCO A continua na timeline inteira, e isso e correto: cada config foi rodada nela
     inteira, e o nulo do Reality Check e sobre a familia in-sample.
+
+    [N-7] O teste passou a rodar sob `cv="walk_forward"` EXPLICITO. A propriedade que ele
+    guarda e do walk-forward e so dele -- ela nasce de haver um segmento que nunca foi testado.
+    Sob CPCV nao ha esse segmento, e o teste companheiro logo abaixo afirma o oposto, com o
+    porque.
     """
-    res = _res_sintetico(mu=0.0, seed=11, n_dias=1200)
-    grade_toda, grade_oos = res["grade"], res["grade_oos"]
+    por_cfg = {}
+    for k, cfg in enumerate(((50, 22), (55, 22), (65, 25))):
+        rng = np.random.default_rng(1100 + k)
+        por_cfg[cfg] = trades_diarios(rng.normal(0.0, 10.0, 1200).tolist())
+    base = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    grade_toda, grade_oos = base["grade"], base["grade_oos"]
     assert len(grade_oos) < len(grade_toda)
     assert 0.75 < len(grade_oos) / len(grade_toda) < 0.90       # ~5/6 da timeline
-    assert res["bloco_b"]["T"] == len(grade_oos)
-    assert len(res["bloco_a"]["serie_naive"]) == len(grade_toda)
-    # nenhum trade OOS cai fora da janela, e a janela nao comeca com uma sequencia de zeros
-    dias_oos = {t["ts"] // DIA for t in res["oos"]}
+    assert len(base["serie_oos"]) == len(grade_oos)
+    dias_oos = {t["ts"] // DIA for t in base["oos"]}
     assert min(dias_oos) >= grade_oos[0] and max(dias_oos) <= grade_oos[-1]
-    assert res["serie_oos"][0] != 0.0 or res["serie_oos"][1] != 0.0
+    assert base["serie_oos"][0] != 0.0 or base["serie_oos"][1] != 0.0
+
+
+def test_N7_no_CPCV_a_janela_INTEIRA_e_OOS_e_isso_muda_o_T_do_portao_de_poder():
+    """O contrario do teste acima, e a diferenca precisa ficar afirmada em vez de descoberta.
+
+    Sob CPCV todo grupo e teste em algum corte, entao cada trajetoria cobre a janela inteira e
+    `grade_oos == grade`. A consequencia e um T MAIOR, e T maior baixa o MDS -- ou seja, o
+    instrumento passa a parecer com mais poder. Essa e a direcao CONFORTAVEL, e por isso ela
+    tem de estar num teste e no relatorio, nao so no commit.
+
+    Ela e legitima (aquele pedaco de fato foi avaliado fora da amostra que o escolheu) mas vem
+    junto com o preco declarado do CPCV: em varios cortes o treino esta DEPOIS do teste, entao
+    o numero nao e simulacao de operacao ao vivo.
+    """
+    por_cfg = {}
+    for k, cfg in enumerate(((50, 22), (55, 22), (65, 25))):
+        rng = np.random.default_rng(1100 + k)
+        por_cfg[cfg] = trades_diarios(rng.normal(0.0, 10.0, 1200).tolist())
+    cp = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "cpcv"})
+    wf = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    assert cp["grade_oos"] == cp["grade"]
+    assert len(cp["grade_oos"]) > len(wf["grade_oos"])
+    assert V.mds_sharpe(len(cp["grade_oos"])) < V.mds_sharpe(len(wf["grade_oos"]))
+    # o BLOCO A nao muda: ele sempre foi a timeline inteira, nos dois esquemas
+    assert cp["matriz_is"] == wf["matriz_is"]
 
 
 def test_padrao_travado_walk_forward_nao_aceita_criterio():
@@ -998,7 +1030,7 @@ def test_C_trailing_sobe_o_stop_atras_do_preco_e_fecha_EM_LUCRO():
 
     assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
                             saida="regime") == []       # A: stop fixo de 3% nao e tocado
-    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    t = _um_trade(df, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t["motivo"] == "trailing"
     assert t["pnl"] > 0
     assert t["ts_saida"] == T0 + 65 * TF_MS + TF_MS
@@ -1012,7 +1044,7 @@ def test_C_so_arma_o_trailing_depois_do_lucro_passar_da_distancia():
     lows = list(precos)
     lows[65] = 96.0
     df = df_com_indicadores(precos, lows=lows)
-    t = _um_trade(df, "trailing", trailing_dist=0.02)
+    t = _um_trade(df, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t["motivo"] == "stop"                        # nunca armou: e o stop de entrada
     assert t["pnl"] < 0
 
@@ -1030,13 +1062,13 @@ def test_C_o_stop_do_trailing_so_se_move_para_o_candle_SEGUINTE():
     lows[63] = 100.0                                    # o fundo furaria o stop pos-trailing
     df = df_com_indicadores(precos, highs=highs, lows=lows)
     tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
-                          saida="trailing", trailing_dist=0.02)
+                          saida="trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert tr == []                                     # nao fechou dentro do candle do pico
     # ...mas o stop ficou armado em 108*0,98 = 105,84, e o candle SEGUINTE o encontra
     lows2 = list(lows)
     lows2[64] = 100.0
     df2 = df_com_indicadores(precos, highs=highs, lows=lows2)
-    t = _um_trade(df2, "trailing", trailing_dist=0.02)
+    t = _um_trade(df2, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t["motivo"] == "trailing" and t["pnl"] > 0
     assert t["ts_saida"] == T0 + 64 * TF_MS + TF_MS
 
@@ -1052,10 +1084,168 @@ def test_C_em_k_ATR_e_o_item_3_do_card_distancia_em_unidade_do_ATR():
     lows = list(precos)
     lows[65] = 102.5
     df = df_com_indicadores(precos, lows=lows, atr=[5.0] * len(precos))
-    t2 = _um_trade(df, "trailing", trailing_dist=0.02)
+    t2 = _um_trade(df, "trailing", trailing_unidade="preco", trailing_dist=0.02)
     assert t2["motivo"] == "trailing"                   # 2%: stop em 106*0,98 = 103,88 -> bate
     assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60]),
                             saida="trailing", trailing_k_atr=1.0) == []   # 5%: 100,7 -> nao bate
+
+
+# ============================ [P-1 / D-6] trailing em R: a pesquisa acompanha o vivo =====
+def test_P1_o_DEFAULT_do_trailing_e_R_e_nao_mais_espaco_preco():
+    """[P-1] O default mudou, e o teste existe para que ele nao volte por descuido.
+
+    Ate 2026-08-29 o motor tinha politica de trailing PROPRIA (2% de preco). O `[N-13]` trocou
+    a unidade no vivo (1R para armar, 1R de distancia, assinado pelo dono na `D-5`) e a `D-6`
+    decidiu que a pesquisa acompanha. Um default e uma afirmacao sobre o que se mede por
+    omissao -- e este arquivo inteiro roda por omissao.
+    """
+    assert B.TRAILING_UNIDADE == "R"
+    assert (B.TRAILING_ARMA_R, B.TRAILING_DIST_R) == (1.0, 1.0)
+    assert B.UNIDADES_TRAILING == ("R", "preco")
+    with pytest.raises(ValueError, match="trailing_unidade deve ser"):
+        B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores([100.0] * 70),
+                         sinal_fn=sinal_em([60]), saida="trailing", trailing_unidade="atr")
+
+
+def test_P1_em_R_o_gatilho_e_a_distancia_saem_do_stop_de_ABERTURA():
+    """A resposta e conhecida por construcao, e e por isso que ela vale mais que dez asercoes
+    sobre dado real.
+
+    Entrada em ~100 com `stop_dist=2%` -> 1R = ~2,0 em preco. Com `arma_r=1` o trailing so
+    arma quando o preco toca ~102,0; com `dist_r=1` o stop vai para `pico - 1R`.
+
+      * pico 101,5 (menos de 1R): NAO arma. O stop segue em ~98,0 e a queda a 97 fecha por
+        `stop`, com prejuizo;
+      * pico 106,0 (3R): arma, stop = ~104,0. A volta a 104 fecha por `trailing`, com LUCRO --
+        e 104 e um numero que so existe se a distancia tiver saido do 1R de abertura.
+
+    Se a implementacao lesse o R do stop VIGENTE em vez do de abertura, a distancia encolheria
+    a cada candle -- o [F-1] renascendo dentro do proprio conserto.
+    """
+    fn = sinal_em([60], stop_dist=0.02)                 # 1R ~ 2,00 em preco
+
+    curto = [100.0] * 62 + [101.5] * 2 + [97.0] * 6     # pico 1,5 < 1R
+    t = B.backtest_ativo("X/USDT", 0, 100, 10,
+                         df=df_com_indicadores(curto, highs=list(curto), lows=list(curto)),
+                         sinal_fn=fn, saida="trailing")[0]
+    assert t["motivo"] == "stop" and t["pnl"] < 0
+
+    longo = [100.0] * 62 + [106.0] * 3 + [104.5] * 5    # pico 6,0 = 3R -> stop em ~104,0
+    lows = list(longo)
+    lows[65] = 103.9
+    df = df_com_indicadores(longo, highs=list(longo), lows=lows)
+    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")[0]
+    assert t["motivo"] == "trailing" and t["pnl"] > 0
+    # o MESMO df com 1R MAIOR (stop_dist=4% -> 1R~4,0): arma em 104 e poe o stop em ~102, que
+    # a queda a 103,9 nao encontra -- a posicao segue aberta. Prova que gatilho e distancia
+    # escalam com o R do trade, e nao com um numero fixo em preco.
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
+                            sinal_fn=sinal_em([60], stop_dist=0.04), saida="trailing") == []
+
+
+def test_P1_o_gatilho_em_R_NAO_muda_de_significado_com_a_alavancagem_F19():
+    """O F-19, que e a razao do card, dito como teste.
+
+    Em espaco-preco o gatilho vira ROE quando multiplicado pela alavancagem: 2% de preco sao
+    4% de ROE a 2x e 40% a 20x, entao a protecao desaparecia justamente onde a aposta era
+    maior. Em R o gatilho e a distancia sao os MESMOS precos em qualquer alavancagem -- o que
+    muda e so quanto dinheiro aquele mesmo movimento vale.
+
+    A asercao e literal: a 2x e a 20x, a MESMA trajetoria fecha no MESMO candle e pelo MESMO
+    motivo, e o P&L difere exatamente pelo fator de alavancagem (a taxa tambem escala com ela).
+    """
+    precos = [100.0] * 62 + [106.0] * 3 + [104.5] * 5
+    lows = list(precos)
+    lows[65] = 103.9
+    df = df_com_indicadores(precos, highs=list(precos), lows=lows)
+    fn = sinal_em([60], stop_dist=0.02)
+
+    def roda(lev):
+        return B.backtest_ativo("X/USDT", 0, 100, lev, df=df, sinal_fn=fn, saida="trailing")[0]
+
+    a, b = roda(2), roda(20)
+    assert a["motivo"] == b["motivo"] == "trailing"
+    assert a["ts_saida"] == b["ts_saida"]               # o MESMO candle fecha os dois
+    assert b["pnl"] == pytest.approx(a["pnl"] * 10, rel=1e-9)
+
+
+def test_P1_em_1R_1R_o_stop_cai_no_zero_a_zero_no_instante_em_que_ARMA():
+    """A consequencia da `D-5` que o dono assinou, e que so aparece quando arma_r == dist_r.
+
+    Ao armar, `preco = entrada + 1R` e o stop vai para `preco - 1R = entrada`. Ou seja: o
+    `1R/1R` E o `be_em_R=1` da pesquisa, chegando ao vivo pela outra porta. Aqui a trajetoria
+    sobe pouco mais de 1R, arma, e desaba muito abaixo do stop de entrada: sob a politica de
+    PRECO isso vai ao stop cheio, sob 1R/1R fecha perto do empate -- perdendo so a taxa do
+    round-trip, que o zero-a-zero do trailing nao cobre.
+
+    O `stop_dist=1%` e o que separa as duas politicas neste df: 1R vale 1,0 em preco, entao o
+    gatilho em R e +1% e o gatilho de 2% ainda nao chegou. Com `stop_dist=2%` os dois gatilhos
+    coincidem por aritmetica (1R = 2% da entrada) e o teste nao teria objeto -- e essa
+    coincidencia e exatamente o motivo de o defeito ter passado despercebido tanto tempo: nos
+    trades de stop MEDIO as duas unidades quase concordam, e so divergem nas caudas.
+    """
+    precos = [100.0] * 62 + [101.05] * 2 + [95.0] * 6   # 1R = 1,00: o pico mal passa de 1R
+    df = df_com_indicadores(precos, highs=list(precos), lows=list(precos))
+    fn = sinal_em([60], stop_dist=0.01)
+
+    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")[0]
+    cheio = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing",
+                             trailing_unidade="preco", trailing_dist=0.02)[0]
+    assert t["motivo"] == "trailing"                    # armou: o stop subiu ate a entrada
+    assert cheio["motivo"] == "stop"                    # em preco, +1,05% nao chega aos 2%
+    # o que sobra de perda no caso 1R/1R e a taxa do round-trip (2 x 0,05% x valor x lev = 1,00)
+    # e o slippage -- nao um R de prejuizo. O zero-a-zero do trailing e no PRECO de entrada, e
+    # nao cobre a taxa, ao contrario do `be_em_R`, que cobre de proposito (e a diferenca entre
+    # "empate" e "perda pequena com nome bonito").
+    assert t["pnl"] > cheio["pnl"]
+    assert abs(t["pnl"]) < 1.1                          # ~ a taxa, nao ~ 1R alavancado
+    assert cheio["pnl"] < -10                           # 1R a 10x = ~10% da margem, + taxa
+
+
+def test_P1_k_ATR_FORCA_espaco_preco_e_nao_convive_em_silencio_com_o_R():
+    """Duas unidades para a mesma geometria e a doenca que o [N-13] veio curar. `k*ATR/preco`
+    E espaco-preco por construcao, entao pedir `trailing_k_atr` com o default `"R"` nao pode
+    deixar uma das duas ser ignorada sem aviso.
+
+    A prova e comportamental e nao de flag: com ATR=5 e k=1 a distancia e 5% (~5,00 em preco),
+    enquanto 1R aqui vale ~3,00. O pico de 106 arma nos dois; o stop fica em ~101,0 sob k*ATR e
+    em ~103,0 sob R. A queda a 102,5 encontra SO o de R -- entao se o `k` estivesse sendo
+    ignorado, este trade teria fechado.
+    """
+    precos = [100.0] * 62 + [106.0] * 3 + [102.5] * 5
+    lows = list(precos)
+    lows[65] = 102.5
+    df = df_com_indicadores(precos, highs=list(precos), lows=lows, atr=[5.0] * len(precos))
+    fn = sinal_em([60], stop_dist=0.03)                 # 1R ~ 3,00
+
+    em_r = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")
+    assert [t["motivo"] for t in em_r] == ["trailing"]  # stop em ~103,0 -> a queda a 102,5 bate
+    # o mesmo df com k=1 (5%): stop em ~101,0, a queda a 102,5 NAO bate. E `trailing_k_atr`
+    # sozinho basta -- nao e preciso lembrar de passar `trailing_unidade`.
+    assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing",
+                            trailing_k_atr=1.0) == []
+
+
+def test_P1_as_politicas_do_M4_continuam_reproduzindo_a_unidade_que_o_nome_promete():
+    """O risco especifico deste card: mudar um default e reescrever, em silencio, um numero ja
+    publicado. `POLITICAS_M4` e a tupla que o `VEREDITO-M4.md` mediu -- se a linha chamada
+    "C trailing 2% fixo" passasse a rodar em R, o veredito deixaria de ser reproduzivel por ela
+    e ninguem teria como notar pelo rotulo.
+
+    Entao as linhas de PRECO tem de trazer a unidade pinada, e a linha nova tem de ser a do
+    vivo. Este teste le a tupla, nao a documentacao.
+    """
+    por_nome = dict(V.POLITICAS_M4)
+    assert por_nome["C trailing 2% fixo"]["trailing_unidade"] == "preco"
+    assert por_nome["C trailing 2% fixo"]["trailing_dist"] == 0.02
+    assert por_nome["C trailing 1R/1R (vivo)"]["trailing_unidade"] == "R"
+    assert (por_nome["C trailing 1R/1R (vivo)"]["trailing_arma_r"],
+            por_nome["C trailing 1R/1R (vivo)"]["trailing_dist_r"]) == (1.0, 1.0)
+    # o k*ATR nao precisa pinar: ele forca a unidade sozinho (teste acima)
+    assert "trailing_unidade" not in por_nome["C trailing 3xATR"]
+    # e as cinco politicas continuam distintas duas a duas -- se colapsarem, a comparacao do
+    # marco perde o objeto
+    assert len({str(sorted(kw.items())) for _, kw in V.POLITICAS_M4}) == len(V.POLITICAS_M4)
 
 
 def test_Q9_sd_min_recusa_o_sinal_de_stop_curto_e_o_default_nao_recusa_nada():
@@ -1079,7 +1269,8 @@ def test_Q9_sd_min_recusa_o_sinal_de_stop_curto_e_o_default_nao_recusa_nada():
 
     def roda(**kw):
         return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
-                                saida="trailing", trailing_dist=0.02, **kw)
+                                saida="trailing", trailing_unidade="preco",
+                                trailing_dist=0.02, **kw)
 
     assert len(roda()) == 1                             # default: portao desligado
     assert len(roda(sd_min=0.0)) == 1                   # explicito e igual ao default
@@ -1123,7 +1314,14 @@ def test_Q11_zero_a_zero_arma_em_R_salva_o_trade_e_o_default_nao_arma_nada():
     ela, vai ao stop cheio. Mesmo df, mesmo sinal, mesma politica -- o unico fator e a guarda.
 
     O default `None` nao pode armar nada: e o que garante que as rodadas ja publicadas nao
-    mudem de numero."""
+    mudem de numero.
+
+    [P-1] `trailing_unidade="preco"` esta PINADO aqui, e a razao e o achado: sob o default novo
+    (`"R"`, 1R/1R) este teste nao teria objeto. O trailing em 1R/1R poe o stop no preco de
+    entrada no instante em que arma, isto e, ELE JA FAZ o zero-a-zero -- `sem` fecharia por
+    `trailing` e nao por `stop`, e a comparacao com `be_em_R=1` mediria a guarda contra uma
+    politica que ja a implementa. O [Q-11] mediu `be_em_R` CONTRA o trailing de 2%, e e essa a
+    pergunta que este teste guarda."""
     precos = [100.0] * 62 + [101.5] * 2 + [98.0] * 6
     highs, lows = list(precos), list(precos)
     lows[64] = 98.0
@@ -1132,7 +1330,8 @@ def test_Q11_zero_a_zero_arma_em_R_salva_o_trade_e_o_default_nao_arma_nada():
 
     def roda(**kw):
         return B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn,
-                                saida="trailing", trailing_dist=0.02, **kw)
+                                saida="trailing", trailing_unidade="preco",
+                                trailing_dist=0.02, **kw)
 
     sem = roda()[0]
     assert sem["motivo"] == "stop" and sem["pnl"] < 0    # sem guarda: stop cheio
@@ -1536,19 +1735,20 @@ def test_relatorio_tambem_declara_quando_falta_ts_saida(capsys):
     assert "tempo em mercado" not in saida
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "[N-5] o buraco que sobra: `pesquisa/backtest_plataforma.py` nao grava o lado da posicao "
-    "no `trades.append`, entao a exposicao liquida da rodada REAL sai NAO COMPUTAVEL. "
-    "Arquivo fora do territorio T-REGUA (Onda A) -- falta uma chave la"))
-def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
-    """XFAIL estrito, que nesta casa e card em aberto e nao teste quebrado (`CLAUDE.md` §6).
+def test_a_regua_real_COMPUTA_exposicao_porque_o_motor_grava_a_direcao():
+    """[P-4] O xfail estrito do `[N-5]` PROMOVIDO -- e a promocao e o ponto.
 
-    O dia em que o motor gravar `direcao` no trade, este teste vira XPASS e QUEBRA a suite de
-    proposito -- obrigando a promover a asercao em vez de deixar o buraco se fechar em
-    silencio, sem ninguem notar que o portao do veredito POSITIVO caiu.
+    Ate aqui este teste era `xfail(strict=True)`, que nesta casa e card em aberto e nao teste
+    quebrado (`CLAUDE.md` §6): `backtest_plataforma` gravava conv/pnl/motivo/ts/ts_saida e
+    jogava fora o lado da posicao, entao a exposicao liquida da rodada REAL saia
+    `NAO COMPUTAVEL` e o portao que separa alfa de beta ficava caido. No instante em que o
+    motor passou a gravar `direcao`, o xfail virou XPASS e QUEBROU a suite -- de proposito,
+    para obrigar a trocar "o buraco existe" por "o buraco fechou, e eis a asercao".
 
-    Escrever isso como xfail em vez de so mencionar no relatorio e a diferenca entre uma
-    divida registrada e uma divida contada uma vez.
+    O que se afirma agora e o numero, nao a mera ausencia de `None`: um unico trade LONG tem
+    de dar exposicao liquida **+1,0 exata**. Aceitar qualquer nao-`None` deixaria passar um
+    sinal trocado, que e o erro que mais importa aqui -- ele transformaria um short em beta
+    comprado no relatorio que existe justamente para pegar beta.
     """
     precos = [100.0] * 70
     lows = list(precos)
@@ -1556,7 +1756,461 @@ def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
     trades = B.backtest_ativo("X/USDT", 0, 100, 10, df=df_sintetico(precos, lows=lows),
                               sinal_fn=sinal_em([60]))
     assert trades, "o motor nao gerou trade -- o teste nao esta medindo o que promete"
-    assert V.exposicao_liquida(trades)["liquida"] is not None
+    assert all(t["direcao"] in (1, -1) for t in trades)
+    assert V.exposicao_liquida(trades)["liquida"] == 1.0
+
+
+def test_a_exposicao_liquida_da_rodada_real_ACOMPANHA_o_lado_da_posicao():
+    """O contraponto do teste acima: se a exposicao nao mudar de sinal quando a posicao muda
+    de lado, ela nao esta medindo direcao nenhuma -- esta devolvendo uma constante bonita.
+
+    Tres casos com resposta conhecida, que e o padrao que o `[N-5]` usou (estrategia identica
+    ao benchmark tem de dar `p = 1,0` exato): so LONG -> +1; so SHORT -> -1; um de cada com a
+    MESMA duracao -> 0,0 exato, isto e, direcionalmente neutra.
+    """
+    precos = [100.0] * 70
+    lows, highs = list(precos), list(precos)
+    lows[65] = 90.0                                    # fura o stop do LONG
+    highs[65] = 110.0                                  # fura o stop do SHORT
+    df = df_sintetico(precos, highs=highs, lows=lows)
+
+    longo = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60], direcao=1))
+    curto = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60], direcao=-1))
+    assert len(longo) == len(curto) == 1
+    assert V.exposicao_liquida(longo)["liquida"] == 1.0
+    assert V.exposicao_liquida(curto)["liquida"] == -1.0
+
+    # mesma duracao dos dois lados -> a media ponderada por tempo tem de ser 0,0 exato
+    assert longo[0]["ts_saida"] - longo[0]["ts"] == curto[0]["ts_saida"] - curto[0]["ts"]
+    assert V.exposicao_liquida(longo + curto)["liquida"] == 0.0
+    assert V.exposicao_liquida(longo + curto)["motivo"] == ""
+
+
+# ============================ [N-7] CPCV no lugar do walk-forward =======================
+def test_N7_o_PADRAO_roda_CPCV_e_o_walk_forward_continua_existindo():
+    """O default e uma afirmacao sobre o que se mede por omissao, e ele mudou.
+
+    O walk-forward NAO foi apagado -- ele responde a outra pergunta (deployment), e apaga-lo
+    seria trocar uma pergunta pela outra fingindo que sao a mesma. Ele deixa de emitir
+    veredito e passa a rodar em `sensibilidade()`, sempre, lado a lado.
+    """
+    assert V.PADRAO["cv"] == "cpcv"
+    assert V.CVS == ("cpcv", "walk_forward")
+    with pytest.raises(ValueError, match="cv deve ser"):
+        V._nucleo({}, **{**V.PADRAO, "cv": "kfold"})
+
+
+def test_N7_toda_trajetoria_cobre_a_linha_do_tempo_INTEIRA_uma_vez_so():
+    """A propriedade que define o CPCV, e a que um bug de remontagem quebraria em silencio.
+
+    Com N grupos e k=2 saem C(N,2) cortes e C(N-1,1) = N-1 trajetorias, e cada trajetoria tem
+    de conter cada trade OOS exatamente UMA vez. Se a remontagem duplicasse, o P&L da
+    trajetoria inflaria e o T da serie diaria continuaria igual -- ou seja, o Sharpe subiria
+    sem que nada no relatorio denunciasse.
+    """
+    rng = np.random.default_rng(17)
+    por_cfg = {}
+    for k, cfg in enumerate(((50, 22), (55, 22), (65, 25))):
+        por_cfg[cfg] = trades_diarios(rng.normal(0.0, 8.0, 800).tolist(),
+                                      ts_saida=[T0 + (i + 1) * DIA for i in range(800)])
+    base = V._nucleo_cpcv(por_cfg, criterio="sharpe", block=5, purga=True,
+                          gap_pre_teste_ms=0, embargo_frac=0.0, atribuir="entrada",
+                          periodo="D", n_boot=2000, seed=42)
+    cp = base["cpcv"]
+    assert cp["n_cortes"] == math.comb(V.CPCV_GRUPOS, V.CPCV_TESTE)
+    assert cp["n_caminhos"] == math.comb(V.CPCV_GRUPOS - 1, V.CPCV_TESTE - 1)
+    assert len(cp["sharpes"]) == cp["n_caminhos"]
+
+    # remonta as trajetorias e confere: sem duplicata dentro de cada uma, e cobrindo a janela
+    grupos = V._grupos_tempo(min(t["ts"] for tr in por_cfg.values() for t in tr),
+                             max(t["ts"] for tr in por_cfg.values() for t in tr),
+                             V.CPCV_GRUPOS)
+    for n_trades in cp["trades_por_caminho"]:
+        assert n_trades > 0
+    # todo trade de uma trajetoria vem de um grupo distinto, e os 8 grupos aparecem
+    tocados = set()
+    for t in base["oos"]:
+        for g, (a, b) in enumerate(grupos):
+            if a <= t["ts"] < b or (g == len(grupos) - 1 and t["ts"] >= a):
+                tocados.add(g)
+                break
+    assert tocados == set(range(V.CPCV_GRUPOS))
+    assert len({id(t) for t in base["oos"]}) == len(base["oos"])
+
+
+def test_N7_a_serie_de_recorde_e_a_trajetoria_MEDIANA_e_nunca_a_melhor():
+    """Escolher a melhor trajetoria seria escolher no OOS -- o pecado que esta regua inteira
+    existe para impedir, cometido pela porta que o proprio conserto abriu. Com numero PAR de
+    trajetorias fica a MENOR das duas centrais, que e o lado conservador."""
+    rng = np.random.default_rng(23)
+    por_cfg = {cfg: trades_diarios(rng.normal(0.0, 8.0, 800).tolist(),
+                                   ts_saida=[T0 + (i + 1) * DIA for i in range(800)])
+               for cfg in ((50, 22), (55, 22), (65, 25))}
+    base = V._nucleo_cpcv(por_cfg, criterio="sharpe", block=5, purga=True,
+                          gap_pre_teste_ms=0, embargo_frac=0.0, atribuir="entrada",
+                          periodo="D", n_boot=2000, seed=42)
+    cp = base["cpcv"]
+    srs = [x for x in cp["sharpes"] if x is not None]
+    rep = cp["sharpes"][cp["caminho_representativo"]]
+    assert rep == pytest.approx(float(np.median(srs)), abs=1e-9)
+    # "nunca a melhor" dito de forma que sobrevive a EMPATE: com trajetorias empatadas no topo
+    # a mediana pode COINCIDIR com o maximo valor, e ainda assim nao ser uma escolha pelo
+    # maximo. O que se afirma e a posicao: no maximo metade das trajetorias esta acima dela.
+    assert sum(1 for x in srs if x > rep) <= len(srs) // 2
+    assert V.sharpe_anualizado(base["serie_oos"]) == pytest.approx(rep, abs=1e-4)
+
+
+def test_N7_o_EMBARGO_de_LdP_volta_a_existir_e_de_fato_descarta_treino_DEPOIS_do_teste():
+    """O achado do card, e ele corrige o `F4` sem contradize-lo.
+
+    O `F4` da `REVISAO-ITEM1.md` estava certo: num walk-forward ESTRITAMENTE SEQUENCIAL nao ha
+    treino apos o teste, logo o embargo de Lopez de Prado nao tinha o que embargar, e o
+    parametro virou `gap_pre_teste_ms` (default 0). **Sob CPCV a premissa cai**: em quase todo
+    corte existe treino depois do teste. Entao o embargo volta -- e trazer o CPCV sem ele seria
+    importar a metade que da numero e deixar a metade que protege.
+
+    A prova e direta: um trade que comeca logo DEPOIS do fim do bloco de teste entra no treino
+    com embargo 0 e sai dele com embargo > 0.
+    """
+    bloco = [(1000.0, 2000.0)]
+    tr = [{"ts": 500, "ts_saida": 600},       # antes do teste, fecha antes -> fica
+          {"ts": 900, "ts_saida": 1500},      # span CRUZA a borda -> purga tira
+          {"ts": 1500, "ts_saida": 1600},     # dentro do teste -> nunca e treino
+          {"ts": 2050, "ts_saida": 2100},     # DEPOIS do teste -> so o embargo tira
+          {"ts": 2500, "ts_saida": 2600}]     # bem depois -> fica
+    sem = V._treino_cpcv(tr, bloco, purga=True, gap_ms=0, embargo_ms=0,
+                         tem_saida=True, ultimo=9000)
+    assert [t["ts"] for t in sem] == [500, 2050, 2500]
+
+    com = V._treino_cpcv(tr, bloco, purga=True, gap_ms=0, embargo_ms=100,
+                         tem_saida=True, ultimo=9000)
+    assert [t["ts"] for t in com] == [500, 2500]       # o de 2050 caiu no embargo
+
+    # e o gap PRE-teste continua valendo, agora antes de CADA bloco (a outra borda)
+    gap = V._treino_cpcv(tr, bloco, purga=True, gap_ms=600, embargo_ms=0,
+                         tem_saida=True, ultimo=9000)
+    assert [t["ts"] for t in gap] == [2050, 2500]      # o de 500 caiu no gap [400, 1000)
+
+
+def test_N7_a_purga_no_CPCV_e_BILATERAL_e_nao_afrouxa_a_do_walk_forward():
+    """No walk-forward a purga era unilateral (`ts_saida < tr_lim`) porque so havia uma borda.
+    No CPCV cada bloco de teste tem duas, e um trade cujo label ATRAVESSA qualquer uma delas
+    sai do treino. CPCV precisa de MAIS purga, nao de menos -- afrouxar aqui deixaria vazar
+    exatamente pelo lado que o esquema novo criou."""
+    bloco = [(1000.0, 2000.0)]
+    tr = [{"ts": 900, "ts_saida": 1001}]              # entra antes, sai DENTRO do teste
+    assert V._treino_cpcv(tr, bloco, purga=True, gap_ms=0, embargo_ms=0,
+                          tem_saida=True, ultimo=9000) == []
+    # sem `ts_saida` a purga nao tem como agir -- e ela NAO finge que agiu
+    tr2 = [{"ts": 900}]
+    assert len(V._treino_cpcv(tr2, bloco, purga=True, gap_ms=0, embargo_ms=0,
+                              tem_saida=False, ultimo=9000)) == 1
+
+
+def test_N7_o_ultimo_bloco_de_teste_nao_inventa_embargo_fora_da_janela():
+    """Embargo depois do fim da linha do tempo nao descarta nada -- so confundiria quem lesse
+    o codigo achando que ha treino ali. A guarda e `b < ultimo`."""
+    tr = [{"ts": 8500, "ts_saida": 8600}]
+    # bloco terminando NO fim da janela: nao ha treino posterior, entao o trade fica
+    assert len(V._treino_cpcv(tr, [(1000.0, 9000.0)], purga=True, gap_ms=0, embargo_ms=1000,
+                              tem_saida=True, ultimo=9000)) == 0   # (esta DENTRO do teste)
+    tr2 = [{"ts": 9500, "ts_saida": 9600}]
+    assert len(V._treino_cpcv(tr2, [(1000.0, 9000.0)], purga=True, gap_ms=0, embargo_ms=1000,
+                              tem_saida=True, ultimo=9000)) == 1
+
+
+def test_N7_os_grupos_cobrem_a_janela_sem_buraco_e_sem_sobreposicao():
+    """Grupo com buraco perderia trades sem avisar; grupo sobreposto poria o mesmo trade em
+    dois blocos de teste e a trajetoria remontada teria duplicata."""
+    g = V._grupos_tempo(1000, 9000, 8)
+    assert len(g) == 8
+    assert g[0][0] == 1000 and g[-1][1] == 9000
+    assert all(g[i][1] == g[i + 1][0] for i in range(7))
+
+
+def test_N7_o_CPCV_recusa_particao_impossivel_em_vez_de_calar():
+    with pytest.raises(ValueError, match="n_grupos >= 3"):
+        V._nucleo_cpcv({("a", 0): trades_diarios([1.0] * 100)}, criterio="sharpe", block=5,
+                       purga=False, gap_pre_teste_ms=0, embargo_frac=0.0, atribuir="entrada",
+                       periodo="D", n_boot=100, seed=1, n_grupos=2, k_teste=1)
+
+
+def test_N7_o_walk_forward_continua_dando_EXATAMENTE_o_numero_de_antes():
+    """A troca do [N-7] muda o numero por CONSTRUCAO -- e por isso ela so e auditavel se o
+    esquema antigo continuar reproduzindo o que reproduzia. Este teste e o que separa "o CPCV
+    mediu diferente" de "alguem quebrou o motor no caminho".
+
+    O painel e o do golden, e o numero e o que o golden congelava ANTES do [N-7]:
+    Sharpe anualizado -1,14 e IC-bloco (-1,2478 ; 0,0928) na trajetoria unica do walk-forward.
+    """
+    por_cfg, meta = V.carregar_golden_entrada()
+    base = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    assert V.sharpe_anualizado(base["serie_oos"]) == pytest.approx(-1.14, abs=0.005)
+    ic = V.bootstrap_ci(base["serie_oos"], n_boot=2000, modo="bloco", eh_serie_temporal=True,
+                        block=5, seed=42)
+    assert ic == (-1.2478, 0.0928)
+    assert len(base["por_fold"]) == V.N_FOLDS
+
+
+def test_N7_a_sensibilidade_imprime_os_DOIS_esquemas_lado_a_lado(capsys):
+    """O CPCV nao responde a pergunta de deployment: em varios cortes o treino esta DEPOIS do
+    teste, e isso e da definicao dele, nao defeito. Entao a linha `cv=walk_forward` tem de
+    continuar saindo -- e imprimir as duas e a unica forma de a troca ser auditavel sem
+    alguem ter de rodar o commit anterior."""
+    res = _res_sintetico(mu=0.0, seed=3, n_dias=600)
+    V.relatorio_sensibilidade(V.sensibilidade(res))
+    saida = capsys.readouterr().out
+    assert "cv=cpcv" in saida and "cv=walk_forward" in saida
+
+
+def test_N7_o_relatorio_declara_que_o_CPCV_nao_e_simulacao_de_operacao(capsys):
+    """A frase que impede a leitura errada mais cara possivel: ler um Sharpe de CPCV como "o
+    que eu teria ganhado". Ele nao e isso, e o relatorio tem de dizer no lugar onde o numero
+    aparece -- nao so no commit, que ninguem le junto com a saida."""
+    res = _res_sintetico(mu=0.0, seed=4, n_dias=800)
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "CPCV" in saida
+    assert "NAO e simulacao de operacao ao vivo" in saida
+    assert "trajetoria MEDIANA" in saida
+    assert "embargo LdP" in saida
+
+
+# ============================ [N-8] PBO por CSCV e n_trials efetivo =====================
+#
+# O padrao de prova e o que o [N-5] usou e funcionou: um caso construido onde a resposta e
+# CONHECIDA vale mais que dez asercoes sobre dado real. Aqui sao tres respostas conhecidas --
+# 0,0 / ~0,5 / 1,0 -- e um instrumento que nao produzisse as tres nao estaria medindo nada.
+def _serie_diaria(pnls):
+    return [float(x) for x in pnls]
+
+
+def test_N8_pbo_zero_quando_a_selecao_TRANSFERE():
+    """Uma config domina em TODO periodo: e escolhida no treino sempre e e a melhor no teste
+    sempre. Escolher transfere perfeitamente -> PBO = 0,0 EXATO, e o rank medio da campea tem
+    de ser N (o topo), nao "alto"."""
+    rng = np.random.default_rng(2026)
+    m = {("boa", 0): _serie_diaria(rng.normal(3.0, 5.0, 960))}
+    for k in range(1, 6):
+        m[("ruim", k)] = _serie_diaria(rng.normal(-3.0, 5.0, 960))
+    r = V.pbo_cscv(m)
+    assert r["pbo"] == 0.0
+    assert r["rank_medio"] == float(r["n_cfgs"])
+    assert r["n_combinacoes"] == math.comb(16, 8)
+
+
+def test_N8_pbo_um_no_pior_caso_possivel_cada_config_so_brilha_no_SEU_bloco():
+    """O adversarial de verdade, e construi-lo ensina o que o CSCV e.
+
+    A tentacao e fazer "a config que ganha na 1a metade perde na 2a". Isso NAO da PBO alto, e
+    a razao e o ponto do metodo: o CSCV nao usa um corte cronologico -- ele usa TODAS as
+    C(S,S/2) maneiras de escolher metade dos blocos, entao quase toda "metade" mistura os dois
+    lados da linha do tempo e o efeito se cancela. (Medido: aquela construcao da PBO ~ 0,53,
+    indistinguivel de ruido.)
+
+    O caso que de fato satura: cada config tem um PICO num bloco proprio e deriva negativa em
+    todos os outros. Qualquer que seja a metade sorteada para treino, a campea e uma config
+    cujo pico esta NO treino -- e portanto ausente do teste, onde ela so tem a deriva
+    negativa e cai abaixo das que guardaram o pico. PBO = 1,0 para qualquer particao.
+    """
+    rng = np.random.default_rng(99)
+    S, N, T = 8, 8, 960
+    blocos = V._blocos_iguais(T, S)
+    m = {}
+    for k in range(N):
+        a = rng.normal(-1.0, 4.0, T)
+        ini, fim = blocos[k]
+        a[ini:fim] += 12.0
+        m[("pico", k)] = _serie_diaria(a)
+    r = V.pbo_cscv(m, S=S)
+    assert r["pbo"] == 1.0
+    assert r["rank_medio"] < (N + 1) / 2.0            # abaixo da mediana, sempre
+
+
+def test_N8_pbo_meio_quando_e_so_RUIDO_e_escolher_nao_vale_mais_que_sortear():
+    """Configs iid indistinguiveis: a campea do treino e campea por sorte, e no teste cai onde
+    qualquer uma cairia. E o caso que calibra o instrumento -- 0,0 e 1,0 sozinhos passariam
+    tambem num medidor que so olhasse o sinal da media."""
+    rng = np.random.default_rng(1234)
+    m = {("ruido", k): _serie_diaria(rng.normal(0, 10, 960)) for k in range(8)}
+    r = V.pbo_cscv(m)
+    assert 0.35 < r["pbo"] < 0.65
+    assert abs(r["rank_medio"] - (r["n_cfgs"] + 1) / 2.0) < 1.0
+
+
+def test_N8_o_logit_e_ESTRITO_e_por_isso_o_nulo_sob_ruido_e_publicado():
+    """O bug que a primeira versao deste medidor teve, virado em teste.
+
+    Contar `omega <= 0,5` em vez de `omega < 0,5` parece detalhe de borda e nao e: com N IMPAR
+    existe um rank exatamente mediano, e ele sozinho move o PBO sob ruido puro de `(N-1)/2N`
+    para `(N+1)/2N`. Com N=3 isso e 0,3333 contra 0,6667 -- e o teto de 0,5 passaria a REPROVAR
+    ruido puro, um instrumento acusando overfit onde nao ha selecao nenhuma para overfitar.
+    (Foi assim que o painel do golden mediu 0,7902 antes do conserto.)
+
+    Por isso o `pbo_nulo` sai no resultado: com N par ele vale 0,5 e coincide com o teto (o caso
+    do `GRID` de 6 configs desta casa); com N impar ele e menor, e quem le precisa saber contra
+    que numero ler.
+    """
+    for N, esperado in ((2, 1 / 2), (3, 1 / 3), (4, 0.5), (6, 0.5), (7, 3 / 7), (8, 0.5)):
+        rng = np.random.default_rng(500 + N)
+        m = {("r", k): _serie_diaria(rng.normal(0, 10, 480)) for k in range(N)}
+        assert V.pbo_cscv(m, S=8)["pbo_nulo"] == pytest.approx(esperado, abs=1e-4), N
+
+
+def test_N8_o_pbo_sob_ruido_CALIBRA_no_proprio_nulo_em_media_sobre_paineis():
+    """A calibracao do medidor -- e a razao de ela ser em MEDIA sobre paineis, nao num painel.
+
+    O CSCV nao reamostra: ele reparticiona UMA realizacao. Se, naquela realizacao, uma config
+    tem media amostral mais alta que as outras, ela tende a vencer em quase toda metade E em
+    quase toda metade complementar -- e o PBO daquele painel sai bem longe de 0,5 nos dois
+    sentidos. Isso nao e defeito: e o que "probabilidade de overfit DESTE backtest" significa.
+    O que tem de calibrar e a MEDIA sobre painas nulos independentes, exatamente como o
+    `test_reality_check_calibrado` faz com o alfa.
+
+    Medir num painel so e afirmar precisao que o metodo nao entrega -- e foi o erro que a
+    primeira versao deste teste cometeu (N=4, S=8, um painel: PBO = 0,0857 contra nulo 0,5).
+    """
+    for N in (4, 8):
+        pbos = []
+        for r in range(24):
+            rng = np.random.default_rng(9000 + 100 * N + r)
+            m = {("r", k): _serie_diaria(rng.normal(0, 10, 480)) for k in range(N)}
+            pbos.append(V.pbo_cscv(m, S=8)["pbo"])
+        media = float(np.mean(pbos))
+        assert abs(media - 0.5) < 0.12, (N, media, pbos)
+
+
+def test_N8_pbo_recusa_em_vez_de_inventar_quando_nao_ha_o_que_medir():
+    """Duas faltas diferentes, dois motivos diferentes -- e NUNCA um 0,0.
+
+    `pbo = 0.0` significa "nunca overfitou", que e a resposta mais confortavel que existe.
+    Emiti-la por ausencia de objeto (uma config so) ou por serie curta seria a regua mentindo
+    para o proprio lado, que e o modo de falha que este arquivo inteiro existe para impedir.
+    """
+    rng = np.random.default_rng(7)
+    so_uma = V.pbo_cscv({("x", 0): _serie_diaria(rng.normal(0, 1, 960))})
+    assert so_uma["pbo"] is None and "2 configs" in so_uma["motivo"]
+
+    curta = V.pbo_cscv({("a", 0): [1.0, 2.0] * 10, ("b", 1): [2.0, 1.0] * 10}, S=16)
+    assert curta["pbo"] is None and "curta" in curta["motivo"]
+
+    with pytest.raises(ValueError, match="par e >= 4"):
+        V.pbo_cscv({("a", 0): [1.0] * 100, ("b", 1): [2.0] * 100}, S=7)
+
+
+def test_N8_o_sharpe_de_uma_uniao_de_blocos_bate_com_o_sharpe_da_serie_concatenada():
+    """A otimizacao que torna C(16,8) barato -- somatorios por bloco em vez da serie -- so vale
+    se ela devolver o MESMO numero. Um atalho que erra na 5a casa transformaria o PBO num
+    numero plausivel e errado, que e pior que um numero ausente."""
+    rng = np.random.default_rng(11)
+    T, S = 480, 8
+    m = {("a", 0): _serie_diaria(rng.normal(0.3, 2.0, T)),
+         ("b", 1): _serie_diaria(rng.normal(-0.1, 3.0, T))}
+    blocos = V._blocos_iguais(T, S)
+    cfgs, n, soma, quad = V._agregados_por_bloco(m, blocos)
+    escolha = (0, 2, 3, 6)
+    rapido = V._sharpe_de_blocos(n, soma, quad, escolha)
+    for i, c in enumerate(cfgs):
+        direto = np.concatenate([np.asarray(m[c])[a:b] for a, b in
+                                 [blocos[j] for j in escolha]])
+        assert rapido[i] == pytest.approx(V._sr(direto), rel=1e-12)
+
+
+def test_N8_os_blocos_do_cscv_cobrem_a_serie_inteira_e_a_sobra_nao_empilha_no_ultimo():
+    """Bloco que valesse o dobro dos outros desbalancearia toda combinacao que o contivesse --
+    e o desbalanceio seria invisivel, porque o PBO sai como um numero so."""
+    for T, S in ((960, 16), (901, 16), (100, 4), (17, 4)):
+        b = V._blocos_iguais(T, S)
+        assert len(b) == S
+        assert b[0][0] == 0 and b[-1][1] == T
+        assert all(b[i][1] == b[i + 1][0] for i in range(S - 1))
+        tam = [f - i for i, f in b]
+        assert max(tam) - min(tam) <= 1
+
+
+def test_N8_n_trials_efetivo_reconhece_grid_ortogonal_e_grid_de_gemeas():
+    """Os dois extremos com resposta conhecida: 6 configs independentes valem ~6 tentativas;
+    6 copias da mesma coisa valem ~1. Entre os dois esta a pergunta que o [N-9] deixou aberta
+    -- quantas das varreduras contadas sao de fato independentes."""
+    rng = np.random.default_rng(31)
+    orto = {("o", k): _serie_diaria(rng.normal(0, 1, 900)) for k in range(6)}
+    e = V.n_trials_efetivo(orto)
+    assert 5.0 < e["participacao"] <= 6.0
+    assert e["pcs_95"] == 6
+
+    base = rng.normal(0, 1, 900)
+    gemeas = {("g", k): _serie_diaria(base + rng.normal(0, 0.02, 900)) for k in range(6)}
+    e = V.n_trials_efetivo(gemeas)
+    assert 1.0 <= e["participacao"] < 1.2
+    assert e["pcs_95"] == 1
+    assert e["corr_media"] > 0.99
+
+
+def test_N8_o_efetivo_usa_CORRELACAO_e_nao_covariancia():
+    """Config que opera mais tem P&L de variancia maior. Sob covariancia ela dominaria o
+    espectro sozinha e o numero mediria VOLUME DE OPERACAO em vez de redundancia -- e mediria
+    para o lado errado, porque um grid com uma config barulhenta pareceria mais independente.
+
+    Aqui as 4 series sao a MESMA coisa em escalas muito diferentes: redundancia total. Sob
+    correlacao o efetivo tem de dar ~1 apesar das escalas."""
+    rng = np.random.default_rng(41)
+    base = rng.normal(0, 1, 900)
+    m = {("esc", k): _serie_diaria(base * (10.0 ** k)) for k in range(4)}
+    e = V.n_trials_efetivo(m)
+    assert e["participacao"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_N8_o_efetivo_NAO_entra_no_veredito_e_o_relatorio_diz_por_que(capsys):
+    """A guarda que impede este numero de virar a ferramenta errada.
+
+    `n_trials` menor -> SR0 menor -> DSR MAIOR. Existe um caminho direto entre "meu grid e
+    redundante" e "meu Sharpe deflacionado ficou bonito", e ele e o tipo de conserto que o
+    NORTE.md proibe. Entao o DSR que DECIDE tem de continuar saindo do n_trials declarado, e o
+    relatorio tem de imprimir o outro ao lado -- deixando a tentacao visivel em vez de
+    disponivel.
+    """
+    res = _res_sintetico(mu=0.0, seed=5)
+    d = res["bloco_a"]["dsr_melhor_is"]
+    ef = res["bloco_a"]["n_trials_efetivo"]
+    de = res["bloco_a"]["dsr_se_n_trials_fosse_o_efetivo"]
+    # o DSR do veredito le o n_trials DECLARADO (arredondado como o relatorio o publica)
+    assert d["sr0"] == round(V._sr0_esperado(d["n"], res["n_trials"]), 4)
+    assert ef["participacao"] < ef["n_cfgs"] + 1e-9
+    assert de is not None and de["dsr"] != d["dsr"]                 # o outro existe, e diverge
+
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "n_trials EFETIVO" in saida
+    assert "NAO entra no veredito" in saida
+    assert "n_trials menor levanta o DSR" in saida
+
+
+def test_N8_o_PBO_e_condicao_de_EDGE_e_so_APERTA_nunca_afrouxa(capsys):
+    """[CLAUDE.md] 2: apertar guarda pode; afrouxar, so o dono.
+
+    O PBO entra no `_veredito` como condicao a MAIS para EDGE -- ele so consegue transformar
+    EDGE em SEM_EVIDENCIA, nunca o contrario. Provado nos dois sentidos sobre um resultado
+    REAL, mexendo so no PBO: com PBO acima do teto o veredito cai e o motivo cita o CSCV; com
+    o PBO removido (nao calculavel) o veredito volta a ser o que era.
+
+    Poe-lo no portao em vez de so no relatorio nao e zelo: "medir e nao comparar" e
+    literalmente o defeito que o [Q-7] veio consertar neste arquivo.
+    """
+    res = _res_sintetico(mu=8.0, seed=6, n_dias=900)
+    assert res["veredito"]["classe"] == "EDGE"
+    assert res["bloco_a"]["pbo"]["pbo"] <= V.PBO_TETO
+
+    ruim = json.loads(json.dumps(V._canonico({k: v for k, v in res.items()
+                                              if k not in ("por_cfg", "oos", "matriz_is")})))
+    ruim["bloco_a"]["pbo"]["pbo"] = 0.9
+    v = V._veredito(ruim)
+    assert v["classe"] == "SEM_EVIDENCIA" and "PBO = 0.9" in v["motivo"]
+    assert "CSCV" in v["motivo"]
+
+    # PBO ausente NAO bloqueia: sem ordenacao entre configs nao ha overfit DE SELECAO a medir,
+    # e bloquear ali faria a guarda depender do tamanho do grid, nao do defeito.
+    ruim["bloco_a"]["pbo"] = {"pbo": None, "motivo": "so uma config"}
+    assert V._veredito(ruim)["classe"] == "EDGE"
 
 
 # ============================ [N-9] log append-only de tentativas ========================
@@ -1685,6 +2339,33 @@ def test_a_varredura_que_FALHOU_tambem_entra_no_log(tmp_path, monkeypatch):
     regs, _ = V.ler_tentativas(alvo)
     assert len(regs) == 1 and regs[0]["resultado"]["veredito"] == "INCONCLUSIVO"
     assert "erro" in regs[0]["resultado"]
+
+
+def test_a_lista_de_divergencias_AVISA_quando_esta_incompleta(tmp_path, monkeypatch):
+    """Defeito do `[N-6]` achado ao rodar o `[N-7]`, e ele e do tipo mais caro: o silencioso.
+
+    `_diferencas` parava em 30 e o CLI imprimia as 30 sem dizer que havia mais. A troca do
+    walk-forward pelo CPCV produziu 45, e as 15 escondidas eram `pnl_oos`, `n_oos`,
+    `serie_oos`, `por_fold` e o digest do OOS -- exatamente as que dizem se o esquema novo
+    mudou o que devia mudar. Uma lista que parece inteira e nao e faz de "eu li a divergencia"
+    uma frase falsa dita de boa-fe, que e como o golden vira decorativo sem ninguem mentir.
+
+    O teto continua existindo (divergencia estrutural gera milhares de linhas e enterra o
+    terminal); o que mudou e que agora ele FALA.
+    """
+    monkeypatch.setattr(V, "TETO_DIFERENCAS", 3)
+    esp = {f"k{i}": i for i in range(10)}
+    atu = {f"k{i}": i + 1 for i in range(10)}
+    difs = V._diferencas(esp, atu, teto=V.TETO_DIFERENCAS)
+    assert len(difs) == 3                              # o teto continua valendo
+
+    saida = tmp_path / "s.json"
+    saida.write_text(json.dumps({"snapshot": esp}), encoding="utf-8")
+    monkeypatch.setattr(V, "golden_snapshot", lambda _res: atu)
+    monkeypatch.setattr(V, "rodar_golden", lambda _c=None: None)
+    ok, difs = V.conferir_golden(caminho_saida=str(saida))
+    assert not ok
+    assert "INCOMPLETA" in difs[-1]                    # ...e agora ele avisa
 
 
 def test_o_golden_NAO_conta_como_tentativa(tmp_path, monkeypatch):
