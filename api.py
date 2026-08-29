@@ -367,6 +367,23 @@ CONFIG_RACIONAL = {
         "'2x sempre pior que 1x'. MANTIDO pelo mesmo motivo do risco_por_trade, e com a "
         "mesma condição: é o dial que acelera o experimento, não uma aposta em edge. Vale "
         "para o fluxo manual e para o modo `auto_lev_modo=fixo`. No `conservador`: 2x."),
+    "auto_lev_modo": (
+        "VIVO \"fixo\" desde 2026-08-29 ([N-10]), e o motivo é MEDIÇÃO, não prudência. Em "
+        "\"conviccao\" a alavancagem escalava com o score: 60 pontos mapeavam em `auto_lev_min` "
+        "e 99 em `auto_lev_max`, ou seja 20 pontos viravam 5,5× mais dinheiro em risco. O "
+        "[Q-13] testou essa premissa em 2.945 sinais de tendência com desfecho marcado e ela "
+        "não se sustenta: os que bateram no STOP tinham convicção MÉDIA MAIOR (67,10 contra "
+        "66,47 dos que bateram no alvo), e o win% por faixa faz 63 → 38 → 45 → 50 → 47 — "
+        "serrilha, não escada. A faixa 80-90, que a escala premiava com ~12x, é a PIOR das "
+        "cinco. Desligar isto é REALOCAR risco, não reduzi-lo: o dinheiro espalhado sobre "
+        "sinais que a medição não distingue entre si é o que falta quando aparecer a "
+        "oportunidade que merece 20x (NORTE.md, PLANO-V2 Parte 0). O mecanismo continua "
+        "INTEIRO em `autotrader._alavancagem`, dormindo e travado por teste — o `N-10b` está "
+        "encarregado de construir um medidor que passe no teste do [Q-13] (win% monotônico "
+        "por faixa, em amostra FORA da usada para construí-lo), e no dia em que passar a "
+        "escala volta por config, sem reimplementar nada. Fora do perfil `conservador` de "
+        "propósito: lá `auto_lev_min`=1 e \"fixo\" usaria `alavancagem_padrao`=2x sempre, o "
+        "que SUBIRIA o piso — ver o comentário do `db.PERFIS_RISCO`."),
     "auto_lev_min": (
         "VIVO 2x — o piso da escala por convicção, aplicado na convicção mínima. Não é "
         "garantia de risco e nunca foi: o cap geométrico do [P1-11] desce ABAIXO dele quando "

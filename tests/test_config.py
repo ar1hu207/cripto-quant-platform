@@ -329,3 +329,50 @@ def test_p3_o_default_vivo_do_trailing_em_r_passa_no_proprio_catalogo(banco):
     assert db.get_config()["trailing_unidade"] == "R"      # D-5: 1R arma, 1R de distancia
     assert float(db.get_config()["trailing_arma_r"]) == 1.0
     assert float(db.get_config()["trailing_dist_r"]) == 1.0
+
+
+# ================================== [P-3b] o modo de alavancagem entra no perfil `experimento`
+#
+# A metade travada do `[N-10]`: o modo nascia "fixo" no `CONFIG_PADRAO` e NAO no perfil, porque
+# declara-lo no perfil exigia verbete em `api.CONFIG_RACIONAL` -- e `api.py` nao era territorio
+# do T-RISCO. O buraco ficou medido em `tests/test_sizing.py`, e a promocao daquele teste e o
+# gatilho que este card cumpriu.
+
+def test_p3b_o_experimento_declara_o_modo_de_alavancagem(banco):
+    """O perfil e o retrato do que esta vivo. Um retrato que nao mostra o dial que multiplica
+    a alavancagem por 5,5x nao e retrato do mesmo sistema."""
+    assert db.PERFIS_RISCO["experimento"]["auto_lev_modo"] == "fixo"
+    assert db.CONFIG_PADRAO["auto_lev_modo"] == "fixo"     # e as duas pontas seguem iguais
+
+
+def test_p3b_com_o_modo_no_perfil_o_rotulo_para_de_mentir(cliente):
+    """O que a declaracao COMPRA, medido na porta do painel: antes disto, ligar a escala por
+    conviccao (2x-20x sobre um score que o [Q-13] mediu nao prever acerto) deixava o `/estado`
+    dizendo 'experimento'. Rotulo de risco que mente e pior que rotulo nenhum ([Q-3])."""
+    assert cliente.get("/estado").json()["perfil_risco"] == "experimento"
+    cliente.post("/auto", json={"auto_lev_modo": "conviccao"})
+    assert cliente.get("/estado").json()["perfil_risco"] == "personalizado"
+    cliente.post("/perfil", json={"perfil": "experimento"})       # e o perfil restaura o modo
+    cfg = cliente.get("/config").json()
+    assert cfg["auto_lev_modo"] == "fixo"
+    assert cliente.get("/estado").json()["perfil_risco"] == "experimento"
+
+
+def test_p3b_o_conservador_NAO_declara_o_modo_e_a_assimetria_e_deliberada(cliente, sem_rede):
+    """A metade que este card recusou fazer, medida em vez de virar nota de rodape.
+
+    Sob `conservador` declarar "fixo" seria AFROUXAR: `auto_lev_min`=1, entao o modo
+    "conviccao" entrega 1x na conviccao minima enquanto "fixo" entrega `alavancagem_padrao`=2x
+    SEMPRE. Subir o piso de 1x para 2x no perfil alinhado a base -- cuja §6.1 diz que o unico
+    regime que sobreviveu foi "trend-following SEM alavancagem" -- e decisao do dono, nao de
+    agente (CLAUDE.md §2).
+
+    O preco fica dito: la o rotulo continua sem enxergar o modo. E buraco LIMITADO, e o teto
+    de 2x e quem o limita -- os dois modos vivem inteiros dentro dele."""
+    import autotrader
+    assert "auto_lev_modo" not in db.PERFIS_RISCO["conservador"]
+    cliente.post("/perfil", json={"perfil": "conservador"})
+    cliente.post("/auto", json={"auto_lev_modo": "conviccao"})
+    assert cliente.get("/estado").json()["perfil_risco"] == "conservador"   # nao acusa
+    cfg = db.get_config()                                                   # e o teto e o motivo
+    assert autotrader._alavancagem(cfg, 60) == 1.0 and autotrader._alavancagem(cfg, 100) == 2.0
