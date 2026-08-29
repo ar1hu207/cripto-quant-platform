@@ -227,6 +227,11 @@ def abrir(sinal_id, valor_reais, alavancagem):
                          f"alavancagem tem de ficar abaixo de {LIQ_BUFFER / sd:.1f}x.")
     cfg = db.get_config()
     exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
+    # [F-1] O risco-até-o-stop DESTA abertura, medido uma vez, aqui, sobre `preco` e `stop` —
+    # os dois valores que a posição vai nascer tendo. O mesmo número serve ao teto agregado e
+    # à coluna `risco_abertura`: são a mesma grandeza, e computá-la duas vezes seria abrir a
+    # porta para elas divergirem no dia em que `_risco_posicao` mudar.
+    risco_ab = _risco_posicao(valor_reais, alavancagem, preco, stop)
     with _abrir_lock:                                     # serializa aberturas (worker + API) — sem TOCTOU no teto
         with db.conectar() as con:
             # [EX-1] Ordem pendente conta nos tetos como se ja fosse posicao. APERTA a guarda, e
@@ -238,12 +243,11 @@ def abrir(sinal_id, valor_reais, alavancagem):
                        + _pendentes(con))
             banca_atual = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
             if g["risco_aberto_max_rs"] is not None:      # teto de risco-até-o-stop (recalc dentro do lock)
-                risco_ab = sum(_risco_posicao(p["valor_reais"], p["alavancagem"], p["entrada"], p["stop"])
+                risco_ja = sum(_risco_posicao(p["valor_reais"], p["alavancagem"], p["entrada"], p["stop"])
                                for p in abertas)
-                r_novo = _risco_posicao(valor_reais, alavancagem, preco, stop)
-                if risco_ab + r_novo > g["risco_aberto_max_rs"]:
+                if risco_ja + risco_ab > g["risco_aberto_max_rs"]:
                     raise ValueError(f"teto de risco aberto — exposição passaria o limite "
-                                     f"(R${risco_ab:.2f} + R${r_novo:.2f} > R${g['risco_aberto_max_rs']:.2f})")
+                                     f"(R${risco_ja:.2f} + R${risco_ab:.2f} > R${g['risco_aberto_max_rs']:.2f})")
             if exp_max > 0:                               # teto de MARGEM (exposição nominal vs banca)
                 margem_ab = sum((p["valor_reais"] or 0) for p in abertas)
                 if margem_ab + valor_reais > banca_atual * exp_max:
@@ -257,10 +261,12 @@ def abrir(sinal_id, valor_reais, alavancagem):
                            "WHERE id=? AND status='novo'", (sinal_id,)).rowcount != 1:
                 raise ValueError("sinal já confirmado, pulado ou expirado")
             con.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,stop,"
-                        "preco_atual,pnl,aberto_em,status,conviccao,sinal_id) "
-                        "VALUES(?,?,?,?,?,?,?,0,?, 'aberta',?,?)",
+                        "preco_atual,pnl,aberto_em,status,conviccao,sinal_id,"
+                        "stop_abertura,risco_abertura) "
+                        "VALUES(?,?,?,?,?,?,?,0,?, 'aberta',?,?,?,?)",
                         (sig["ativo"], sig["direcao"], preco, valor_reais, alavancagem,
-                         stop, preco, str(pd.Timestamp.now()), sig["conviccao"], sig["id"]))
+                         stop, preco, str(pd.Timestamp.now()), sig["conviccao"], sig["id"],
+                         stop, round(risco_ab, 4)))
             pid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
     ativo, direcao = sig["ativo"], sig["direcao"]
     log(f"ABRIU #{pid} {direcao} {ativo} @ {preco} | R${valor_reais} {alavancagem}x")
@@ -416,12 +422,20 @@ def _abrir_da_ordem(o, taxa_maker):
                            "WHERE id=? AND status='pendente'",
                            (str(pd.Timestamp.now()), o["id"])).rowcount != 1:
                 raise ValueError("ordem ja resolvida")
+            # [F-1] As mesmas duas âncoras do `abrir()`, sobre o preço que ESTA posição pagou
+            # — `preco_limite`, não o preço de agora. Dimensionar a âncora sobre o preço de
+            # mercado no instante do fill gravaria um risco que a posição não correu, e o
+            # caminho post-only é justamente o que separa os dois preços no tempo.
+            risco_ab = _risco_posicao(o["valor_reais"], o["alavancagem"],
+                                      o["preco_limite"], o["stop"])
             con.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,stop,"
-                        "preco_atual,pnl,aberto_em,status,conviccao,sinal_id,taxa_entrada) "
-                        "VALUES(?,?,?,?,?,?,?,0,?,'aberta',?,?,?)",
+                        "preco_atual,pnl,aberto_em,status,conviccao,sinal_id,taxa_entrada,"
+                        "stop_abertura,risco_abertura) "
+                        "VALUES(?,?,?,?,?,?,?,0,?,'aberta',?,?,?,?,?)",
                         (o["ativo"], o["direcao"], o["preco_limite"], o["valor_reais"],
                          o["alavancagem"], o["stop"], o["preco_limite"],
-                         str(pd.Timestamp.now()), o["conviccao"], o["sinal_id"], taxa_maker))
+                         str(pd.Timestamp.now()), o["conviccao"], o["sinal_id"], taxa_maker,
+                         o["stop"], round(risco_ab, 4)))
             pid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
             con.execute("UPDATE ordens SET posicao_id=? WHERE id=?", (pid, o["id"]))
     alertas.enviar("Ordem preenchida %s %s - R$ %s @ %sx - entrada %s"
@@ -462,7 +476,21 @@ def fechar(pos_id, motivo, preco_saida=None):
     # funding None = NÃO MEDIDO. O P&L segue sem ele (não dá pra cobrar o que não se mediu),
     # mas a coluna grava NULL, não 0.0: o portão do M2 exige número medido ou AUSENTE
     # declarado. Zero seria a pesquisa lendo "este trade não pagou carry" — que é falso.
+    # [F-1] `risco_inicial` é LEGADO e fica exatamente como estava: lê `pos["stop"]`, que o
+    # trailing reescreveu, e por isso grava "risco no stop da SAÍDA" sob um nome que promete
+    # "da entrada". Não se conserta o significado dele porque as 62 linhas já em produção
+    # significam o que significam — reescrever a coluna coalharia duas séries com o mesmo
+    # nome, que é pior que o defeito ([P2-40]). A versão-sintoma que NÃO se fez aqui era
+    # arredondar este número para o teto matemático: o valor pararia de ofender a vista
+    # (R$177,55 contra um teto de R$49,86) e continuaria medindo a coisa errada.
+    #
+    # `risco_abertura` é o conserto, e ele é uma CÓPIA — o número foi decidido no `abrir()` /
+    # `_abrir_da_ordem()` e aqui não se recalcula nada. Recalcular é o defeito: toda conta
+    # feita neste ponto tem `pos["stop"]` como única geometria disponível, e `pos["stop"]` se
+    # move. NULL quando a posição nasceu antes da coluna existir — ausência de medição não é
+    # zero, e não se deriva de `risco_inicial` para "ficar completo".
     risco_ini = _risco_posicao(pos["valor_reais"], pos["alavancagem"], pos["entrada"], pos["stop"])
+    risco_ab = pos.get("risco_abertura")
     with db.conectar() as con:                                 # transação de escrita curta
         cur = con.execute("UPDATE posicoes SET status='fechada', preco_atual=?, pnl=? "
                           "WHERE id=? AND status='aberta'", (preco_saida, pnl, pos_id))
@@ -490,15 +518,16 @@ def fechar(pos_id, motivo, preco_saida=None):
         ret_liq = (pnl / pos["valor_reais"] * 100) if pos["valor_reais"] else None
         con.execute("INSERT INTO trades(ativo,direcao,entrada,saida,valor_reais,alavancagem,"
                     "ret_pct,ret_pct_liq,pnl_reais,taxa,motivo_saida,aberto_em,fechado_em,"
-                    "conviccao,sinal_id,stop,risco_inicial,funding) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "conviccao,sinal_id,stop,risco_inicial,funding,risco_abertura) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pos["ativo"], pos["direcao"], pos["entrada"], preco_saida, pos["valor_reais"],
                      pos["alavancagem"], move * pos["alavancagem"] * 100,
                      round(ret_liq, 6) if ret_liq is not None else None,
                      pnl, taxa, motivo,
                      pos["aberto_em"], fechado_em, pos["conviccao"], pos["sinal_id"],
                      pos["stop"], round(risco_ini, 4),
-                     round(funding, 4) if funding is not None else None))
+                     round(funding, 4) if funding is not None else None,
+                     round(risco_ab, 4) if risco_ab is not None else None))
         banca = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
         con.execute("UPDATE banca SET atual=? WHERE id=1", (banca + pnl,))
     emoji = "💥" if motivo == "liquidacao" else ("🔴" if pnl < 0 else "🟢")

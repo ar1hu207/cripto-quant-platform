@@ -33,7 +33,23 @@ CREATE TABLE IF NOT EXISTS posicoes(
   -- `exec_modo=post_only` as ordens novas entram como maker enquanto posicoes antigas, abertas
   -- a mercado, ainda estao vivas. Cobrar a taxa de hoje sobre a entrada de ontem inventaria
   -- lucro que nao houve.
-  taxa_entrada REAL);
+  taxa_entrada REAL,
+  -- [F-1][N-13] As DUAS ancoras imutaveis da abertura. Existem porque `stop` NAO e imutavel:
+  -- o trailing o reescreve a cada ciclo e o persiste (`simulador._marcar_uma`). Toda pergunta
+  -- da forma "quanto eu arrisquei ao ENTRAR" respondida a partir de `stop` responde outra
+  -- coisa -- "onde o stop estava agora" -- e o erro tem sinal fixo em cada trade, so que nao
+  -- o MESMO sinal em todos: o trailing primeiro aproxima o stop da entrada (denominador menor,
+  -- R-multiplo inflado) e depois o leva alem dela (denominador maior, R-multiplo deflacionado,
+  -- ate o cap da margem -- e dali vem o maximo de R$177,55 medido em producao).
+  --   `stop_abertura`  = o preco do stop no instante da abertura. E a GEOMETRIA: 1R em preco
+  --                      e `abs(entrada - stop_abertura)`, e e dele que o trailing em R vive.
+  --   `risco_abertura` = o risco-ate-o-stop em R$ no instante da abertura, ja capado pela
+  --                      margem. E o DINHEIRO: e o denominador do R-multiplo.
+  -- Sao duas colunas e nao uma porque respondem a duas perguntas, e as duas sao gravadas de
+  -- uma vez so na abertura -- nenhuma das duas e recalculada depois de campo que se move.
+  -- NULL = posicao aberta antes destas colunas existirem. NULL e ausencia de medicao, nao
+  -- zero: quem le tem de distinguir os dois ([P2-10], [P2-36]).
+  stop_abertura REAL, risco_abertura REAL);
 
 -- [EX-1] Ordens post-only pendentes: o sinal vira uma ordem que DESCANSA no livro e so vira
 -- posicao se o preco vier ate ela. Se nao vier ate `expira_em`, a ordem morre e o sinal MORRE
@@ -255,10 +271,17 @@ def _migrar(c):
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
-                              ("taxa_entrada", "REAL")],
+                              ("taxa_entrada", "REAL"),
+                              ("stop_abertura", "REAL"), ("risco_abertura", "REAL")],
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
                             ("risco_inicial", "REAL"), ("funding", "REAL"),
-                            ("ret_pct_liq", "REAL")]}
+                            ("ret_pct_liq", "REAL"),
+                            # [F-1] a copia do `posicoes.risco_abertura` no fechamento. Coluna
+                            # NOVA, e nao um conserto do `risco_inicial`: as 62 linhas ja
+                            # gravadas significam "risco no stop da SAIDA", e reescrever o
+                            # significado delas coalharia duas series com o mesmo nome -- que
+                            # e pior que o defeito, e e a licao do [P2-40].
+                            ("risco_abertura", "REAL")]}
     for tabela, novas in faltantes.items():
         existentes = {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}
         for nome, tipo in novas:
@@ -399,6 +422,19 @@ def serie_equity(max_linhas=50000):
         return [dict(r) for r in c.execute(q, p)]
 
 
+def _estat_r(rmults):
+    """Expectância e SQN de uma lista de R-múltiplos. Devolve (0, 0) para lista vazia.
+
+    [F-2] Vira função porque passaram a existir DUAS séries de R (o denominador legado e o
+    `risco_abertura`) e a conta é a mesma nas duas. Duas cópias da fórmula divergiriam um dia,
+    e divergiriam em silêncio — as duas continuariam devolvendo um número plausível."""
+    if not rmults:
+        return 0, 0
+    mr = sum(rmults) / len(rmults)
+    sr = math.sqrt(sum((r - mr) ** 2 for r in rmults) / len(rmults))
+    return round(mr, 3), (round(mr / sr * math.sqrt(min(len(rmults), 100)), 2) if sr > 0 else 0)
+
+
 def metricas():
     """Estatísticas pra tunar: win rate, profit factor, e win rate POR convicção."""
     with conectar() as c:
@@ -411,7 +447,8 @@ def metricas():
     base = {"n_trades": 0, "n_sem_pnl": 0, "win_rate": 0, "pnl_total": 0, "taxa_total": 0,
             "profit_factor": 0, "ganho_medio": 0, "perda_media": 0, "por_conviccao": [],
             "sqn": 0, "sortino": 0, "sharpe": 0, "max_drawdown": 0, "max_drawdown_pct": 0,
-            "max_dd_mtm_pct": 0, "calmar": 0, "expectancia": 0, "expectancia_r": 0, "sqn_r": 0}
+            "max_dd_mtm_pct": 0, "calmar": 0, "expectancia": 0, "expectancia_r": 0, "sqn_r": 0,
+            "expectancia_r_ab": 0, "sqn_r_ab": 0, "n_r_ab": 0}
     if not trades:
         return base
     # [P2-36] `pnl_reais` NULL é MEDIÇÃO AUSENTE, e ausente não é zero.
@@ -460,15 +497,33 @@ def metricas():
     neg = [p for p in pnls if p < 0]
     ddv = math.sqrt(sum(p * p for p in neg) / nn) if neg else 0            # downside deviation
     sortino = round(media / ddv * cap, 2) if ddv > 0 else 0
-    # R-múltiplos (só trades com risco_inicial gravado — pnl / risco-até-o-stop; isola QUALIDADE do tamanho)
+    # R-múltiplos (só trades com risco gravado — pnl / risco-até-o-stop; isola QUALIDADE do tamanho)
+    #
+    # [F-2] DUAS séries, e a distinção é a entrega do card. O denominador antigo
+    # (`risco_inicial`) é lido de `pos["stop"]` no `fechar()`, e `pos["stop"]` é reescrito pelo
+    # trailing a cada ciclo: quanto melhor o trade correu, MAIOR o risco que ele parece ter
+    # corrido. O viés não é aleatório — ele encolhe o R-múltiplo dos vencedores e deixa o dos
+    # perdedores intacto, então `expectancia_r` e `sqn_r` saem enviesados para PARECER
+    # melhores. Provado em produção: `risco_inicial` máximo de R$177,55 contra um teto
+    # matemático de R$49,86, com casos de `risco ≈ pnl` (177,55 contra 174,81).
+    #
+    # `risco_abertura` é o denominador que não se move — gravado no `abrir()`/`_abrir_da_ordem()`
+    # e apenas COPIADO no fechamento. É ele que restabelece a paridade com o backtest, que fixa
+    # `pos["risco"] = abs(e - stop0)` na entrada (`pesquisa/backtest_plataforma.py:307`): sem
+    # isso o R-múltiplo do vivo e o do backtest não são a mesma grandeza [F-3].
+    #
+    # Trade antigo NÃO entra na série nova: `risco_abertura` NULL é medição AUSENTE, e derivá-la
+    # de `risco_inicial` seria fabricar o número que o card existe para desconfiar. `n_r_ab` diz
+    # quantos trades sustentam a série honesta — hoje zero, e isso é informação, não falha.
+    #
+    # A série velha FICA, com os mesmos nomes, pelo motivo do [P2-40]: `expectancia_r` já é
+    # consumida (`web/index.html`, `pesquisa/backtest_portfolio.py`) e trocar o significado dela
+    # por baixo é o que aquele card recusou fazer com `ret_pct`. Aposentá-la é o passo seguinte,
+    # e está declarado no relatório do card — não é esquecimento.
     rmults = [t["pnl_reais"] / t["risco_inicial"] for t in medidos if t.get("risco_inicial")]
-    if rmults:
-        mr = sum(rmults) / len(rmults)
-        sr = math.sqrt(sum((r - mr) ** 2 for r in rmults) / len(rmults))
-        expectancia_r = round(mr, 3)
-        sqn_r = round(mr / sr * math.sqrt(min(len(rmults), 100)), 2) if sr > 0 else 0
-    else:
-        expectancia_r = sqn_r = 0
+    rmults_ab = [t["pnl_reais"] / t["risco_abertura"] for t in medidos if t.get("risco_abertura")]
+    expectancia_r, sqn_r = _estat_r(rmults)
+    expectancia_r_ab, sqn_r_ab = _estat_r(rmults_ab)
     # max drawdown da curva REALIZADA (banca_ini + cumsum) — base do Calmar
     cum = peak = banca_ini
     maxdd = maxdd_pct = 0.0
@@ -505,6 +560,10 @@ def metricas():
         "por_conviccao": por_conv,
         "expectancia": round(media, 2), "expectancia_r": expectancia_r,
         "sqn": sqn, "sqn_r": sqn_r, "sortino": sortino, "sharpe": sharpe,
+        # [F-2] a série sobre o denominador que NÃO se move. `n_r_ab` é publicado junto de
+        # propósito: expectância-R de 3 trades e de 300 são o mesmo número com confianças
+        # incomparáveis, e quem lê o painel não tem outra forma de saber.
+        "expectancia_r_ab": expectancia_r_ab, "sqn_r_ab": sqn_r_ab, "n_r_ab": len(rmults_ab),
         "max_drawdown": round(maxdd, 2), "max_drawdown_pct": round(maxdd_pct, 1),
         "max_dd_mtm_pct": round(dd_mtm, 1), "calmar": calmar,
     }
