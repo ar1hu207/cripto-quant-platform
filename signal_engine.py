@@ -627,6 +627,12 @@ def cronometrar(n_pos=5, com_scan=True):
         db.init_db()
         ativos = _semear_posicoes(n_pos)
         contador.clear()          # a colheita de precos da semeadura NAO e do ciclo
+        # ...e o CACHE dela tambem nao. `mercado._tickers` guarda 5 s por ativo, e a semeadura
+        # acabou de cotar os mesmos ativos: sem esvaziar, o `atualizar()` medido comecaria
+        # quente e mostraria 0 requisicoes. O worker nunca esta nesse estado -- o ciclo dele
+        # e de 15 s para cima, entao a cotacao de um ciclo sempre venceu no seguinte. Medir
+        # quente seria medir um regime que nao existe.
+        mercado._tcache.clear()
         cfg = db.get_config()
         tfs = [t.strip() for t in cfg.get("timeframes", cfg["timeframe"]).split(",") if t.strip()]
         n_ativos = len([a for a in cfg["ativos"].split(",") if a.strip()])
