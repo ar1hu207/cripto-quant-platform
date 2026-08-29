@@ -167,6 +167,7 @@ class _ExContado:
 
     def __init__(self):
         self.n = {}
+        self.tfs = []          # [F-14] os timeframes pedidos, na ordem
 
     def _conta(self, nome):
         self.n[nome] = self.n.get(nome, 0) + 1
@@ -185,6 +186,7 @@ class _ExContado:
 
     def fetch_ohlcv(self, ativo, timeframe=None, limit=200, since=None):
         self._conta("fetch_ohlcv")
+        self.tfs.append(timeframe)
         # serie sintetica com deriva e ruido deterministico: o suficiente para EMA/RSI/ADX
         # sairem do warmup. O que este teste mede e a CONTAGEM, nao o veredito do indicador.
         #
@@ -222,6 +224,7 @@ def corretora_contada(banco, monkeypatch):
         monkeypatch.setattr(modulo, nome, fake)
     mercado._tcache.clear()                       # cache de 5s nao pode vazar de outro teste
     signal_engine._velas_cache.clear()            # idem o cache de velas do [F-10]
+    signal_engine._tf_por_sinal.clear()           # idem o memo de TF do [F-14]
     return fake
 
 
@@ -388,3 +391,115 @@ def test_f13_o_scan_gasta_uma_requisicao_por_par_ativo_x_timeframe(corretora_con
     db.set_config("timeframes", "5m,15m,1h")
     signal_engine.scan()
     assert corretora_contada.n.get("fetch_ohlcv") == 2 * 3
+
+
+# ================================ [F-14] o gestor de saida olha o grafico em que a entrada nasceu
+
+@pytest.fixture(autouse=True)
+def _memo_tf_limpo():
+    """O memo de `sinal_id -> tf` e de processo, e os ids de sinal recomecam do 1 a cada banco
+    temporario. Sem limpar, o sinal #1 de um teste responderia pelo #1 do teste seguinte."""
+    signal_engine._tf_por_sinal.clear()
+    yield
+    signal_engine._tf_por_sinal.clear()
+
+
+def _pos_de_sinal(tf, **kw):
+    """Posicao aberta ligada a um sinal do TF pedido. `tf=None` = sinal sem TF gravado."""
+    sid = semear_sinal(ativo="AAA/USDT", tf=tf)
+    pid = semear_posicao(ativo="AAA/USDT", entrada=100.0, stop=50.0,
+                         valor_reais=50.0, alavancagem=2, **kw)
+    with db.conectar() as c:
+        c.execute("UPDATE posicoes SET sinal_id=? WHERE id=?", (sid, pid))
+    return db.listar("posicoes", 1, "WHERE id=%d" % pid)[0]
+
+
+@pytest.mark.parametrize("tf_do_sinal", ["5m", "15m", "1h"])
+def test_f14_a_saida_usa_o_tf_do_SINAL_e_nao_o_primario_da_config(corretora_contada, tf_do_sinal):
+    """[F-14] O scanner varre `timeframes` (5m,15m,1h) e grava o TF em cada sinal, mas o
+    gestor de saida lia sempre `cfg["timeframe"]`. Uma posicao aberta por sinal de 1 h era
+    vigiada em velas de 15 min -- o ruido de 15 min pedindo a saida de uma tese de 1 h.
+
+    A prova e sobre o TF que chega na corretora, e nao sobre o veredito: quem decide a saida e
+    o indicador, e o card e sobre em QUE grafico ele e calculado."""
+    db.set_config("timeframe", "15m")                 # o primario continua sendo 15m
+    pedidos = []
+    real = signal_engine.ex.fetch_ohlcv
+    signal_engine.ex.fetch_ohlcv = lambda a, timeframe=None, limit=200, since=None: (
+        pedidos.append(timeframe), real(a, timeframe, limit, since))[1]
+    try:
+        signal_engine.avaliar_saida(_pos_de_sinal(tf_do_sinal))
+    finally:
+        signal_engine.ex.fetch_ohlcv = real
+    assert pedidos == [tf_do_sinal]
+
+
+def test_f14_posicao_sem_sinal_continua_no_timeframe_da_config(corretora_contada):
+    """Posicao aberta a mao (rota da API, sem `sinal_id`) e sinal antigo com `tf` NULL caem no
+    `timeframe` da config -- que e exatamente o que faziam antes. O card corrige quem TEM TF
+    proprio; nao inventa um para quem nao tem."""
+    db.set_config("timeframe", "5m")
+    pedidos = []
+    real = signal_engine.ex.fetch_ohlcv
+    signal_engine.ex.fetch_ohlcv = lambda a, timeframe=None, limit=200, since=None: (
+        pedidos.append(timeframe), real(a, timeframe, limit, since))[1]
+    try:
+        sem_sinal = db.listar("posicoes", 1, "WHERE id=%d" % semear_posicao(
+            ativo="AAA/USDT", entrada=100.0, stop=50.0, valor_reais=50.0, alavancagem=2))[0]
+        signal_engine.avaliar_saida(sem_sinal)
+        signal_engine._tf_por_sinal.clear()
+        # o [F-10] ja guardou (AAA/USDT, 5m): sem esvaziar, a segunda chamada seria servida do
+        # cache e nao chegaria a pedir TF nenhum -- o teste passaria a nao medir nada.
+        signal_engine._velas_cache.clear()
+        signal_engine.avaliar_saida(_pos_de_sinal(None))       # sinal com tf NULL
+    finally:
+        signal_engine.ex.fetch_ohlcv = real
+    assert pedidos == ["5m", "5m"]
+
+
+def test_f14_o_default_nao_e_memoizado_junto_com_o_fato(banco):
+    """O memo guarda o fato imutavel (o `tf` do sinal, "" quando nao ha) e nunca o default.
+    Se guardasse o default, trocar `timeframe` no painel ficaria congelado no valor de quando
+    a posicao foi vista pela primeira vez -- config que so vale para quem chegou depois."""
+    cfg = {"timeframe": "5m"}
+    pos = _pos_de_sinal(None)
+    assert signal_engine.tf_da_posicao(pos, cfg) == "5m"
+    cfg["timeframe"] = "1h"                                    # alguem mexe no painel
+    assert signal_engine.tf_da_posicao(pos, cfg) == "1h"       # vale na hora
+
+
+def test_f14_o_tf_do_sinal_e_lido_uma_vez_so_por_sinal(banco, monkeypatch):
+    """O TF de um sinal e imutavel (gravado no INSERT do scan, nunca reescrito), entao o memo
+    nao precisa de invalidacao -- e o gestor de saida nao volta ao banco a cada ciclo, que
+    seria reabrir a conexao por posicao que o [F-12] acabou de tirar do laco."""
+    pos = _pos_de_sinal("1h")
+    cfg = {"timeframe": "15m"}
+    n = {"v": 0}
+    real = db.conectar
+
+    def contando(*a, **k):
+        n["v"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(db, "conectar", contando)
+    assert [signal_engine.tf_da_posicao(pos, cfg) for _ in range(10)] == ["1h"] * 10
+    assert n["v"] == 1
+
+
+def test_f14_banco_indisponivel_nao_vira_tf_errado_para_sempre(banco, monkeypatch):
+    """A ultima ponta do memo: falha ao LER o TF cai no primario e nao grava nada.
+
+    Gravar "" num erro transitorio (banco travado, disco cheio) fixaria o TF errado para o
+    resto da vida do processo, e o gestor de saida seguiria vigiando o grafico errado muito
+    depois de o banco ter voltado -- sem nenhum sintoma, porque o valor cacheado responde."""
+    pos = _pos_de_sinal("1h")
+    cfg = {"timeframe": "15m"}
+
+    def travado(*a, **k):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(db, "conectar", travado)
+    assert signal_engine.tf_da_posicao(pos, cfg) == "15m"      # degrada para o primario
+    assert signal_engine._tf_por_sinal == {}                   # e NAO memoiza a falha
+    monkeypatch.undo()
+    assert signal_engine.tf_da_posicao(pos, cfg) == "1h"       # o banco volta, o TF certo volta

@@ -160,6 +160,45 @@ def confirmado(s, ativo, cfg):
     return True, "confirmado"
 
 
+# [F-14] sinal_id -> tf do sinal (string crua; "" = não achado). Memoizável sem invalidação
+# porque o TF de um sinal é imutável: ele é gravado no INSERT do scan e nunca reescrito.
+_tf_por_sinal = {}
+_TF_SINAL_MAX = 500
+
+
+def tf_da_posicao(pos, cfg):
+    """[F-14] O timeframe em que a posição NASCEU — não o `timeframe` primário do painel.
+
+    O scanner varre `timeframes` (hoje `5m,15m,1h`) e grava o TF em cada sinal, mas o gestor
+    de saída lia sempre `cfg["timeframe"]` (15m). Uma posição aberta por sinal de 1 h era
+    vigiada em velas de 15 min: RSI, EMA20/50 e "perdeu a EMA" passavam a significar outra
+    coisa: o ruído de 15 min pedindo a saída de uma tese de 1 h, e a tendência de 1 h invisível
+    justamente para quem precisava dela. A regra que fica: a saída olha o mesmo gráfico em que
+    a entrada foi decidida.
+
+    Sinal sem TF gravado (linha antiga, coluna NULL) e posição sem `sinal_id` (aberta à mão,
+    pela rota da API) caem no `timeframe` da config — que é exatamente o que faziam antes.
+
+    O memo guarda o fato imutável ("" = não achado) e NUNCA o default: resolver o default a
+    cada chamada é o que faz uma troca de `timeframe` no painel valer na hora para as posições
+    sem TF próprio, em vez de ficar congelada no valor de quando a posição foi vista primeiro.
+    """
+    padrao = (cfg.get("timeframe") or "15m").strip() or "15m"
+    sid = pos.get("sinal_id")
+    if not sid:
+        return padrao
+    if sid not in _tf_por_sinal:
+        try:
+            with db.conectar() as con:
+                r = con.execute("SELECT tf FROM sinais WHERE id=?", (sid,)).fetchone()
+        except Exception:
+            return padrao                      # banco indisponível não vira TF errado gravado
+        if len(_tf_por_sinal) >= _TF_SINAL_MAX:
+            _tf_por_sinal.clear()              # teto simples: o mapa é derivável a qualquer hora
+        _tf_por_sinal[sid] = ((r["tf"] or "").strip() if r else "")
+    return _tf_por_sinal[sid] or padrao
+
+
 def avaliar_saida(pos, cfg=None):
     """Gestor de saída ativa: olha cada posição ABERTA e sugere fechar quando
     (a) já tem lucro razoável E (b) a tendência está revertendo / o fluxo virou.
@@ -169,8 +208,9 @@ def avaliar_saida(pos, cfg=None):
     valor = pos.get("valor_reais") or 1
     roe = (pos.get("pnl") or 0) / valor * 100
     alvo = float(cfg.get("alvo_roe", 5))
+    tf = tf_da_posicao(pos, cfg)               # [F-14] o TF da ENTRADA, não o primário
     try:
-        raw = _velas(ativo, cfg.get("timeframe", "15m"), 120)
+        raw = _velas(ativo, tf, 120)
         df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
     except Exception:
         return None
