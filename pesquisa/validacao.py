@@ -1658,17 +1658,33 @@ def varredura_zero_a_zero(dfs=None, funding_8h=FUNDING_8H):
 
 
 # ---------------------------------------------------------------------------
-# [Q-12] As MESMAS quatro politicas do [P1-10], na configuracao que a PRODUCAO executa.
+# [Q-12] As MESMAS quatro politicas do [P1-10], sob a escala de alavancagem por conviccao.
 #
 # O `POLITICAS_M4` acima roda sob `LEV` fixo (10x), porque era o unico modo que existia quando
-# o M4 foi medido. A producao roda `auto_lev_modo=conviccao`, 2x-20x. Entao o veredito
-# publicado -- inclusive o `SEM EVIDENCIA DE EDGE` sobre o `C trailing`, que e o resultado mais
-# citado deste projeto -- descreve uma configuracao que ninguem executa.
+# o M4 foi medido. Este bloco existe porque, quando o [Q-12] foi escrito, a alavancagem por
+# conviccao era o que a producao executava -- e o veredito mais citado do projeto (`SEM
+# EVIDENCIA DE EDGE` sobre o `C trailing`) descrevia entao uma configuracao que ninguem rodava.
+#
+# [P-2] 🔴 ESSA FRASE DEIXOU DE SER VERDADE EM 2026-08-29, e a correcao e o card. O que mudou:
+#
+#   * o `[N-10]` trocou o default de `db.CONFIG_PADRAO["auto_lev_modo"]` de `"conviccao"` para
+#     **`"fixo"`** (`db.py:151`), porque o `[Q-13]` mediu a premissa da escala em 2.945 sinais
+#     de tendencia com desfecho marcado e ela nao se sustentou: os que bateram no STOP tinham
+#     conviccao MAIOR, e o win% por faixa faz 63 -> 38 -> 45 -> 50 -> 47, serrilha e nao escada;
+#   * a decisao `D-7` do dono (mesma data) e **`main` primeiro, VM depois**: a config VIVA nao
+#     foi alterada ainda. E o seeding do banco e `INSERT OR IGNORE` (`db.py:354`), entao subir
+#     codigo novo **nao reescreve** a linha `auto_lev_modo` que ja existe na VM.
+#
+# Logo, a frase honesta nao e "a producao roda fixo" -- seria trocar uma afirmacao falsa por
+# outra. E esta: **a pesquisa nao le a config viva e nao tem como afirmar o que a VM executa
+# neste instante**; o que ela sabe e que o modo que NASCE do codigo virou `"fixo"`. Este bloco
+# passa a ser o contraste `lev_modo=conviccao` -- a configuracao sob a qual o `VEREDITO-M4`
+# de producao foi emitido --, nao "a configuracao de producao".
 #
 # Isto nao e caca a numero melhor. O contraste de 24/08 ja mostrou que corrigir o objeto NAO
 # muda o veredito (IC do Sharpe segue incluindo o zero, RC p = 0,1404). E sobre a afirmacao
-# publicada descrever o sistema que existe. Um projeto que BUSCA lucro e ainda nao achou nao pode
-# ter o seu numero mais citado apontado para o objeto errado -- e o numero que diz onde procurar.
+# publicada descrever o sistema que existe -- e quando o sistema muda, e a afirmacao que se
+# conserta, com a data em que ela caducou.
 #
 # So `lev_modo` muda em relacao ao `POLITICAS_M4`. As saidas sao as mesmas, linha por linha:
 # a comparacao entre as quatro continua com um fator so.
@@ -1697,7 +1713,13 @@ def _trades_pol(par):
 
 
 def comparar_politicas_producao(dfs=None, funding_8h=FUNDING_8H):
-    """[Q-12] A x B x C x C-kATR na regua, sob a configuracao de PRODUCAO.
+    """[Q-12] A x B x C x C-kATR na regua, com a alavancagem escalando pela conviccao.
+
+    [P-2] O nome desta funcao e o verbo do CLI (`politicas-prod`) ficam como estao para nao
+    quebrar quem os cita; o que se corrige e a AFIRMACAO. Ate 2026-08-29 `lev_modo=conviccao`
+    era o que a producao executava e esta rodada era "a config de producao"; depois do `[N-10]`
+    o modo que nasce do codigo e `"fixo"`, e pela `D-7` a VM ainda nao foi atualizada. Ver o
+    bloco do `POLITICAS_M4_PROD` para o porque de "a producao roda fixo" tambem ser falso.
 
     Rodar (da RAIZ do repo):  python -m pesquisa.validacao politicas-prod
     """
@@ -2266,7 +2288,7 @@ if __name__ == "__main__":
         varredura_geometria()                         # [Q-8]/[Q-9] k e sd_min varridos no treino
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "politicas-prod":
-        comparar_politicas_producao()                 # [Q-12] as 4 politicas na config de producao
+        comparar_politicas_producao()                 # [Q-12] as 4 politicas com lev por conviccao
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "zeroazero":
         varredura_zero_a_zero()                       # [Q-11] stop zero-a-zero, lev por conviccao
