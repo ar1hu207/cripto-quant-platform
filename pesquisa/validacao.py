@@ -51,6 +51,8 @@ O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado
     liberdade). A variante roda em `sensibilidade()`, que imprime as duas lado a lado sempre
     -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
 """
+import hashlib
+import json
 import math
 import os
 import sys
@@ -1738,7 +1740,240 @@ def relatorio_sensibilidade(sens):
         print(f"   {bl:>14}  {str(ic):>24}")
 
 
+# ============================ [N-6] GOLDEN FILE: o teste de regressao da regua ============
+#
+# Por que ele existe, e por que ele veio ANTES de qualquer outra coisa nesta onda.
+#
+# A `validacao.py` foi refatorada muitas vezes (F1..F19, [Q-1], [Q-7], [Q-10], o modo taxa) e
+# NENHUMA dessas refatoracoes teve como provar que nao mudou o numero em silencio. Os testes
+# desta casa cobrem funcoes isoladas -- bootstrap, MDS, FDR, purga --, e uma regua pode ter
+# todas as pecas certas e mesmo assim mudar o veredito porque a ORDEM de duas delas trocou.
+# `REVISAO-ITEM1.md` §E chamou este de "o teste mais importante da lista e o unico ausente"
+# (F2), e prescreveu a ordem: seed -> congelar a saida -> so entao refatorar. Congelar depois
+# de mexer congela o numero ja alterado, e o teste de regressao nasce inutil.
+#
+# O que se congela, e o que NAO se congela. Congela-se a SERIE NUMERICA ponta a ponta: a
+# serie diaria OOS inteira, os p-valores, o DSR, a calibracao, o fold a fold, e digests
+# sha256 das estruturas grandes. NAO se congela a PROSA -- `veredito["motivo"]` e
+# `purga_motivo` sao frases derivadas de numeros que ja estao congelados aqui. Um golden que
+# guarda a frase quebra quando alguem conserta uma virgula, e golden que quebra por virgula e
+# golden que alguem regrava sem ler -- o que o torna decorativo. A versao-sintoma deste item
+# seria justamente a oposta: gravar o texto do veredito e chamar de teste. "SEM_EVIDENCIA"
+# continua saindo igual mesmo que o Sharpe mude de 0,6 para 1,4.
+#
+# A entrada tambem e congelada, em arquivo, e nao regerada por seed a cada rodada. Um painel
+# regerado por `default_rng(seed)` depende do fluxo de numeros do numpy continuar identico
+# para sempre; congelar o painel em disco tira essa dependencia do caminho e faz do golden um
+# lock de ponta a ponta do CODIGO, que e o que ele existe para medir.
+#
+# Reexecutavel fora do pytest (`ORQUESTRACAO-ORCA.md` §8, item 6):
+#     python -m pesquisa.validacao golden             # confere; sai != 0 se divergir
+#     python -m pesquisa.validacao golden --gravar    # regrava (ato deliberado, nunca no CI)
+
+GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "golden")
+GOLDEN_ENTRADA = os.path.join(GOLDEN_DIR, "entrada_walk_forward.json")
+GOLDEN_SAIDA = os.path.join(GOLDEN_DIR, "saida_walk_forward.json")
+
+# Parametros do painel congelado. So servem para REGRAVAR o golden; conferir le o arquivo.
+GOLDEN_SEED = 20260829
+GOLDEN_CFGS = ((50, 22), (55, 22), (65, 25))
+GOLDEN_DIAS = 1000
+GOLDEN_N_TRIALS = 100
+GOLDEN_ROTULO = "golden | painel sintetico congelado"
+
+
+def _canonico(o):
+    """Forma canonica e serializavel de qualquer pedaco do resultado.
+
+    Chave de tupla (as configs sao `(min_conv, adx_min)`) vira string; tipo do numpy vira
+    tipo do Python. Sem isto, dois resultados iguais poderiam serializar diferente e o golden
+    acusaria regressao que nao houve.
+    """
+    if isinstance(o, dict):
+        return {str(k): _canonico(v) for k, v in sorted(o.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(o, (list, tuple)):
+        return [_canonico(v) for v in o]
+    if isinstance(o, np.ndarray):
+        return [_canonico(v) for v in o.tolist()]
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.bool_):
+        return bool(o)
+    return o
+
+
+def _json_canonico(o):
+    return json.dumps(_canonico(o), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _digest(o):
+    """sha256 da forma canonica. E o que permite travar `oos`, `por_cfg` e `matriz_is` --
+    centenas de milhares de numeros -- sem transformar o golden num arquivo de megabytes que
+    ninguem le no diff."""
+    return hashlib.sha256(_json_canonico(o).encode("utf-8")).hexdigest()
+
+
+def _painel_golden(seed=GOLDEN_SEED, cfgs=GOLDEN_CFGS, n_dias=GOLDEN_DIAS):
+    """O painel sintetico do golden. Roda UMA vez, na gravacao; depois vive em disco.
+
+    Nao e ruido branco de proposito -- ele tem de exercitar o caminho inteiro da regua:
+
+      * tres configs com FREQUENCIA de trade diferente, porque o maximo de medias brutas do
+        Reality Check e dominado por quem mais opera ([F15]) e um golden de configs gemeas
+        nao veria isso mudar;
+      * cauda pesada (t de Student com 4 g.l.), porque foi a MARGINAL que o [Q-7] identificou
+        como causa da sub-rejeicao -- painel gaussiano nao acorda o portao de calibracao;
+      * `ts_saida` com duracao de 1 a 3 dias, para que a PURGA fique ATIVA e trades que
+        cruzam a borda do fold sejam de fato descartados do treino;
+      * ~1000 dias, para que o MDS fique abaixo de `MDS_LIMITE` e o veredito seja EMITIDO. Um
+        painel curto responderia INCONCLUSIVO e o golden congelaria o portao de poder em vez
+        do teste de edge.
+    """
+    t0 = 1_600_000_000_000 // DIA_MS * DIA_MS
+    por_cfg = {}
+    for k, cfg in enumerate(cfgs):
+        rng = np.random.default_rng(seed + k)
+        prob = 0.55 + 0.15 * k                       # frequencia de trade por config
+        trades = []
+        for i in range(n_dias):
+            if rng.random() > prob:
+                continue
+            ts = int(t0 + i * DIA_MS + int(rng.integers(0, DIA_MS)))
+            dur = int(rng.integers(1, 4))
+            trades.append({"ts": ts,
+                           "pnl": round(float(rng.standard_t(4) * 9.0 - 0.35), 6),
+                           "ts_saida": int(ts + dur * DIA_MS)})
+        por_cfg[cfg] = trades
+    return por_cfg
+
+
+def golden_snapshot(res):
+    """O retrato congelavel de um resultado de `walk_forward`.
+
+    Tudo que decide esta aqui como NUMERO. As estruturas grandes entram por digest, e a prosa
+    (`veredito["motivo"]`, `purga_motivo`) fica de fora -- ver o comentario da secao.
+    """
+    a, b = res["bloco_a"], res["bloco_b"]
+    v = res["veredito"]
+    return {
+        "n_trials": res["n_trials"],
+        "padrao": res["padrao"],
+        "purga_ativa": bool(res["purga_ativa"]),
+        "naive_cfg": res["naive_cfg"],
+        "por_fold": res["por_fold"],
+        "veredito_classe": v["classe"],
+        "veredito_numeros": {k: v.get(k) for k in ("nao_exclui", "mds", "mds_piso")},
+        "bloco_a": {k: x for k, x in a.items() if k != "serie_naive"},
+        "bloco_b": b,
+        "calibracao": res["calibracao"],
+        "sensibilidade_n_trials": res["sensibilidade_n_trials"],
+        "dsr_legado_trades": res["dsr_legado_trades"],
+        "serie_oos": res["serie_oos"],
+        "n_oos": len(res["oos"]),
+        "pnl_oos": round(sum(t["pnl"] for t in res["oos"]), 10),
+        "grade": [len(res["grade"]), res["grade"][0], res["grade"][-1]],
+        "grade_oos": [len(res["grade_oos"]), res["grade_oos"][0], res["grade_oos"][-1]],
+        "digest": {
+            "oos": _digest(res["oos"]),
+            "por_cfg": _digest(res["por_cfg"]),
+            "matriz_is": _digest(res["matriz_is"]),
+            "serie_naive": _digest(a["serie_naive"]),
+        },
+    }
+
+
+def carregar_golden_entrada(caminho=None):
+    """Le o painel congelado do disco. Devolve (por_cfg, meta)."""
+    with open(caminho or GOLDEN_ENTRADA, encoding="utf-8") as f:
+        d = json.load(f)
+    por_cfg = {tuple(bloco["cfg"]): bloco["trades"] for bloco in d["painel"]}
+    return por_cfg, d["meta"]
+
+
+def rodar_golden(caminho_entrada=None):
+    """Roda a regua sobre o painel congelado, exatamente como o relatorio a roda."""
+    por_cfg, meta = carregar_golden_entrada(caminho_entrada)
+    grid = list(por_cfg.keys())
+    return walk_forward(lambda cfg, _p=por_cfg: _p[cfg], grid,
+                        n_trials=meta["n_trials"], rotulo=meta["rotulo"])
+
+
+def _diferencas(esp, atu, caminho="raiz", fora=None, teto=30):
+    """Onde o golden e o atual divergem -- caminho a caminho, e nao um "nao bate"."""
+    if fora is None:
+        fora = []
+    if len(fora) >= teto:
+        return fora
+    if isinstance(esp, dict) and isinstance(atu, dict):
+        for k in sorted(set(esp) | set(atu)):
+            if k not in esp:
+                fora.append(f"{caminho}.{k}: AUSENTE no golden -> {atu[k]!r}")
+            elif k not in atu:
+                fora.append(f"{caminho}.{k}: {esp[k]!r} -> AUSENTE no atual")
+            else:
+                _diferencas(esp[k], atu[k], f"{caminho}.{k}", fora, teto)
+        return fora
+    if isinstance(esp, list) and isinstance(atu, list):
+        if len(esp) != len(atu):
+            fora.append(f"{caminho}: tamanho {len(esp)} -> {len(atu)}")
+            return fora
+        for i, (e, a) in enumerate(zip(esp, atu)):
+            _diferencas(e, a, f"{caminho}[{i}]", fora, teto)
+        return fora
+    if esp != atu:
+        fora.append(f"{caminho}: {esp!r} -> {atu!r}")
+    return fora
+
+
+def conferir_golden(caminho_entrada=None, caminho_saida=None):
+    """(ok, diferencas). `ok` exige igualdade EXATA -- a reproducao bit-a-bit que o F2 pede."""
+    with open(caminho_saida or GOLDEN_SAIDA, encoding="utf-8") as f:
+        esperado = json.load(f)["snapshot"]
+    atual = json.loads(_json_canonico(golden_snapshot(rodar_golden(caminho_entrada))))
+    return esperado == atual, _diferencas(esperado, atual)
+
+
+def gravar_golden(caminho_entrada=None, caminho_saida=None):
+    """Regrava entrada e saida. ATO DELIBERADO: nunca roda no pytest nem no CI.
+
+    Quem regrava esta afirmando que a mudanca de numero foi PEDIDA e esta explicada no commit.
+    Regravar para "ficar verde" e o unico jeito de este arquivo deixar de valer alguma coisa.
+    """
+    ce = caminho_entrada or GOLDEN_ENTRADA
+    cs = caminho_saida or GOLDEN_SAIDA
+    os.makedirs(os.path.dirname(ce), exist_ok=True)
+    por_cfg = _painel_golden()
+    entrada = {"meta": {"seed": GOLDEN_SEED, "n_dias": GOLDEN_DIAS,
+                        "n_trials": GOLDEN_N_TRIALS, "rotulo": GOLDEN_ROTULO,
+                        "gerado_por": "pesquisa.validacao._painel_golden"},
+               "painel": [{"cfg": list(cfg), "trades": tr} for cfg, tr in por_cfg.items()]}
+    # a ENTRADA vai compacta: e fixture opaca, nunca se le linha a linha, e ela nao muda mais.
+    # A SAIDA vai indentada, porque ela e o que alguem le no diff quando o golden quebrar.
+    with open(ce, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(_canonico(entrada), f, sort_keys=True, separators=(",", ":"))
+        f.write("\n")
+    snap = golden_snapshot(rodar_golden(ce))
+    with open(cs, "w", encoding="utf-8", newline="\n") as f:
+        json.dump({"snapshot": _canonico(snap)}, f, sort_keys=True, indent=1)
+        f.write("\n")
+    return ce, cs
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "golden":
+        # [N-6] O teste de regressao da regua, fora do pytest. `--gravar` e ato deliberado.
+        if "--gravar" in sys.argv:
+            ce, cs = gravar_golden()
+            print(f"golden GRAVADO:\n  {ce}\n  {cs}")
+            sys.exit(0)
+        ok, difs = conferir_golden()
+        print("golden: OK -- a regua reproduz o numero congelado bit a bit." if ok
+              else "golden: DIVERGIU -- a regua mudou o numero.")
+        for d in difs:
+            print(f"   {d}")
+        sys.exit(0 if ok else 1)
     if len(sys.argv) > 1 and sys.argv[1] == "politicas":
         comparar_politicas()                          # [P1-10] A x B x C, mesma regua
         sys.exit(0)

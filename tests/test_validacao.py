@@ -24,6 +24,7 @@ smoke test, nao calibracao -- um bug que faca V* grande demais produz p~1 sempre
 louvor. O que define teste calibrado e UNIFORMIDADE dos p-valores, e e isso que
 `test_reality_check_calibrado` afirma.
 """
+import json
 import math
 
 import numpy as np
@@ -1245,3 +1246,109 @@ def test_a_politica_nao_muda_a_paridade_de_entrada():
     for pol in B.POLITICAS:
         assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fraco,
                                 saida=pol, adx_min=25) == []
+
+
+# ============================ [N-6] golden file ============================
+def test_golden_reproduz_a_saida_congelada_bit_a_bit():
+    """[N-6 / F2] O teste que a `REVISAO-ITEM1.md` §E chamou de "o mais importante da lista e
+    o unico ausente".
+
+    Todo o resto deste arquivo prova PECAS: o bootstrap de bloco, o MDS, a purga, o FDR. Uma
+    regua pode ter todas as pecas certas e mesmo assim mudar o veredito porque a ordem de
+    duas delas trocou, ou porque um `round()` virou outro. Este e o unico teste que roda a
+    regua PONTA A PONTA sobre uma entrada congelada e exige o mesmo numero de volta.
+
+    Se ele quebrar, a pergunta NAO e "como faco ele passar" -- e "que numero mudou, e eu
+    queria que mudasse?". Regravar (`python -m pesquisa.validacao golden --gravar`) e ato
+    deliberado, e o commit que regrava tem de dizer por que.
+    """
+    ok, difs = V.conferir_golden()
+    assert ok, "a regua mudou o numero congelado:\n  " + "\n  ".join(difs)
+
+
+def test_golden_congela_NUMERO_e_nao_a_frase_do_veredito():
+    """A versao-sintoma deste item seria gravar o texto do veredito e chamar de teste.
+
+    "SEM_EVIDENCIA" continua saindo igual mesmo que o Sharpe anualizado va de -1,1 para +1,4:
+    a classe do veredito e uma de tres strings, e tres strings nao detectam regressao. O que
+    o golden guarda tem de ser a serie numerica -- e e isso que este teste afirma, para que
+    ninguem "simplifique" o snapshot depois.
+    """
+    snap = json.load(open(V.GOLDEN_SAIDA, encoding="utf-8"))["snapshot"]
+    assert len(snap["serie_oos"]) > 500                      # a serie diaria OOS inteira
+    assert snap["bloco_b"]["T"] == len(snap["serie_oos"])
+    for chave in ("reality_check", "spa", "dsr_melhor_is", "p_melhor_sozinha"):
+        assert chave in snap["bloco_a"], chave
+    for chave in ("ic_bloco", "ic_iid", "psr", "sharpe_anualizado",
+                  "ic_sharpe_anualizado", "mds", "acf", "concentracao"):
+        assert chave in snap["bloco_b"], chave
+    assert set(snap["digest"]) == {"oos", "por_cfg", "matriz_is", "serie_naive"}
+    # e a PROSA fica de fora, de proposito: golden que quebra por virgula e golden regravado
+    # sem ler.
+    assert "veredito_motivo" not in snap and "motivo" not in snap.get("veredito_numeros", {})
+
+
+def test_golden_exercita_o_caminho_inteiro_e_nao_um_atalho():
+    """Golden de painel curto congelaria o portao de poder, nao o teste de edge.
+
+    O painel foi construido para que TODOS os portoes sejam atravessados e o veredito seja de
+    fato EMITIDO: MDS abaixo do limite (ha poder), controle nulo calibrado (o portao do [Q-7]
+    nao bloqueia), purga ATIVA (ha `ts_saida`), e mais de uma config escolhida ao longo dos
+    folds (a selecao walk-forward esta mesmo selecionando). Se algum desses deixar de valer,
+    o golden passa a congelar menos regua do que aparenta.
+    """
+    snap = json.load(open(V.GOLDEN_SAIDA, encoding="utf-8"))["snapshot"]
+    assert snap["veredito_classe"] == "SEM_EVIDENCIA"        # veredito EMITIDO, nao INCONCLUSIVO
+    assert snap["bloco_b"]["mds"] <= V.MDS_LIMITE
+    assert snap["bloco_b"]["T_efetivo"] >= V.T_EFETIVO_MINIMO
+    assert snap["calibracao"]["classe"] == "CALIBRADO"
+    assert snap["purga_ativa"] is True
+    escolhidas = {tuple(f[1]) for f in snap["por_fold"]}
+    assert len(escolhidas) > 1, "os folds escolheram sempre a mesma config"
+
+
+def test_golden_PEGA_uma_mudanca_de_numero(monkeypatch):
+    """Golden que passa nao prova nada; golden que REPROVA uma mutacao prova.
+
+    A mutacao aqui e a seed do `PADRAO` -- ela nao muda a estrategia nem os dados, so o
+    sorteio de todos os bootstraps. Um golden que so olhasse a classe do veredito passaria
+    (continua `SEM_EVIDENCIA`); este tem de reprovar, porque os p-valores mudam.
+
+    Foi escolhida uma mutacao que comprovadamente move o numero: numa auditoria anterior uma
+    mutacao "obvia" nao quebrou nada porque uma guarda acima a tornava equivalente.
+    """
+    monkeypatch.setitem(V.PADRAO, "seed", V.PADRAO["seed"] + 1)
+    ok, difs = V.conferir_golden()
+    assert not ok, "o golden NAO pegou uma troca de seed -- ele nao esta medindo nada"
+    caminhos = " ".join(difs)
+    assert "reality_check" in caminhos or "calibracao" in caminhos or "ic_bloco" in caminhos
+
+
+def test_golden_PEGA_uma_mudanca_de_constante_do_PADRAO(monkeypatch):
+    """A segunda mutacao, num eixo diferente: `block`, o comprimento do bloco do bootstrap.
+
+    Seed troca o sorteio; `block` troca a ESTATISTICA (quanto de autocorrelacao o IC
+    preserva). Se o golden so pegasse a seed, ele estaria travando o gerador de numeros
+    aleatorios e nao a regua.
+    """
+    monkeypatch.setitem(V.PADRAO, "block", 20)
+    ok, difs = V.conferir_golden()
+    assert not ok, "o golden NAO pegou block=5 -> 20"
+    assert any("ic_bloco" in d or "block" in d for d in difs), difs
+
+
+def test_golden_le_a_entrada_do_disco_e_nao_regera_por_seed(tmp_path):
+    """A entrada e congelada em ARQUIVO de proposito.
+
+    Um painel regerado por `default_rng(seed)` faria o golden depender do fluxo de numeros do
+    numpy continuar identico para sempre -- e ai o teste passaria a medir o numpy junto com a
+    regua. Prova: mexer no arquivo muda o resultado, ou seja, e ele que manda.
+    """
+    por_cfg, meta = V.carregar_golden_entrada()
+    assert meta["n_trials"] == V.GOLDEN_N_TRIALS and len(por_cfg) == len(V.GOLDEN_CFGS)
+    d = json.load(open(V.GOLDEN_ENTRADA, encoding="utf-8"))
+    d["painel"][0]["trades"][0]["pnl"] += 1.0                # um centavo em um trade
+    alt = tmp_path / "entrada.json"
+    alt.write_text(json.dumps(d), encoding="utf-8")
+    ok, _ = V.conferir_golden(caminho_entrada=str(alt))
+    assert not ok, "trocar a entrada nao mudou o resultado -- o golden nao a esta lendo"
