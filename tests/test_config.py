@@ -260,3 +260,72 @@ def test_com_stop_curto_o_conservador_esbarra_na_margem_antes_dos_slots(cliente,
     cliente.post("/perfil", json={"perfil": "conservador"})
     abertas, erro = abre_ate_recusar(6, 100.0, 98.0, db.get_config())
     assert abertas == 2 and "teto de margem" in erro
+
+
+# ============================== [P-3] as tres chaves de trailing em R, no catalogo do [P1-8]
+#
+# ANTES deste card o `POST /config` respondia 422 "chave desconhecida" as tres, e o
+# `GET /catalogo` nao as listava. O efeito nao era cosmetico: a onda A pos o trailing para
+# medir em R (`[N-13]`), entao a chave que DECIDE a politica de saida do vivo so valeria pelo
+# default em producao, e reverter exigiria um DEPLOY em vez de um clique -- que e o motivo
+# concreto da decisao D-7 ter segurado a VM ate aqui.
+
+TRAILING_R = ("trailing_unidade", "trailing_arma_r", "trailing_dist_r")
+
+
+def test_p3_o_post_config_aceita_as_tres_chaves_de_trailing_em_r(cliente):
+    """O antes/depois deste card, na porta por onde o painel fala.
+
+    As tres juntas num lote so, de proposito: `_validar_lote` e tudo-ou-nada, entao uma chave
+    ainda sem verbete derrubaria as outras duas com ela."""
+    r = cliente.post("/config", json={"trailing_unidade": "preco",
+                                      "trailing_arma_r": 2, "trailing_dist_r": 1.5})
+    assert r.status_code == 200, r.json()
+    cfg = cliente.get("/config").json()
+    assert cfg["trailing_unidade"] == "preco"
+    assert float(cfg["trailing_arma_r"]) == 2.0 and float(cfg["trailing_dist_r"]) == 1.5
+
+
+def test_p3_o_catalogo_publica_as_tres_com_racional(cliente):
+    """Sem verbete no `CONFIG_RACIONAL` o painel mostraria a chave e nao o PORQUE dela --
+    e a unidade R e justamente o que ninguem deduz do nome."""
+    p = cliente.get("/catalogo").json()["parametros"]
+    for chave in TRAILING_R:
+        assert chave in p, chave
+        assert p[chave]["racional"], chave
+    assert p["trailing_unidade"]["opcoes"] == ["R", "preco"]
+    assert (p["trailing_arma_r"]["min"], p["trailing_arma_r"]["max"]) == (0.1, 10.0)
+    assert (p["trailing_dist_r"]["min"], p["trailing_dist_r"]["max"]) == (0.1, 10.0)
+    # o racional tem de explicar a UNIDADE, que e a metade que o nome da chave nao conta
+    assert "R" in p["trailing_unidade"]["racional"]
+    assert "stop_abertura" in p["trailing_unidade"]["racional"]
+
+
+@pytest.mark.parametrize("chave,valor", [
+    ("trailing_unidade", "atr"),      # unidade que nao existe -- o [N-13] explica por que nao
+    ("trailing_unidade", ""),
+    ("trailing_arma_r", 0),           # 0 armaria o trailing na abertura: stop colado na entrada
+    ("trailing_arma_r", 10.1),
+    ("trailing_arma_r", "banana"),
+    ("trailing_dist_r", 0),           # 0 poria o stop EM CIMA do preco
+    ("trailing_dist_r", -1),
+    ("trailing_dist_r", 10.1),
+])
+def test_p3_valor_fora_de_faixa_e_recusado_sem_gravar_nada(cliente, chave, valor):
+    """A metade que importa mais que o "aceita": faixa aberta demais e o mesmo que faixa
+    nenhuma. E `_validar_lote` e tudo-ou-nada -- o valor bom que veio junto tambem nao grava."""
+    antes = cliente.get("/config").json()
+    r = cliente.post("/config", json={chave: valor, "trailing_ativo": 0})
+    assert r.status_code == 422, r.json()
+    assert cliente.get("/config").json() == antes      # nada gravado, nem o `trailing_ativo`
+
+
+def test_p3_o_default_vivo_do_trailing_em_r_passa_no_proprio_catalogo(banco):
+    """Config que o `init_db` grava e o `POST /config` recusaria seria config entrada pela
+    porta dos fundos -- o mesmo teste que os perfis ja fazem, aplicado ao default."""
+    import api
+    for chave in TRAILING_R:
+        assert api._validar_config(chave, db.CONFIG_PADRAO[chave]), chave
+    assert db.get_config()["trailing_unidade"] == "R"      # D-5: 1R arma, 1R de distancia
+    assert float(db.get_config()["trailing_arma_r"]) == 1.0
+    assert float(db.get_config()["trailing_dist_r"]) == 1.0

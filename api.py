@@ -300,6 +300,21 @@ CONFIG_CATALOGO = {
     "auto_lev_min":         ("float", 1.0, 50.0),
     "auto_lev_max":         ("float", 1.0, 50.0),
     "trailing_ativo":       ("bool",),
+    # [N-13][P-3] O trailing mede em R desde a onda A, e as tres chaves abaixo sao o que
+    # DECIDE esse comportamento -- sem verbete aqui o `POST /config` as recusava como "chave
+    # desconhecida" e elas so valeriam pelo default. A consequencia nao era cosmetica: em
+    # producao, reverter a politica de saida exigiria um DEPLOY em vez de um clique, e e por
+    # isso que a decisao D-7 segurou a VM ate este item fechar.
+    #
+    # Faixas: nenhuma das duas admite 0, e a ausencia e deliberada -- `arma_r=0` armaria o
+    # trailing no instante da abertura (stop colado na entrada, todo trade morre no primeiro
+    # ruido) e `dist_r=0` poria o stop EM CIMA do preco. O piso de 0,1R e o mesmo espirito do
+    # piso 0,001 de `trailing_dist`: apertar pode, zerar e outra coisa. O teto de 10R e
+    # folgado de proposito -- acima disso o trailing nunca arma na vida util de um trade
+    # intraday, o que equivale a `trailing_ativo=0` dito de um jeito que ninguem le no painel.
+    "trailing_unidade":     ("enum", ("R", "preco")),
+    "trailing_arma_r":      ("float", 0.1, 10.0),
+    "trailing_dist_r":      ("float", 0.1, 10.0),
     "trailing_dist":        ("float", 0.001, 0.5),
     # estado / integrações
     "trava_dia_em":         ("data",),
@@ -386,6 +401,35 @@ CONFIG_RACIONAL = {
         "agressivo sobrevive: a 3% por trade, menos de dois stops cheios trancam o dia; a 1%, "
         "cinco. O mesmo 5% significa coisas diferentes em cada perfil, e por isso ele fica "
         "FORA dos perfis — mexer nele é mexer no freio de emergência, não no acelerador."),
+    "trailing_unidade": (
+        "VIVO \"R\". 1R é a distância entrada→stop DA ABERTURA (`posicoes.stop_abertura`, "
+        "imutável), que é a mesma unidade em que o stop de entrada já é dimensionado (3×ATR). "
+        "Substituiu \"preco\" (os 2% de `trailing_dist`) porque a unidade de preço estava "
+        "errada de duas maneiras opostas ao mesmo tempo. Primeira: multiplicada pela "
+        "alavancagem ela vira ROE — 2% de preço são 4% de ROE a 2x e 40% a 20x, então o "
+        "trailing DESARMAVA justamente onde a aposta era maior. Segunda: em unidade de risco "
+        "os mesmos 2% valem 3R com stop curto (arma tarde demais) e meio R com stop largo "
+        "(arma cedo demais) — o mesmo número significava coisas diferentes a cada trade. A "
+        "medição que fecha o argumento: 19 dos 20 trades que foram de lucro a prejuízo NUNCA "
+        "armaram o trailing (INVESTIGACAO-MOTOR-2026-08-24 §8), e essa cauda direita é "
+        "exatamente o que a meta do dono pede. \"preco\" NÃO é legado morto: é o caminho das "
+        "posições abertas antes de `stop_abertura` existir, que não têm R mensurável — para "
+        "elas, inventar um R a partir do stop de agora seria o defeito [F-1] renascendo."),
+    "trailing_arma_r": (
+        "VIVO 1R, ASSINADO PELO DONO em 2026-08-29 (decisão D-5 do PLANO-V2 — o portão humano "
+        "da §9.8, porque isto é `toca-risco`). Lucro, em R, que ARMA o trailing. Com "
+        "`trailing_dist_r` também em 1, o stop cai no zero-a-zero EXATO no instante em que "
+        "arma — que é o `be_em_R=1` que a pesquisa já prescrevia do seu lado "
+        "(`pesquisa/backtest_plataforma`), chegando ao vivo pela mesma porta. Só vale com "
+        "`trailing_unidade=R`; sob \"preco\" quem manda é `trailing_dist`."),
+    "trailing_dist_r": (
+        "VIVO 1R (D-5, mesma assinatura). Distância, em R, que o stop mantém atrás do preço "
+        "depois de armado. Vale a pena saber ler a relação com `trailing_arma_r`: no instante "
+        "em que arma, o stop vai para `entrada + (arma_r − dist_r)×R`, então dist_r > arma_r "
+        "arma ABAIXO da entrada e dist_r < arma_r já arma travando lucro. Nenhum dos dois é "
+        "afrouxamento — a catraca de `simulador._marcar_uma` só aceita stop que ande a favor, "
+        "nunca para trás. Apertar (dist_r menor) trava mais cedo e corta mais vencedor; "
+        "afrouxar dá mais corda à cauda direita. Só vale com `trailing_unidade=R`."),
     "exposicao_max": (
         "VIVO 50% da banca em margem somada. Teto de MARGEM, não de risco: limita quanto "
         "capital fica preso, não quanto se pode perder. A base não fala dele, mas ele muda de "
