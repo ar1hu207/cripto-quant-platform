@@ -53,6 +53,12 @@ def rodar(cenario):
         check("GET /docs autenticado", c.get("/docs", headers=logado).status_code, 404)
         check("GET /redoc autenticado", c.get("/redoc", headers=logado).status_code, 404)
         check("GET /openapi.json autenticado", c.get("/openapi.json", headers=logado).status_code, 404)
+        # [F-15] A auditoria de config conta QUANDO cada guarda de risco foi mexida e por qual
+        # porta -- inclusive o religamento do `auto_trade`. E historico de risco, nao telemetria
+        # publica: rota nova nasce DENTRO da auth, e este check e o que prova que ela nasceu
+        # dentro em vez de herdar por sorte a lista de excecoes do middleware (so `/health`).
+        check("GET /config/auditoria sem credencial", c.get("/config/auditoria", headers=fora).status_code, 401)
+        check("GET /config/auditoria autenticado", c.get("/config/auditoria", headers=logado).status_code, 200)
         check("GET /health (monitoramento segue aberto)", c.get("/health", headers=fora).status_code, 200)
         check("GET /estado autenticado", c.get("/estado", headers=logado).status_code, 200)
         check("POST /reset autenticado sem confirmar", c.post("/reset", json={}, headers=logado).status_code, 400)
@@ -80,6 +86,7 @@ def rodar(cenario):
         check("GET /estado de fora", c.get("/estado", headers=fora).status_code, 503)
         check("POST /reset de fora", c.post("/reset", json={"confirmar": "RESET"}, headers=fora).status_code, 503)
         check("GET / de fora", c.get("/", headers=fora).status_code, 503)
+        check("GET /config/auditoria de fora", c.get("/config/auditoria", headers=fora).status_code, 503)
         r503 = c.get("/estado", headers={**fora, "origin": ORIGEM})
         check("503 devolve ACAO (front vê o motivo, não erro de CORS)",
               r503.headers.get("access-control-allow-origin"), "*")
