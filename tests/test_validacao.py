@@ -1536,19 +1536,20 @@ def test_relatorio_tambem_declara_quando_falta_ts_saida(capsys):
     assert "tempo em mercado" not in saida
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "[N-5] o buraco que sobra: `pesquisa/backtest_plataforma.py` nao grava o lado da posicao "
-    "no `trades.append`, entao a exposicao liquida da rodada REAL sai NAO COMPUTAVEL. "
-    "Arquivo fora do territorio T-REGUA (Onda A) -- falta uma chave la"))
-def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
-    """XFAIL estrito, que nesta casa e card em aberto e nao teste quebrado (`CLAUDE.md` §6).
+def test_a_regua_real_COMPUTA_exposicao_porque_o_motor_grava_a_direcao():
+    """[P-4] O xfail estrito do `[N-5]` PROMOVIDO -- e a promocao e o ponto.
 
-    O dia em que o motor gravar `direcao` no trade, este teste vira XPASS e QUEBRA a suite de
-    proposito -- obrigando a promover a asercao em vez de deixar o buraco se fechar em
-    silencio, sem ninguem notar que o portao do veredito POSITIVO caiu.
+    Ate aqui este teste era `xfail(strict=True)`, que nesta casa e card em aberto e nao teste
+    quebrado (`CLAUDE.md` §6): `backtest_plataforma` gravava conv/pnl/motivo/ts/ts_saida e
+    jogava fora o lado da posicao, entao a exposicao liquida da rodada REAL saia
+    `NAO COMPUTAVEL` e o portao que separa alfa de beta ficava caido. No instante em que o
+    motor passou a gravar `direcao`, o xfail virou XPASS e QUEBROU a suite -- de proposito,
+    para obrigar a trocar "o buraco existe" por "o buraco fechou, e eis a asercao".
 
-    Escrever isso como xfail em vez de so mencionar no relatorio e a diferenca entre uma
-    divida registrada e uma divida contada uma vez.
+    O que se afirma agora e o numero, nao a mera ausencia de `None`: um unico trade LONG tem
+    de dar exposicao liquida **+1,0 exata**. Aceitar qualquer nao-`None` deixaria passar um
+    sinal trocado, que e o erro que mais importa aqui -- ele transformaria um short em beta
+    comprado no relatorio que existe justamente para pegar beta.
     """
     precos = [100.0] * 70
     lows = list(precos)
@@ -1556,7 +1557,34 @@ def test_a_regua_real_ainda_NAO_computa_exposicao_e_isso_fica_REGISTRADO():
     trades = B.backtest_ativo("X/USDT", 0, 100, 10, df=df_sintetico(precos, lows=lows),
                               sinal_fn=sinal_em([60]))
     assert trades, "o motor nao gerou trade -- o teste nao esta medindo o que promete"
-    assert V.exposicao_liquida(trades)["liquida"] is not None
+    assert all(t["direcao"] in (1, -1) for t in trades)
+    assert V.exposicao_liquida(trades)["liquida"] == 1.0
+
+
+def test_a_exposicao_liquida_da_rodada_real_ACOMPANHA_o_lado_da_posicao():
+    """O contraponto do teste acima: se a exposicao nao mudar de sinal quando a posicao muda
+    de lado, ela nao esta medindo direcao nenhuma -- esta devolvendo uma constante bonita.
+
+    Tres casos com resposta conhecida, que e o padrao que o `[N-5]` usou (estrategia identica
+    ao benchmark tem de dar `p = 1,0` exato): so LONG -> +1; so SHORT -> -1; um de cada com a
+    MESMA duracao -> 0,0 exato, isto e, direcionalmente neutra.
+    """
+    precos = [100.0] * 70
+    lows, highs = list(precos), list(precos)
+    lows[65] = 90.0                                    # fura o stop do LONG
+    highs[65] = 110.0                                  # fura o stop do SHORT
+    df = df_sintetico(precos, highs=highs, lows=lows)
+
+    longo = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60], direcao=1))
+    curto = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=sinal_em([60], direcao=-1))
+    assert len(longo) == len(curto) == 1
+    assert V.exposicao_liquida(longo)["liquida"] == 1.0
+    assert V.exposicao_liquida(curto)["liquida"] == -1.0
+
+    # mesma duracao dos dois lados -> a media ponderada por tempo tem de ser 0,0 exato
+    assert longo[0]["ts_saida"] - longo[0]["ts"] == curto[0]["ts_saida"] - curto[0]["ts"]
+    assert V.exposicao_liquida(longo + curto)["liquida"] == 0.0
+    assert V.exposicao_liquida(longo + curto)["motivo"] == ""
 
 
 # ============================ [N-9] log append-only de tentativas ========================

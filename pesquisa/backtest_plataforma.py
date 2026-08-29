@@ -212,6 +212,22 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
     convicção; sem isto, medir `be_em_R` não responde nada, porque o defeito que ele ataca É a
     interação entre alavancagem e limiar. Default `"fixo"` mantém toda rodada anterior idêntica.
 
+    **`direcao`, e por que ela é `+1/-1` e não `"LONG"/"SHORT"` ([P-4]).**
+    Cada trade grava o lado da posição. Sem ele a `validacao.exposicao_liquida` — a linha que
+    o `[N-5]` acrescentou para separar **alfa de beta** — sai `NAO COMPUTAVEL` na rodada real,
+    e sem ela um P&L positivo não tem como ser distinguido de "estava comprado num bull". É o
+    portão bloqueante de qualquer veredito POSITIVO da V2, e ele caía por uma chave ausente.
+
+    Há **duas** convenções de `direcao` nesta casa, e elas não são intercambiáveis: o **banco**
+    guarda TEXTO (`posicoes.direcao` é `"LONG"`/`"SHORT"`, `db.py:29`, e `simulador` converte
+    com `1 if pos["direcao"] == "LONG" else -1`), enquanto a **camada numérica** — `scoring`
+    (`scoring.py:35,52`), este motor e a régua — usa `+1/-1`. Aqui vale a numérica, por dois
+    motivos: `d` já É o `p["direcao"]` que veio do `scoring`, e o consumidor deste campo
+    (`exposicao_liquida`) exige `{+1,-1}` de propósito, porque o número que ela calcula é
+    `sum(direcao·duracao)/sum(duracao)` — uma média ponderada, não uma contagem de rótulos.
+    Gravar `"LONG"` aqui deixaria a exposição `None` com o mesmo motivo de antes, isto é,
+    fecharia o card sem fechar o buraco.
+
     **`ts_saida`, e por que ele é o FECHAMENTO do candle de saída e não a abertura.**
     Cada trade grava o instante da entrada (`ts`, o open do candle i+1, que é o fill) e o
     instante em que o desfecho ficou conhecido (`ts_saida`). A régua usa esse segundo campo
@@ -359,7 +375,8 @@ def backtest_ativo(ativo, min_conv, valor, lev, tf=TF, dias=DIAS,
                 fcost = d * funding_8h * ((i - pos["i0"]) * tfh / 8) * (valor * lev_p)  # funding: LONG paga>0, SHORT recebe
                 pnl = max(valor * lev_p * move - 2 * taxa * valor * lev_p - fcost, -valor)
                 trades.append({"conv": pos["conv"], "pnl": pnl, "motivo": motivo,
-                               "ts": pos["ts"], "ts_saida": int(tss[i]) + tf_ms})
+                               "ts": pos["ts"], "ts_saida": int(tss[i]) + tf_ms,
+                               "direcao": d})
                 pos = None
     return trades
 
