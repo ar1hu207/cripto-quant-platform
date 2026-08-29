@@ -1754,6 +1754,243 @@ def test_a_exposicao_liquida_da_rodada_real_ACOMPANHA_o_lado_da_posicao():
     assert V.exposicao_liquida(longo + curto)["motivo"] == ""
 
 
+# ============================ [N-8] PBO por CSCV e n_trials efetivo =====================
+#
+# O padrao de prova e o que o [N-5] usou e funcionou: um caso construido onde a resposta e
+# CONHECIDA vale mais que dez asercoes sobre dado real. Aqui sao tres respostas conhecidas --
+# 0,0 / ~0,5 / 1,0 -- e um instrumento que nao produzisse as tres nao estaria medindo nada.
+def _serie_diaria(pnls):
+    return [float(x) for x in pnls]
+
+
+def test_N8_pbo_zero_quando_a_selecao_TRANSFERE():
+    """Uma config domina em TODO periodo: e escolhida no treino sempre e e a melhor no teste
+    sempre. Escolher transfere perfeitamente -> PBO = 0,0 EXATO, e o rank medio da campea tem
+    de ser N (o topo), nao "alto"."""
+    rng = np.random.default_rng(2026)
+    m = {("boa", 0): _serie_diaria(rng.normal(3.0, 5.0, 960))}
+    for k in range(1, 6):
+        m[("ruim", k)] = _serie_diaria(rng.normal(-3.0, 5.0, 960))
+    r = V.pbo_cscv(m)
+    assert r["pbo"] == 0.0
+    assert r["rank_medio"] == float(r["n_cfgs"])
+    assert r["n_combinacoes"] == math.comb(16, 8)
+
+
+def test_N8_pbo_um_no_pior_caso_possivel_cada_config_so_brilha_no_SEU_bloco():
+    """O adversarial de verdade, e construi-lo ensina o que o CSCV e.
+
+    A tentacao e fazer "a config que ganha na 1a metade perde na 2a". Isso NAO da PBO alto, e
+    a razao e o ponto do metodo: o CSCV nao usa um corte cronologico -- ele usa TODAS as
+    C(S,S/2) maneiras de escolher metade dos blocos, entao quase toda "metade" mistura os dois
+    lados da linha do tempo e o efeito se cancela. (Medido: aquela construcao da PBO ~ 0,53,
+    indistinguivel de ruido.)
+
+    O caso que de fato satura: cada config tem um PICO num bloco proprio e deriva negativa em
+    todos os outros. Qualquer que seja a metade sorteada para treino, a campea e uma config
+    cujo pico esta NO treino -- e portanto ausente do teste, onde ela so tem a deriva
+    negativa e cai abaixo das que guardaram o pico. PBO = 1,0 para qualquer particao.
+    """
+    rng = np.random.default_rng(99)
+    S, N, T = 8, 8, 960
+    blocos = V._blocos_iguais(T, S)
+    m = {}
+    for k in range(N):
+        a = rng.normal(-1.0, 4.0, T)
+        ini, fim = blocos[k]
+        a[ini:fim] += 12.0
+        m[("pico", k)] = _serie_diaria(a)
+    r = V.pbo_cscv(m, S=S)
+    assert r["pbo"] == 1.0
+    assert r["rank_medio"] < (N + 1) / 2.0            # abaixo da mediana, sempre
+
+
+def test_N8_pbo_meio_quando_e_so_RUIDO_e_escolher_nao_vale_mais_que_sortear():
+    """Configs iid indistinguiveis: a campea do treino e campea por sorte, e no teste cai onde
+    qualquer uma cairia. E o caso que calibra o instrumento -- 0,0 e 1,0 sozinhos passariam
+    tambem num medidor que so olhasse o sinal da media."""
+    rng = np.random.default_rng(1234)
+    m = {("ruido", k): _serie_diaria(rng.normal(0, 10, 960)) for k in range(8)}
+    r = V.pbo_cscv(m)
+    assert 0.35 < r["pbo"] < 0.65
+    assert abs(r["rank_medio"] - (r["n_cfgs"] + 1) / 2.0) < 1.0
+
+
+def test_N8_o_logit_e_ESTRITO_e_por_isso_o_nulo_sob_ruido_e_publicado():
+    """O bug que a primeira versao deste medidor teve, virado em teste.
+
+    Contar `omega <= 0,5` em vez de `omega < 0,5` parece detalhe de borda e nao e: com N IMPAR
+    existe um rank exatamente mediano, e ele sozinho move o PBO sob ruido puro de `(N-1)/2N`
+    para `(N+1)/2N`. Com N=3 isso e 0,3333 contra 0,6667 -- e o teto de 0,5 passaria a REPROVAR
+    ruido puro, um instrumento acusando overfit onde nao ha selecao nenhuma para overfitar.
+    (Foi assim que o painel do golden mediu 0,7902 antes do conserto.)
+
+    Por isso o `pbo_nulo` sai no resultado: com N par ele vale 0,5 e coincide com o teto (o caso
+    do `GRID` de 6 configs desta casa); com N impar ele e menor, e quem le precisa saber contra
+    que numero ler.
+    """
+    for N, esperado in ((2, 1 / 2), (3, 1 / 3), (4, 0.5), (6, 0.5), (7, 3 / 7), (8, 0.5)):
+        rng = np.random.default_rng(500 + N)
+        m = {("r", k): _serie_diaria(rng.normal(0, 10, 480)) for k in range(N)}
+        assert V.pbo_cscv(m, S=8)["pbo_nulo"] == pytest.approx(esperado, abs=1e-4), N
+
+
+def test_N8_o_pbo_sob_ruido_CALIBRA_no_proprio_nulo_em_media_sobre_paineis():
+    """A calibracao do medidor -- e a razao de ela ser em MEDIA sobre paineis, nao num painel.
+
+    O CSCV nao reamostra: ele reparticiona UMA realizacao. Se, naquela realizacao, uma config
+    tem media amostral mais alta que as outras, ela tende a vencer em quase toda metade E em
+    quase toda metade complementar -- e o PBO daquele painel sai bem longe de 0,5 nos dois
+    sentidos. Isso nao e defeito: e o que "probabilidade de overfit DESTE backtest" significa.
+    O que tem de calibrar e a MEDIA sobre painas nulos independentes, exatamente como o
+    `test_reality_check_calibrado` faz com o alfa.
+
+    Medir num painel so e afirmar precisao que o metodo nao entrega -- e foi o erro que a
+    primeira versao deste teste cometeu (N=4, S=8, um painel: PBO = 0,0857 contra nulo 0,5).
+    """
+    for N in (4, 8):
+        pbos = []
+        for r in range(24):
+            rng = np.random.default_rng(9000 + 100 * N + r)
+            m = {("r", k): _serie_diaria(rng.normal(0, 10, 480)) for k in range(N)}
+            pbos.append(V.pbo_cscv(m, S=8)["pbo"])
+        media = float(np.mean(pbos))
+        assert abs(media - 0.5) < 0.12, (N, media, pbos)
+
+
+def test_N8_pbo_recusa_em_vez_de_inventar_quando_nao_ha_o_que_medir():
+    """Duas faltas diferentes, dois motivos diferentes -- e NUNCA um 0,0.
+
+    `pbo = 0.0` significa "nunca overfitou", que e a resposta mais confortavel que existe.
+    Emiti-la por ausencia de objeto (uma config so) ou por serie curta seria a regua mentindo
+    para o proprio lado, que e o modo de falha que este arquivo inteiro existe para impedir.
+    """
+    rng = np.random.default_rng(7)
+    so_uma = V.pbo_cscv({("x", 0): _serie_diaria(rng.normal(0, 1, 960))})
+    assert so_uma["pbo"] is None and "2 configs" in so_uma["motivo"]
+
+    curta = V.pbo_cscv({("a", 0): [1.0, 2.0] * 10, ("b", 1): [2.0, 1.0] * 10}, S=16)
+    assert curta["pbo"] is None and "curta" in curta["motivo"]
+
+    with pytest.raises(ValueError, match="par e >= 4"):
+        V.pbo_cscv({("a", 0): [1.0] * 100, ("b", 1): [2.0] * 100}, S=7)
+
+
+def test_N8_o_sharpe_de_uma_uniao_de_blocos_bate_com_o_sharpe_da_serie_concatenada():
+    """A otimizacao que torna C(16,8) barato -- somatorios por bloco em vez da serie -- so vale
+    se ela devolver o MESMO numero. Um atalho que erra na 5a casa transformaria o PBO num
+    numero plausivel e errado, que e pior que um numero ausente."""
+    rng = np.random.default_rng(11)
+    T, S = 480, 8
+    m = {("a", 0): _serie_diaria(rng.normal(0.3, 2.0, T)),
+         ("b", 1): _serie_diaria(rng.normal(-0.1, 3.0, T))}
+    blocos = V._blocos_iguais(T, S)
+    cfgs, n, soma, quad = V._agregados_por_bloco(m, blocos)
+    escolha = (0, 2, 3, 6)
+    rapido = V._sharpe_de_blocos(n, soma, quad, escolha)
+    for i, c in enumerate(cfgs):
+        direto = np.concatenate([np.asarray(m[c])[a:b] for a, b in
+                                 [blocos[j] for j in escolha]])
+        assert rapido[i] == pytest.approx(V._sr(direto), rel=1e-12)
+
+
+def test_N8_os_blocos_do_cscv_cobrem_a_serie_inteira_e_a_sobra_nao_empilha_no_ultimo():
+    """Bloco que valesse o dobro dos outros desbalancearia toda combinacao que o contivesse --
+    e o desbalanceio seria invisivel, porque o PBO sai como um numero so."""
+    for T, S in ((960, 16), (901, 16), (100, 4), (17, 4)):
+        b = V._blocos_iguais(T, S)
+        assert len(b) == S
+        assert b[0][0] == 0 and b[-1][1] == T
+        assert all(b[i][1] == b[i + 1][0] for i in range(S - 1))
+        tam = [f - i for i, f in b]
+        assert max(tam) - min(tam) <= 1
+
+
+def test_N8_n_trials_efetivo_reconhece_grid_ortogonal_e_grid_de_gemeas():
+    """Os dois extremos com resposta conhecida: 6 configs independentes valem ~6 tentativas;
+    6 copias da mesma coisa valem ~1. Entre os dois esta a pergunta que o [N-9] deixou aberta
+    -- quantas das varreduras contadas sao de fato independentes."""
+    rng = np.random.default_rng(31)
+    orto = {("o", k): _serie_diaria(rng.normal(0, 1, 900)) for k in range(6)}
+    e = V.n_trials_efetivo(orto)
+    assert 5.0 < e["participacao"] <= 6.0
+    assert e["pcs_95"] == 6
+
+    base = rng.normal(0, 1, 900)
+    gemeas = {("g", k): _serie_diaria(base + rng.normal(0, 0.02, 900)) for k in range(6)}
+    e = V.n_trials_efetivo(gemeas)
+    assert 1.0 <= e["participacao"] < 1.2
+    assert e["pcs_95"] == 1
+    assert e["corr_media"] > 0.99
+
+
+def test_N8_o_efetivo_usa_CORRELACAO_e_nao_covariancia():
+    """Config que opera mais tem P&L de variancia maior. Sob covariancia ela dominaria o
+    espectro sozinha e o numero mediria VOLUME DE OPERACAO em vez de redundancia -- e mediria
+    para o lado errado, porque um grid com uma config barulhenta pareceria mais independente.
+
+    Aqui as 4 series sao a MESMA coisa em escalas muito diferentes: redundancia total. Sob
+    correlacao o efetivo tem de dar ~1 apesar das escalas."""
+    rng = np.random.default_rng(41)
+    base = rng.normal(0, 1, 900)
+    m = {("esc", k): _serie_diaria(base * (10.0 ** k)) for k in range(4)}
+    e = V.n_trials_efetivo(m)
+    assert e["participacao"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_N8_o_efetivo_NAO_entra_no_veredito_e_o_relatorio_diz_por_que(capsys):
+    """A guarda que impede este numero de virar a ferramenta errada.
+
+    `n_trials` menor -> SR0 menor -> DSR MAIOR. Existe um caminho direto entre "meu grid e
+    redundante" e "meu Sharpe deflacionado ficou bonito", e ele e o tipo de conserto que o
+    NORTE.md proibe. Entao o DSR que DECIDE tem de continuar saindo do n_trials declarado, e o
+    relatorio tem de imprimir o outro ao lado -- deixando a tentacao visivel em vez de
+    disponivel.
+    """
+    res = _res_sintetico(mu=0.0, seed=5)
+    d = res["bloco_a"]["dsr_melhor_is"]
+    ef = res["bloco_a"]["n_trials_efetivo"]
+    de = res["bloco_a"]["dsr_se_n_trials_fosse_o_efetivo"]
+    # o DSR do veredito le o n_trials DECLARADO (arredondado como o relatorio o publica)
+    assert d["sr0"] == round(V._sr0_esperado(d["n"], res["n_trials"]), 4)
+    assert ef["participacao"] < ef["n_cfgs"] + 1e-9
+    assert de is not None and de["dsr"] != d["dsr"]                 # o outro existe, e diverge
+
+    V.relatorio(res)
+    saida = capsys.readouterr().out
+    assert "n_trials EFETIVO" in saida
+    assert "NAO entra no veredito" in saida
+    assert "n_trials menor levanta o DSR" in saida
+
+
+def test_N8_o_PBO_e_condicao_de_EDGE_e_so_APERTA_nunca_afrouxa(capsys):
+    """[CLAUDE.md] 2: apertar guarda pode; afrouxar, so o dono.
+
+    O PBO entra no `_veredito` como condicao a MAIS para EDGE -- ele so consegue transformar
+    EDGE em SEM_EVIDENCIA, nunca o contrario. Provado nos dois sentidos sobre um resultado
+    REAL, mexendo so no PBO: com PBO acima do teto o veredito cai e o motivo cita o CSCV; com
+    o PBO removido (nao calculavel) o veredito volta a ser o que era.
+
+    Poe-lo no portao em vez de so no relatorio nao e zelo: "medir e nao comparar" e
+    literalmente o defeito que o [Q-7] veio consertar neste arquivo.
+    """
+    res = _res_sintetico(mu=8.0, seed=6, n_dias=900)
+    assert res["veredito"]["classe"] == "EDGE"
+    assert res["bloco_a"]["pbo"]["pbo"] <= V.PBO_TETO
+
+    ruim = json.loads(json.dumps(V._canonico({k: v for k, v in res.items()
+                                              if k not in ("por_cfg", "oos", "matriz_is")})))
+    ruim["bloco_a"]["pbo"]["pbo"] = 0.9
+    v = V._veredito(ruim)
+    assert v["classe"] == "SEM_EVIDENCIA" and "PBO = 0.9" in v["motivo"]
+    assert "CSCV" in v["motivo"]
+
+    # PBO ausente NAO bloqueia: sem ordenacao entre configs nao ha overfit DE SELECAO a medir,
+    # e bloquear ali faria a guarda depender do tamanho do grid, nao do defeito.
+    ruim["bloco_a"]["pbo"] = {"pbo": None, "motivo": "so uma config"}
+    assert V._veredito(ruim)["classe"] == "EDGE"
+
+
 # ============================ [N-9] log append-only de tentativas ========================
 def _grid3():
     return [(50, 22), (55, 22), (65, 25)]

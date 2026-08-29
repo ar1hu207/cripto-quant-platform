@@ -7,6 +7,12 @@
     "sr": 0.0007,
     "sr0": 0.08
    },
+   "dsr_se_n_trials_fosse_o_efetivo": {
+    "dsr": 0.203,
+    "n": 1000,
+    "sr": 0.0007,
+    "sr0": 0.027
+   },
    "fdr": {
     "de": 3,
     "limiar": 0.0,
@@ -17,11 +23,29 @@
     ],
     "sobrevivem": 0
    },
+   "n_trials_efetivo": {
+    "corr_media": -0.0177,
+    "motivo": "",
+    "n_cfgs": 3,
+    "participacao": 2.998,
+    "pcs_95": 3
+   },
    "naive_cfg": [
     55,
     22
    ],
    "p_melhor_sozinha": 0.4883,
+   "pbo": {
+    "S": 16,
+    "logit_mediana": 0.0,
+    "logit_medio": -0.2005,
+    "motivo": "",
+    "n_cfgs": 3,
+    "n_combinacoes": 12870,
+    "pbo": 0.3923,
+    "pbo_nulo": 0.3333,
+    "rank_medio": 1.817
+   },
    "reality_check": {
     "V": 0.2252,
     "melhor_cfg": [

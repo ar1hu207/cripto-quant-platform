@@ -136,6 +136,13 @@ CONF_BANDA = 0.95
 # para si -- e isso e o que impede "medi com M pequeno e o portao disparou" nos dois sentidos.
 ALFA_TETO_PORTAO = 0.10
 
+# [N-8] O teto de PBO da condicao 2 do criterio de aceite V2 (PLANO-V2 Parte VIII). 0,5 e o
+# ponto em que a campea do treino cai, no teste, abaixo da mediana das demais METADE das vezes
+# -- ou seja, escolher deixou de valer mais que sortear. Acima disso, escolher e pior que
+# sortear.
+PBO_TETO = 0.5
+PBO_S = 16              # blocos do CSCV. Bailey usa 16; com ~900 dias, ~56 dias por bloco
+
 # [F3] O criterio e TRAVADO. `criterio` (3) x `modo` (2) x `atribuir` (2) x `block` (5) x
 # `purga` (2) sao 120 maneiras de rodar a regua, e um instrumento que existe para detectar
 # data-snooping nao pode multiplicar por 120 a superficie de snooping. Alguem -- talvez voce,
@@ -780,6 +787,249 @@ def exposicao_liquida(trades, grade=None):
         fora["liquida"] = round(sum(d * u for d, u in zip(direcoes, duracoes)) / total, 4)
     return fora
 
+# ============================ [N-8] PBO por CSCV, e n_trials EFETIVO =====================
+#
+# Duas perguntas diferentes que o projeto vinha respondendo com o mesmo numero chutado.
+#
+# **1. PBO -- "esta selecao de config sobrevive fora da amostra?"** (Bailey, Borwein, Lopez de
+# Prado & Zhu, 2014, *The Probability of Backtest Overfitting*.) O Reality Check pergunta se a
+# MELHOR config bate o zero depois de descontar a multiplicidade; o PBO pergunta outra coisa,
+# e e a que decide se vale escolher: **a config que eu escolheria no treino tende a ficar acima
+# ou abaixo da mediana das outras no teste?** Um grid pode ter uma config com edge real e mesmo
+# assim PBO alto -- e isso significa que o PROCESSO de escolher nao transfere, ainda que o
+# objeto exista. `PBO <= 0,5` e a condicao 2 do criterio de aceite da V2 (PLANO-V2 Parte VIII).
+#
+# CSCV, o algoritmo, em uma frase: parte a linha do tempo em `S` blocos, e para CADA uma das
+# C(S, S/2) maneiras de escolher metade dos blocos como treino, ve em que RANK a campea do
+# treino cai no teste. `PBO = P(rank abaixo da mediana)`. Ele nao e walk-forward -- e simetrico
+# no tempo de proposito, porque a pergunta "escolher transfere?" nao e sobre o futuro, e sim
+# sobre a estabilidade da ordenacao entre configs.
+#
+# **Por que CSCV e nao "rode o walk-forward e veja":** com um unico corte treino/teste, o rank
+# OOS da campea e UMA observacao, e uma observacao nao estima probabilidade nenhuma. C(16,8) =
+# 12.870 cortes estimam. E o custo e zero porque o Sharpe de uma uniao de blocos sai em O(1)
+# dos somatorios por bloco (soma, soma de quadrados, contagem) -- calcular a serie inteira em
+# cada combinacao seria 12.870x mais caro sem mudar um digito.
+#
+# **2. `n_trials` efetivo -- "quantas das tentativas contadas sao INDEPENDENTES?"** A objecao
+# que o [N-9] deixou aberta. O log append-only conta varreduras; ele nao sabe que
+# `min_conv=50` e `min_conv=55` produzem series correlacionadas a 0,99 e valem, juntas, quase
+# uma tentativa so. A resposta e o espectro da matriz de correlacao entre as configs: a razao
+# de participacao `(sum L)^2 / sum L^2` e o numero de dimensoes que o painel realmente tem.
+#
+# 🔴 **E aqui vai a guarda que impede este numero de virar a ferramenta errada.** `n_trials`
+# menor => `SR0` menor => **DSR MAIOR**. Ou seja: existe um caminho direto entre "meu grid e
+# redundante" e "meu Sharpe deflacionado ficou bonito", e ele e exatamente o tipo de conserto
+# que este projeto proibe (NORTE.md: nao se ajusta parametro ate o backtest ficar bonito).
+# Entao:
+#
+#   * o efetivo **nao entra no veredito**. O DSR do veredito continua saindo do `n_trials`
+#     declarado pelo chamador, que e o PISO CONTADO;
+#   * ele mede a redundancia **DESTE grid**, e o piso conta tentativas de arquivos que este
+#     processo nunca viu (`legado/tune.py`, `sweep.py`, os `validar_*`). Reduzir o piso pelo
+#     efetivo deste grid seria aplicar um desconto local a uma divida global;
+#   * ele sai no relatorio como DIAGNOSTICO, com o DSR que ele daria impresso ao lado --
+#     para que a tentacao fique visivel em vez de disponivel.
+#
+# O uso legitimo e o inverso: um efetivo MUITO menor que o numero de configs diz que o grid
+# esta desperdicando orcamento estatistico em configs gemeas, e que dava para varrer outra
+# coisa pelo mesmo preco.
+
+
+def _blocos_iguais(T, S):
+    """Os `S` blocos contiguos de indices, o mais iguais possivel. Sobra distribuida nos
+    primeiros -- e nao empilhada no ultimo, que faria um bloco valer o dobro dos outros e
+    desbalancearia toda combinacao que o contivesse."""
+    base, resto = divmod(T, S)
+    fora, i = [], 0
+    for k in range(S):
+        n = base + (1 if k < resto else 0)
+        fora.append((i, i + n))
+        i += n
+    return fora
+
+
+def _agregados_por_bloco(matriz, blocos):
+    """(n, soma, soma_quadrados) por config e por bloco -- as tres estatisticas suficientes
+    para o Sharpe de QUALQUER uniao de blocos. E o que torna C(16,8) barato."""
+    cfgs = list(matriz)
+    n = np.array([b - a for a, b in blocos], dtype=float)
+    soma = np.empty((len(cfgs), len(blocos)))
+    quad = np.empty((len(cfgs), len(blocos)))
+    for i, c in enumerate(cfgs):
+        a = np.asarray(matriz[c], dtype=float)
+        for j, (ini, fim) in enumerate(blocos):
+            peda = a[ini:fim]
+            soma[i, j] = peda.sum()
+            quad[i, j] = float((peda * peda).sum())
+    return cfgs, n, soma, quad
+
+
+def _sharpe_de_blocos(n, soma, quad, escolha):
+    """Sharpe por periodo de cada config sobre a uniao dos blocos em `escolha`, com ddof=1 --
+    a MESMA convencao de `_sr`, para que PBO e Sharpe do relatorio falem a mesma lingua.
+
+    Config com desvio zero na fatia devolve NaN, e NaN e ordenado por ultimo: variancia zero
+    aqui e "essa config nao operou neste pedaco", nao "essa config e perfeita"."""
+    nn = float(n[list(escolha)].sum())
+    if nn < 2:
+        return np.full(soma.shape[0], np.nan)
+    sx = soma[:, list(escolha)].sum(axis=1)
+    sx2 = quad[:, list(escolha)].sum(axis=1)
+    media = sx / nn
+    var = (sx2 - nn * media * media) / (nn - 1)
+    sd = np.sqrt(np.maximum(var, 0.0))
+    fora = np.full(soma.shape[0], np.nan)
+    ok = sd > 0
+    fora[ok] = media[ok] / sd[ok]
+    return fora
+
+
+def pbo_cscv(matriz, S=16, teto_combinacoes=20000):
+    """[N-8] Probability of Backtest Overfitting por Combinatorially Symmetric CV.
+
+    `matriz` e o `{cfg: serie_diaria}` do bloco A -- as mesmas series que o Reality Check usa,
+    de proposito: PBO e RC tem de falar do MESMO objeto, senao a comparacao entre os dois vira
+    comparacao entre dois dados.
+
+    Devolve `pbo`, a distribuicao dos logits, e os diagnosticos que dizem se o numero pode ser
+    lido: `n_cfgs`, `S`, `n_combinacoes`, e `motivo` quando nao da para calcular.
+
+      * `S` par e >= 4. Bailey usa 16; com T diario de ~900 dias cada bloco tem ~56 dias, o
+        que ainda deixa Sharpe estimavel na metade escolhida (~450 dias).
+      * `omega = rank / (N + 1)` com rank em 1..N (media nos empates), que e a definicao do
+        paper -- e ela e o que mantem o logit FINITO. `rank / N` daria omega = 1 para a
+        campea e `log(inf)`.
+      * `PBO = P(logit < 0)`, com o `<` ESTRITO do paper, e a escolha nao e cosmetica. Com
+        `<=` a campea que cai exatamente NA mediana conta como overfit, e ai o valor do PBO sob
+        ruido puro deixa de ser 0,5: com N impar existe um rank exatamente mediano, e ele sozinho
+        move o nulo de `(N-1)/2N` para `(N+1)/2N`. Medido no painel do golden (N=3): 0,3333
+        contra 0,6667 -- o teto de 0,5 reprovaria ruido puro so pelo `=`.
+      * `pbo_nulo` sai junto por causa disso: e o valor que o PBO teria sob ruido puro para
+        ESTE N, e e o numero contra o qual o PBO devia ser lido. Com N par ele e 0,5 e coincide
+        com o teto (e o caso do `GRID` de 6 configs desta casa); com N impar ele e menor, e o
+        teto fixo de 0,5 -- que e a condicao 2 do criterio V2 -- fica mais FROUXO que "escolher
+        nao vale mais que sortear". Fica dito e nao corrigido em silencio: mexer no teto e
+        mexer no criterio de aceite, e isso e decisao do dono, nao efeito colateral.
+      * **Com N = 1 config o PBO nao existe**, e devolve `None` com motivo: nao ha ordenacao a
+        estabilizar, e um `0.0` ali seria "nunca overfitou", a resposta mais confortavel que
+        existe emitida por falta de objeto.
+    """
+    cfgs_all = list(matriz)
+    N = len(cfgs_all)
+    T = min((len(matriz[c]) for c in cfgs_all), default=0)
+    vazio = {"pbo": None, "pbo_nulo": None, "n_cfgs": N, "S": S, "n_combinacoes": 0,
+             "logits": [], "rank_medio": None, "motivo": ""}
+    if N < 2:
+        vazio["motivo"] = ("PBO exige pelo menos 2 configs -- com uma so nao ha ordenacao "
+                           "entre configs para estabilizar, e 0.0 seria inventar 'nunca "
+                           "overfitou' por falta de objeto")
+        return vazio
+    if S % 2 or S < 4:
+        raise ValueError(f"S tem de ser par e >= 4 (o CSCV parte em metades), veio {S}")
+    if T < 2 * S:
+        vazio["motivo"] = (f"serie curta demais: T = {T} para S = {S} blocos -- cada metade "
+                           f"ficaria com menos de {S} periodos e o Sharpe da fatia nao seria "
+                           f"estimavel")
+        return vazio
+
+    import itertools
+    blocos = _blocos_iguais(T, S)
+    matriz_cortada = {c: list(matriz[c])[:T] for c in cfgs_all}
+    cfgs, n, soma, quad = _agregados_por_bloco(matriz_cortada, blocos)
+    todos = set(range(S))
+
+    logits, abaixo, ranks, combos = [], 0, [], 0
+    for treino in itertools.combinations(range(S), S // 2):
+        combos += 1
+        if combos > teto_combinacoes:
+            combos -= 1
+            break
+        sr_is = _sharpe_de_blocos(n, soma, quad, treino)
+        if np.all(np.isnan(sr_is)):
+            continue
+        campea = int(np.nanargmax(sr_is))
+        sr_oos = _sharpe_de_blocos(n, soma, quad, tuple(sorted(todos - set(treino))))
+        if np.isnan(sr_oos[campea]):
+            continue
+        # rank 1 = pior, N = melhor; NaN vai para o fim da fila (pior). Empates recebem a
+        # media dos rankings que ocupariam -- sem isso, um grid com configs identicas teria
+        # PBO decidido pela ordem em que as chaves entraram no dict.
+        v = np.where(np.isnan(sr_oos), -np.inf, sr_oos)
+        ordem = np.argsort(v, kind="stable")
+        rank = np.empty(len(v), dtype=float)
+        rank[ordem] = np.arange(1, len(v) + 1, dtype=float)
+        for val in np.unique(v):
+            iguais = np.flatnonzero(v == val)
+            if iguais.size > 1:
+                rank[iguais] = rank[iguais].mean()
+        w = float(rank[campea]) / (len(v) + 1.0)
+        ranks.append(float(rank[campea]))
+        logits.append(math.log(w / (1.0 - w)))
+        abaixo += 1 if w < 0.5 else 0            # `<` ESTRITO -- ver a docstring
+
+    if not logits:
+        vazio["n_combinacoes"] = combos
+        vazio["motivo"] = ("nenhuma combinacao produziu Sharpe estimavel nas duas metades -- "
+                           "series constantes ou vazias")
+        return vazio
+    # o PBO que ruido puro produziria com ESTE N: rank OOS uniforme em 1..N
+    nulo = float(np.mean((np.arange(1, N + 1) / (N + 1.0)) < 0.5))
+    return {"pbo": round(abaixo / len(logits), 4), "pbo_nulo": round(nulo, 4),
+            "n_cfgs": N, "S": S, "n_combinacoes": len(logits),
+            "logit_medio": round(float(np.mean(logits)), 4),
+            "logit_mediana": round(float(np.median(logits)), 4),
+            "rank_medio": round(float(np.mean(ranks)), 3),
+            "motivo": ""}
+
+
+def n_trials_efetivo(matriz):
+    """[N-8] Quantas das configs deste grid sao, de fato, tentativas INDEPENDENTES.
+
+    Espectro da matriz de CORRELACAO entre as series diarias das configs. Dois numeros, porque
+    eles respondem perguntas diferentes e discordar entre si e informacao:
+
+      * `participacao = (sum L)^2 / sum L^2` -- a razao de participacao dos autovalores. Vale
+        `N` quando as configs sao ortogonais e `1` quando sao a mesma coisa repetida `N` vezes.
+        E o numero que se le como "tentativas independentes";
+      * `pcs_95` -- quantas componentes principais bastam para 95% da variancia. E o mesmo
+        fenomeno lido pelo outro lado, e e mais grosseiro (inteiro) mas mais facil de checar.
+
+    Correlacao e nao covariancia: uma config que opera mais tem P&L com variancia maior, e sob
+    covariancia ela dominaria o espectro sozinha -- o numero mediria volume de operacao em vez
+    de redundancia.
+
+    ⚠️ Isto NAO e para substituir o `n_trials` do veredito. Ver a guarda no topo da secao:
+    `n_trials` menor levanta o DSR, e este numero so enxerga o grid da rodada.
+    """
+    cfgs = list(matriz)
+    N = len(cfgs)
+    if N < 2:
+        return {"n_cfgs": N, "participacao": None, "pcs_95": None,
+                "motivo": "menos de 2 configs -- nao ha redundancia a medir"}
+    T = min(len(matriz[c]) for c in cfgs)
+    A = np.array([np.asarray(matriz[c], dtype=float)[:T] for c in cfgs])
+    sd = A.std(axis=1, ddof=1)
+    if T < 3 or not np.all(sd > 0):
+        return {"n_cfgs": N, "participacao": None, "pcs_95": None,
+                "motivo": ("alguma config tem serie constante ou curta demais -- correlacao "
+                           "indefinida, e um 1.0 arbitrario no lugar dela mentiria para o "
+                           "lado de 'grid redundante'")}
+    C = np.corrcoef(A)
+    lam = np.linalg.eigvalsh(C)
+    lam = np.clip(lam, 0.0, None)
+    total = float(lam.sum())
+    if total <= 0:
+        return {"n_cfgs": N, "participacao": None, "pcs_95": None,
+                "motivo": "espectro degenerado"}
+    part = total ** 2 / float((lam * lam).sum())
+    ordenados = np.sort(lam)[::-1]
+    acum = np.cumsum(ordenados) / total
+    pcs = int(np.searchsorted(acum, 0.95) + 1)
+    return {"n_cfgs": N, "participacao": round(float(part), 3), "pcs_95": pcs,
+            "corr_media": round(float((C.sum() - N) / (N * (N - 1))), 4), "motivo": ""}
+
+
 def mds_sharpe(T, poder=0.80, alfa=0.05, ppa=PPA):
     """Sharpe ANUALIZADO minimo detectavel com `poder` a `alfa` unilateral, dado T periodos.
 
@@ -1132,9 +1382,21 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
     serie_naive = matriz[base["naive_cfg"]]
     ds = deflated_sharpe(serie_naive, n_trials)
     p_sozinha = p_valor_config(serie_naive, n_boot=n_boot, block=block, seed=seed)
+    # [N-8] PBO e n_trials efetivo saem da MESMA `matriz` do Reality Check, de proposito: os
+    # tres respondem perguntas diferentes sobre o mesmo objeto, e alimenta-los com dados
+    # diferentes tornaria a comparacao entre eles inutil.
+    pbo = pbo_cscv(matriz, S=PBO_S)
+    efetivo = n_trials_efetivo(matriz)
+    # o DSR que sairia se o `n_trials` fosse o efetivo deste grid -- publicado ao lado do que
+    # DECIDE, e nunca no lugar dele. Ver a guarda da secao [N-8]: n_trials menor levanta o DSR,
+    # e deixar essa alavanca disponivel seria construir a tentacao dentro da regua.
+    n_ef = efetivo.get("participacao")
+    ds_ef = (deflated_sharpe(serie_naive, max(int(round(n_ef)), 1)) if n_ef else None)
     bloco_a = {"reality_check": rc, "spa": spa, "dsr_melhor_is": ds,
                "fdr": {"sobrevivem": sum(sobrevive), "de": len(ps), "limiar": limiar,
                        "p_valores": ps},
+               "pbo": pbo, "n_trials_efetivo": efetivo,
+               "dsr_se_n_trials_fosse_o_efetivo": ds_ef,
                "p_melhor_sozinha": p_sozinha, "serie_naive": serie_naive,
                "naive_cfg": base["naive_cfg"]}
 
@@ -1250,10 +1512,33 @@ def _veredito(res):
                            f"{cal['rejeicoes']} de {cal['M']} paineis SEM sinal "
                            f"(taxa {cal['taxa']}, IC {cal['ic_taxa']}), e o piso desse IC "
                            f"passa de {ALFA_TETO_PORTAO} -- o dobro do alfa nominal")}
+    # [N-8] O PBO entra como condicao de EDGE, e a direcao e APERTAR ([CLAUDE.md] 2: apertar
+    # guarda pode; afrouxar, so o dono). Ele NUNCA transforma SEM_EVIDENCIA em EDGE -- so o
+    # contrario --, entao nenhum veredito ja emitido melhora por causa dele.
+    #
+    # Por que ele entra no portao em vez de so aparecer no relatorio: porque "medir e nao
+    # comparar" e literalmente o defeito que o [Q-7] veio consertar neste mesmo arquivo (o
+    # controle nulo imprimia a taxa ao lado da banda e ninguem comparava). Repetir o padrao com
+    # outro numero seria conhecer o erro e refaze-lo.
+    #
+    # PBO NAO CALCULAVEL nao bloqueia, e isso e deliberado. Com uma unica config nao ha
+    # ordenacao entre configs a estabilizar -- nao ha selecao, logo nao ha overfit DE SELECAO
+    # a medir. Bloquear ali faria a guarda depender do tamanho do grid e nao do defeito, que e
+    # exatamente o erro que o [Q-7] recusou ao escolher o gatilho de materialidade.
+    pbo = (a.get("pbo") or {}).get("pbo")
+    if pbo is not None and pbo > PBO_TETO:
+        return {"classe": "SEM_EVIDENCIA",
+                "motivo": (f"PBO = {pbo} > {PBO_TETO}: em {a['pbo']['n_combinacoes']} cortes "
+                           f"do CSCV a config campea do treino ficou abaixo da mediana no "
+                           f"teste na maioria das vezes -- escolher config neste grid nao "
+                           f"transfere, ainda que alguma delas tenha edge"),
+                "nao_exclui": b["ic_sharpe_anualizado"], "mds": b["mds"],
+                "mds_piso": b.get("mds_piso")}
     if b["ic_bloco"][0] > 0 and b["psr"]["psr"] > 0.95 and a["reality_check"]["p_valor"] <= 0.05:
         return {"classe": "EDGE",
                 "motivo": (f"IC-bloco {b['ic_bloco']} > 0, PSR {b['psr']['psr']} > 0,95, "
-                           f"Reality Check p = {a['reality_check']['p_valor']} <= 0,05")}
+                           f"Reality Check p = {a['reality_check']['p_valor']} <= 0,05, "
+                           f"PBO = {pbo} <= {PBO_TETO}")}
     return {"classe": "SEM_EVIDENCIA",
             "motivo": (f"IC-bloco {b['ic_bloco']} inclui 0 ou PSR {b['psr']['psr']} <= 0,95 "
                        f"ou RC p = {a['reality_check']['p_valor']} > 0,05"),
@@ -1935,6 +2220,43 @@ def relatorio(res):
     fdr = a["fdr"]
     print(f"   FDR (Benjamini-Hochberg, q=0,10): {fdr['sobrevivem']} de {fdr['de']} configs "
           f"sobrevivem -- FORA do veredito, nao-informativo em N={fdr['de']} [F16]")
+
+    # [N-8] PBO -- a condicao 2 do criterio de aceite V2. Pergunta diferente do RC: o RC
+    # pergunta se a melhor bateu a sorte; o PBO pergunta se ESCOLHER transfere.
+    pb = a.get("pbo") or {}
+    if pb.get("pbo") is None:
+        print(f"   PBO (CSCV): NAO CALCULAVEL")
+        print(f"     -> {pb.get('motivo', 'sem medida')}.")
+    else:
+        veredito_pbo = "OK" if pb["pbo"] <= PBO_TETO else "REPROVA"
+        print(f"   PBO por CSCV (S={pb['S']} blocos, {pb['n_combinacoes']} cortes): "
+              f"PBO = {pb['pbo']}   (teto {PBO_TETO} -> {veredito_pbo})")
+        print(f"     -> a campea do treino cai, no teste, no rank medio {pb['rank_medio']} de "
+              f"{pb['n_cfgs']}; logit medio {pb['logit_medio']}.")
+        print(f"     -> sob RUIDO PURO com N={pb['n_cfgs']} o PBO valeria {pb['pbo_nulo']}; "
+              f"e contra esse numero,")
+        print(f"        e nao contra o teto, que se le se escolher vale mais que sortear.")
+        print(f"     -> pergunta diferente do RC: nao e 'a melhor bateu a sorte?', e "
+              f"'ESCOLHER a melhor transfere?'.\n        Um grid pode ter config com edge e "
+              f"PBO alto -- e ai o objeto existe mas o PROCESSO nao.")
+
+    # [N-8] `n_trials` efetivo. DIAGNOSTICO, e o print diz por que ele nao entra no veredito.
+    ef = a.get("n_trials_efetivo") or {}
+    if ef.get("participacao") is None:
+        print(f"   n_trials EFETIVO (PCA): NAO CALCULAVEL -- {ef.get('motivo', 'sem medida')}")
+    else:
+        print(f"   n_trials EFETIVO deste grid (razao de participacao dos autovalores): "
+              f"{ef['participacao']} de {ef['n_cfgs']} configs")
+        print(f"     -> {ef['pcs_95']} componentes principais bastam para 95% da variancia; "
+              f"correlacao media entre configs = {ef['corr_media']}.")
+        de = a.get("dsr_se_n_trials_fosse_o_efetivo")
+        if de:
+            print(f"     -> se `n_trials` fosse {int(round(ef['participacao']))} em vez de "
+                  f"{res['n_trials']}, o DSR seria {de['dsr']} (contra {d['dsr']}).")
+        print(f"     -> e ele NAO entra no veredito, de proposito: n_trials menor levanta o "
+              f"DSR,\n        e este numero so ve ESTE grid enquanto o piso conta tentativas "
+              f"de arquivos que\n        esta rodada nunca abriu. Desconto local para divida "
+              f"global. [N-8]")
 
     print("\n   sensibilidade a n_trials (a dependencia e LOGARITMICA -- [F10]):")
     print(f"   {'n_trials':>9}  {'sr0':>8}  {'DSR':>7}")
