@@ -6,6 +6,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -74,6 +75,33 @@ CREATE TABLE IF NOT EXISTS trades(
 CREATE TABLE IF NOT EXISTS equity(ts TEXT, banca REAL, equity_total REAL);
 
 CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY, valor TEXT);
+
+-- [F-15][N-26] Auditoria de config. A pergunta que nasceu sem resposta na analise de
+-- 2026-08-28 foi literal: "quando o `auto_trade` foi religado?". A tabela `config` guarda o
+-- valor de AGORA e nada mais -- um UPSERT apaga o anterior sem deixar marca --, entao a
+-- resposta nao estava dificil de achar: ela nao existia.
+--
+-- 🔴 E CONTINUA NAO EXISTINDO PARA O PASSADO, e isso nao se conserta aqui. Esta tabela vale
+-- DAQUI PRA FRENTE. Nao ha de onde reconstruir o historico: nem o `plataforma.log` (10 MB x 5,
+-- ja rotacionado) nem o banco guardam o valor antigo. Preencher a tabela com uma linha
+-- inventada para a mudanca do `auto_trade` daria uma resposta -- e seria pior que a ausencia,
+-- porque um registro vazio que PARECE completo transforma "nao sei" em "sei errado". O
+-- `GET /config/auditoria` diz isso no proprio corpo da resposta, e nao so aqui.
+--
+-- `valor_antigo` NULL = a chave nao existia antes (primeira gravacao). NULL e ausencia, nao
+-- string vazia: `trava_dia_em` VALE "" quando a trava esta solta, e os dois casos precisam
+-- ser distinguiveis ([P2-10], [P2-36]).
+--
+-- So entra linha quando o valor MUDA de fato -- ver `_auditar_config`. Gravar tambem a
+-- regravacao identica encheria a tabela do ruido do worker e enterraria a mudanca real no
+-- meio dele, que e a unica coisa que esta tabela existe para achar.
+CREATE TABLE IF NOT EXISTS config_auditoria(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT,               -- naive, hora de Sao Paulo (CLAUDE.md §1)
+  chave TEXT,
+  valor_antigo TEXT,     -- NULL = a chave nao existia
+  valor_novo TEXT,
+  origem TEXT);          -- quem gravou: rota, ou `modulo.py:linha` de quem chamou
 
 CREATE TABLE IF NOT EXISTS banca(id INTEGER PRIMARY KEY, nome TEXT, inicial REAL, atual REAL);
 
@@ -359,6 +387,11 @@ INDICES = [
     # sobre uma tabela que so cresce -- e ela cresce mais rapido que `posicoes`, porque ordem
     # expirada tambem fica.
     "CREATE INDEX IF NOT EXISTS idx_ordens_status ON ordens(status)",
+    # [F-15] A consulta que a auditoria existe para servir e "o que aconteceu com ESTA chave",
+    # e ela e sempre a ultima mudanca primeiro. `(chave, id DESC)` serve as duas metades com um
+    # indice so: o filtro e a ordem. Sem ele, "quando o auto_trade mudou" e full scan sobre uma
+    # tabela append-only -- pequena hoje, e que so cresce.
+    "CREATE INDEX IF NOT EXISTS idx_cfg_aud_chave ON config_auditoria(chave, id DESC)",
 ]
 
 
@@ -380,10 +413,83 @@ def get_config():
         return {r["chave"]: r["valor"] for r in c.execute("SELECT * FROM config")}
 
 
-def set_config(chave, valor):
+def _origem_do_chamador(salto=2):
+    """`modulo.py:linha` de quem chamou o `set_config`, para quando ninguem passou `origem`.
+
+    Existe porque a alternativa era gravar "?" -- e uma auditoria cheia de origem anonima
+    responde "alguem mudou" para a pergunta "quem mudou", que e meia resposta se passando por
+    uma inteira. Com isto, um escritor que ESQUECEU de se identificar ainda aparece
+    identificavel, e um escritor NOVO nasce auditado sem que ninguem se lembre dele.
+
+    `sys._getframe` e nao `traceback`: o segundo formata a pilha inteira para devolver uma
+    linha. Aqui o custo nem apareceria (config muda aos punhados por dia), mas o barato tambem
+    e o mais simples de ler.
+    """
+    try:
+        f = sys._getframe(salto)
+        return f"{os.path.basename(f.f_code.co_filename)}:{f.f_lineno}"
+    except Exception:                       # pragma: no cover - _getframe e CPython
+        return "?"
+
+
+def _auditar_config(c, chave, valor_novo, origem):
+    """[F-15] Grava a linha de auditoria SE o valor mudou. Devolve True quando gravou.
+
+    Recebe a conexao ABERTA de proposito: a auditoria e o UPSERT tem de cair na MESMA
+    transacao. Em duas transacoes existe o instante em que o valor novo ja vale e a linha que
+    o explica ainda nao existe -- e e exatamente o instante de um crash que produziria a
+    mudanca sem registro, que e o defeito que este card fecha.
+
+    Le o valor antigo daqui de dentro pelo mesmo motivo: lido fora, ele pode ser de antes de
+    uma gravacao concorrente, e a auditoria registraria uma transicao que nao aconteceu.
+
+    So grava quando o valor MUDA. Nao e economia de espaco -- e legibilidade: `set_config`
+    tambem e chamado com o valor que ja esta la (o `POST /perfil` reaplica o perfil inteiro,
+    o painel reenvia o formulario todo), e uma tabela onde a maioria das linhas nao e mudanca
+    obriga quem procura a mudanca a filtra-las na mao. Regravacao identica nao e evento.
+
+    E "identica" pelo `_igual_cfg`, isto e NUMERICA quando os dois lados sao numero -- pela
+    mesma razao que o `perfil_ativo` ja precisava dele. O `_validar_config` normaliza float por
+    `str(float(x))`, entao aplicar o perfil `experimento` num banco recem-criado reescreve
+    `risco_aberto_max` de "0.10" para "0.1" e `alavancagem_padrao` de "10" para "10.0". Em
+    comparacao textual, cada aplicacao de perfil inventaria linhas de auditoria de RISCO que
+    nao mudaram risco nenhum -- ruido com cara de sinal, na tabela que existe para achar o
+    sinal. O que se audita e a mudanca de VALOR, nao a de representacao.
+    """
+    linha = c.execute("SELECT valor FROM config WHERE chave=?", (chave,)).fetchone()
+    antigo = linha["valor"] if linha else None
+    if antigo is not None and _igual_cfg(antigo, valor_novo):
+        return False
+    c.execute("INSERT INTO config_auditoria(ts,chave,valor_antigo,valor_novo,origem) "
+              "VALUES(?,?,?,?,?)",
+              (str(datetime.now()), chave, antigo, valor_novo, origem))    # naive, SP (§1)
+    return True
+
+
+def set_config(chave, valor, origem=None):
+    """Grava UMA chave de config, com auditoria [F-15].
+
+    `origem` e opcional para nao obrigar cada chamador a se declarar -- quem nao declara e
+    identificado pelo frame (`_origem_do_chamador`). Rota que sabe o proprio nome passa uma
+    string melhor ("POST /panico" diz mais que "api.py:914")."""
+    valor = str(valor)
+    origem = origem or _origem_do_chamador()
     with conectar() as c:
+        _auditar_config(c, chave, valor, origem)
         c.execute("INSERT INTO config(chave,valor) VALUES(?,?) "
-                  "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor", (chave, str(valor)))
+                  "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor", (chave, valor))
+
+
+def auditoria_config(limite=100, chave=None):
+    """[F-15] As mudancas de config, da mais recente para a mais antiga."""
+    q = "SELECT * FROM config_auditoria"
+    p = ()
+    if chave:
+        q += " WHERE chave=?"
+        p = (chave,)
+    q += " ORDER BY id DESC LIMIT ?"
+    with conectar() as c:
+        return [dict(r) for r in c.execute(q, p + (int(limite),))]
 
 
 def get_banca():
@@ -772,6 +878,7 @@ def _prova_p2_11(dias=365):
     # decisao de quem acrescenta indice; ela nunca precisa ser corrigida por quem so o declarou.
     declarados = sorted(re.findall(r"CREATE INDEX IF NOT EXISTS (\w+)", " ".join(INDICES)))
     ESPERADOS = [
+        "idx_cfg_aud_chave",    # [F-15] "quando esta chave mudou": filtro + ordem num indice so
         "idx_equity_dia",       # baseline do dia da trava diaria (indice de EXPRESSAO)
         "idx_equity_ts",        # janelas da poda e da curva de equity
         "idx_ordens_status",    # [EX-1] varredura de ordens pendentes a cada ciclo de 15s

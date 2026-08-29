@@ -708,6 +708,13 @@ def reset(req: ResetReq):
         for t in tabelas:                       # é pior que reset nenhum
             c.execute(f"DELETE FROM {t}")
         c.execute("UPDATE banca SET atual=inicial WHERE id=1")
+        # [F-15] O reset e o UNICO escritor de config que nao passa pelo `db.set_config`, e
+        # continua nao passando: a limpeza da trava tem de cair na MESMA transacao dos DELETEs
+        # (reset pela metade e pior que reset nenhum), e `set_config` abre a sua propria. Entao
+        # ele chama a auditoria a mao, com a conexao que ja tem. Sem esta linha, o unico caminho
+        # que solta a trava diaria seria tambem o unico invisivel na auditoria -- e a trava e
+        # justamente uma das guardas cujo afrouxamento o CLAUDE.md §2 manda registrar.
+        db._auditar_config(c, "trava_dia_em", "", "POST /reset")
         c.execute("INSERT INTO config(chave,valor) VALUES('trava_dia_em','') "
                   "ON CONFLICT(chave) DO UPDATE SET valor=''")
     # estado derivado em memória: sem isto o painel exibe, até o próximo ciclo (15s),
@@ -786,6 +793,37 @@ def get_config():
     return db.get_config()
 
 
+# [F-15][N-26] A ressalva viaja JUNTO com o dado, e não num README que ninguém abre quando
+# está com a pergunta na mão. O card nasceu de "quando o `auto_trade` foi religado?", e a
+# resposta continua sendo "não dá para saber": esta tabela vale daqui pra frente, e inventar
+# a linha que falta seria trocar um "não sei" por um "sei errado" — que é a única coisa pior.
+NOTA_AUDITORIA = (
+    "A auditoria de config começa em 2026-08-29 ([F-15]). Mudança anterior a essa data NÃO "
+    "existe aqui e não foi reconstruída — não há de onde: a tabela `config` guarda só o valor "
+    "vigente e o log já rotacionou. Em particular, QUANDO O `auto_trade` FOI RELIGADO continua "
+    "sem resposta, e é a pergunta que originou este registro. Lista vazia significa 'nada "
+    "mudou desde que isto passou a ser gravado', nunca 'nada mudou'.")
+
+
+@app.get("/config/auditoria")
+def config_auditoria(limite: int = Query(100, ge=1, le=500), chave: str = ""):
+    """[F-15][N-26] Quando cada chave de config mudou, de que valor para qual, e por qual porta.
+
+    Rota PROPRIA, e não um campo do `/estado`, por decisão de custo: o painel faz poll do
+    `/estado` a cada 3s contra uma franquia de saída de 15 GB/mês (CLAUDE.md §2), e histórico
+    é exatamente o tipo de dado que só se lê quando alguém pergunta. Pendurá-lo no poll faria
+    o sistema pagar continuamente por uma resposta pedida uma vez por mês.
+
+    A `nota` vai no corpo de propósito. Ela é a metade honesta da entrega: a tabela nasceu em
+    2026-08-29 e não há de onde reconstruir o que veio antes — inclusive a pergunta que
+    originou o card. Uma lista que sai vazia sem dizer isso deixa quem lê concluir que nada
+    mudou, e essa é a única leitura pior do que não ter auditoria nenhuma.
+    """
+    linhas = db.auditoria_config(limite, chave.strip() or None)
+    return {"nota": NOTA_AUDITORIA, "chave": chave.strip() or None,
+            "total": len(linhas), "linhas": linhas}
+
+
 @app.get("/catalogo")
 def catalogo():
     """[Q-3] O contrato da config, legível por quem opera: o que cada parâmetro aceita, o que
@@ -834,7 +872,7 @@ def set_perfil(req: PerfilReq):
     antes = db.perfil_ativo()
     aceitos = _validar_lote(db.PERFIS_RISCO[req.perfil])
     for k, v in aceitos.items():
-        db.set_config(k, v)
+        db.set_config(k, v, f"POST /perfil:{req.perfil}")
     cfg = db.get_config()
     log(f"perfil de risco: {antes} -> {req.perfil} ({aceitos})")
     return {"ok": True, "perfil_ativo": db.perfil_ativo(cfg), "perfil_anterior": antes,
@@ -967,7 +1005,7 @@ def panico(pular_pendentes: bool = False):
     padrão: é decisão de produto (a fila pendente é combustível para religar por engano,
     mas o auto-trader já só opera sinal com até `auto_freshness_min` minutos, então ela
     envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
-    db.set_config("auto_trade", "0")            # mata o bot ANTES de fechar
+    db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
     _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
     log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
@@ -1017,7 +1055,7 @@ def set_config(body: dict):
     longe daqui, dentro de guarda_risco()."""
     aceitos = _validar_lote(body)
     for k, v in aceitos.items():
-        db.set_config(k, v)
+        db.set_config(k, v, "POST /config")
     return db.get_config()
 
 
@@ -1033,7 +1071,7 @@ def set_auto(body: dict):
     de valores: a whitelist sozinha deixava passar auto_max_posicoes="banana"."""
     aceitos = _validar_lote(body, AUTO_PERMITIDAS)
     for k, v in aceitos.items():
-        db.set_config(k, v)
+        db.set_config(k, v, "POST /auto")
     cfg = db.get_config()
     return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},
             "estado": _auto["v"]}
