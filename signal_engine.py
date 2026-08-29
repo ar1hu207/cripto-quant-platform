@@ -8,6 +8,7 @@ Rodar:  python signal_engine.py               (loop)
         python signal_engine.py --desfechos   ([Q-4] marca desfecho hipotético agora)
         python signal_engine.py --relatorio   ([Q-4] portão de fluxo: passou x rejeitado)
         python signal_engine.py --cronometro  ([F-13] cronometra um ciclo do worker, COM rede)
+        python signal_engine.py --cronometro --repetir 2   (o 2o ciclo ja e o REGIME: [F-10])
 """
 import sys
 import time
@@ -26,10 +27,60 @@ from scoring import preparar, pontuar, pontuar_reversao
 ex = ccxt.binance({"enableRateLimit": True})
 
 
+# ---------------------------------------------------- [F-10] cache de velas ate o fechamento
+
+_velas_cache = {}       # (ativo, tf) -> {"raw": [...], "ate_ms": instante em que a vela fecha}
+_VELAS_MAX = 200        # teto de entradas; a grade viva usa 72 (24 ativos x 3 TFs)
+
+
+def _velas(ativo, tf, limite):
+    """Candles de `ativo`/`tf`, servidos do cache enquanto a vela em formacao nao fechar.
+
+    ISTO NAO E UMA APROXIMACAO -- e uma igualdade, e o argumento e o que autoriza o cache a
+    existir sem config para desliga-lo:
+
+      * `analisa()` le o indice `i = len-2` (a ultima vela FECHADA) e, do `i+1`, **so o
+        timestamp de abertura**. `avaliar_saida()` le `i` e `i-1`, tambem fechadas.
+      * Todo indicador de `indicadores.py` e causal (EMA, ATR, ADX, RSI, Donchian, Bollinger
+        sao janelas para tras), entao o valor em `i` nao depende de `i+1`.
+      * Vela fechada e imutavel, e o timestamp de ABERTURA da vela em formacao e constante
+        durante todo o periodo dela.
+
+    Logo, dentro de um mesmo periodo de vela, refazer a requisicao devolve dados que produzem
+    **exatamente o mesmo sinal**. O que a rede trazia de novo a cada 15 s era o OHLC da vela em
+    formacao -- e nenhum dos dois consumidores olha para ele, de proposito (e o repaint).
+
+    Quem PRECISA da vela em formacao e o `analise()` (a tela de analise le `df.iloc[-1]`), e por
+    isso ele continua chamando `ex.fetch_ohlcv` direto. Nao e esquecimento: cachear ali
+    congelaria o preco do painel.
+
+    Serve fatia (`raw[-limite:]`) e nunca janela maior que a pedida: `avaliar_saida` calcula os
+    indicadores sobre 120 velas, e entregar 200 mudaria o warmup e portanto o numero -- seria
+    trocar "mesma resposta mais barata" por "resposta diferente", que e outro card.
+
+    Falha de rede nao vira dado velho: a excecao sobe, exatamente como antes.
+    """
+    agora_ms = time.time() * 1000
+    ent = _velas_cache.get((ativo, tf))
+    if ent and agora_ms < ent["ate_ms"] and len(ent["raw"]) >= limite:
+        return ent["raw"][-limite:]
+    # pede pelo menos a maior janela ja pedida deste par: o scan quer 200 e o gestor de saida
+    # 120, e guardar a menor faria o scan refazer a requisicao que o cache existe para poupar.
+    pedir = max(limite, len(ent["raw"]) if ent else 0)
+    raw = ex.fetch_ohlcv(ativo, timeframe=tf, limit=pedir)
+    if raw:
+        if len(_velas_cache) >= _VELAS_MAX:      # a grade e limitada (api.py capa em 60 pares),
+            for k in [k for k, v in _velas_cache.items() if agora_ms >= v["ate_ms"]]:
+                del _velas_cache[k]              # mas mudar `ativos` no painel troca as chaves
+        _velas_cache[(ativo, tf)] = {
+            "raw": raw, "ate_ms": raw[-1][0] + TF_MIN.get((tf or "").strip(), 15) * 60_000}
+    return raw[-limite:] if len(raw) > limite else raw
+
+
 def analisa(ativo, tf):
     """Avalia AMBAS as estratégias (tendência + reversão) pra um ativo/timeframe.
     Retorna LISTA de sinais candidatos (cada um com tipo e tf)."""
-    raw = ex.fetch_ohlcv(ativo, timeframe=tf, limit=200)
+    raw = _velas(ativo, tf, 200)
     df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
     i = len(df) - 2               # candle FECHADO (o último, -1, ainda está em formação = repaint)
     if i < 60:
@@ -119,7 +170,7 @@ def avaliar_saida(pos, cfg=None):
     roe = (pos.get("pnl") or 0) / valor * 100
     alvo = float(cfg.get("alvo_roe", 5))
     try:
-        raw = ex.fetch_ohlcv(ativo, timeframe=cfg.get("timeframe", "15m"), limit=120)
+        raw = _velas(ativo, cfg.get("timeframe", "15m"), 120)
         df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
     except Exception:
         return None
@@ -170,7 +221,12 @@ def avaliar_saida(pos, cfg=None):
 
 def analise(ativo, tf="15m", limite=200):
     """Candles + séries dos indicadores (EMA20/50, Bollinger) + snapshot (RSI/ADX/etc)
-    + leitura em texto do cenário. Pro modo 'analisar sinal' da UI."""
+    + leitura em texto do cenário. Pro modo 'analisar sinal' da UI.
+
+    [F-10] Unico consumidor de candle que NAO passa pelo `_velas`, e e deliberado: o snapshot
+    le `df.iloc[-1]`, a vela em FORMACAO. E a tela onde o dono olha o preco de agora -- servir
+    do cache congelaria o painel ate a vela fechar. Nao esta no ciclo do worker: roda por
+    clique, nao a cada 15 s."""
     raw = ex.fetch_ohlcv(ativo, timeframe=tf, limit=limite)
     df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
 
@@ -629,6 +685,12 @@ if __name__ == "__main__":
         print(f"{marcar_desfechos(limite=200)} desfechos marcados")
     elif "--cronometro" in sys.argv:
         n = int(sys.argv[sys.argv.index("--pos") + 1]) if "--pos" in sys.argv else 5
-        cronometrar(n_pos=n, com_scan="--sem-scan" not in sys.argv)
+        # `--repetir 2` e o que mede o [F-10]: o primeiro ciclo enche o cache de velas, o
+        # segundo e o REGIME -- e regime e o que o worker faz 5.760 vezes por dia.
+        vezes = int(sys.argv[sys.argv.index("--repetir") + 1]) if "--repetir" in sys.argv else 1
+        for _volta in range(vezes):
+            if _volta:
+                print()
+            cronometrar(n_pos=n, com_scan="--sem-scan" not in sys.argv)
     else:
         run(once="--once" in sys.argv)

@@ -14,6 +14,8 @@ Fica de fora, declarado: **P1-2** e uma linha em `web/index.html` (o
 `localStorage.removeItem('cbAuth')`). E front, nao e Python, e `web/` nao e territorio do
 T-TESTE -- a verificacao dele e por hash do HTML em producao (CLAUDE.md §7).
 """
+import time
+
 import pandas as pd
 import pytest
 
@@ -185,11 +187,17 @@ class _ExContado:
         self._conta("fetch_ohlcv")
         # serie sintetica com deriva e ruido deterministico: o suficiente para EMA/RSI/ADX
         # sairem do warmup. O que este teste mede e a CONTAGEM, nao o veredito do indicador.
+        #
+        # Ancorada em AGORA, e nao numa data fixa, porque o cache do [F-10] vale ate a vela em
+        # formacao FECHAR: com velas de 2023 toda entrada ja nasceria vencida e o teste passaria
+        # sem exercitar o cache -- verde por nao medir nada.
+        passo = signal_engine.TF_MIN.get((timeframe or "15m").strip(), 15) * 60_000
+        abertura = int(time.time() * 1000) // passo * passo      # a vela em formacao abriu aqui
         n = limit or 200
         velas = []
         for k in range(n):
             base = 100.0 + k * 0.1 + (k % 7) * 0.05
-            velas.append([1_700_000_000_000 + k * 900_000, base, base * 1.003,
+            velas.append([abertura - (n - 1 - k) * passo, base, base * 1.003,
                           base * 0.997, base * 1.001, 1000.0 + (k % 5) * 10])
         return velas
 
@@ -213,6 +221,7 @@ def corretora_contada(banco, monkeypatch):
                          (mercado, "ex_spot"), (mercado, "ex_fut")]:
         monkeypatch.setattr(modulo, nome, fake)
     mercado._tcache.clear()                       # cache de 5s nao pode vazar de outro teste
+    signal_engine._velas_cache.clear()            # idem o cache de velas do [F-10]
     return fake
 
 
@@ -241,6 +250,107 @@ def test_f13_o_custo_de_rede_do_ciclo_cresce_por_posicao(corretora_contada, n_po
     for pos in abertas:
         signal_engine.avaliar_saida(pos)
     assert corretora_contada.total == n_pos * CUSTO_POR_POSICAO
+
+
+def _um_ciclo():
+    """As tres etapas de rede de `api.worker()`, na ordem em que ele as chama."""
+    simulador.processar_ordens()
+    simulador.atualizar()
+    for pos in db.listar("posicoes", 50, "WHERE status='aberta'"):
+        signal_engine.avaliar_saida(pos)
+
+
+@pytest.mark.parametrize("n_pos", [1, 3, 5])
+def test_f10_o_ciclo_SEGUINTE_nao_rebaixa_o_candle_que_nao_mudou(corretora_contada, n_pos):
+    """[F-10] O numero que interessa nao e o do primeiro ciclo -- e o do regime, porque o
+    worker roda 5.760 ciclos por dia e so um deles e o primeiro.
+
+    Primeiro ciclo: 4 requisicoes por posicao (o cache esta frio). Do segundo em diante, 3 --
+    o candle sai do cache ate a vela fechar, que num TF de 15 min significa **59 dos 60
+    ciclos**. E o mesmo sinal, nao um parecido: ver o argumento de igualdade em `_velas`.
+    """
+    for i in range(n_pos):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=50.0, alavancagem=2)
+    _um_ciclo()
+    assert corretora_contada.total == n_pos * CUSTO_POR_POSICAO
+    corretora_contada.n.clear()
+    _um_ciclo()
+    assert corretora_contada.n.get("fetch_ohlcv") is None      # nenhum candio rebaixado
+    assert corretora_contada.total == n_pos * (CUSTO_POR_POSICAO - 1)
+
+
+def test_f10_o_segundo_scan_dentro_da_mesma_vela_nao_gasta_requisicao(corretora_contada):
+    """[F-10] O scan roda a cada 60 s sobre TFs de 5m, 15m e 1h: 3 de 4 varreduras de 5m,
+    14 de 15 de 15m e 59 de 60 de 1h rebaixavam exatamente as mesmas velas fechadas."""
+    db.set_config("ativos", "AAA/USDT,BBB/USDT")
+    db.set_config("timeframes", "5m,15m,1h")
+    signal_engine.scan()
+    assert corretora_contada.n["fetch_ohlcv"] == 2 * 3
+    corretora_contada.n.clear()
+    signal_engine.scan()
+    assert corretora_contada.n.get("fetch_ohlcv") is None
+
+
+def test_f10_o_cache_vence_quando_a_vela_fecha(corretora_contada):
+    """A validade e o fechamento da vela, nao um TTL em segundos. Vencido, refaz -- que e o
+    que impede o bot de operar sobre uma vela de meia hora atras."""
+    db.set_config("ativos", "AAA/USDT")
+    db.set_config("timeframes", "15m")
+    signal_engine.scan()
+    assert corretora_contada.n["fetch_ohlcv"] == 1
+    for ent in signal_engine._velas_cache.values():
+        ent["ate_ms"] = 0                                       # a vela fechou
+    corretora_contada.n.clear()
+    signal_engine.scan()
+    assert corretora_contada.n["fetch_ohlcv"] == 1
+
+
+def test_f10_o_sinal_servido_do_cache_e_IDENTICO_ao_da_rede(corretora_contada):
+    """A asseracao que autoriza o cache a existir sem chave para desliga-lo. Nao e "parecido"
+    nem "dentro da tolerancia": e o mesmo dicionario, porque as duas leituras que `analisa`
+    faz (vela fechada, e o timestamp de abertura da vela em formacao) sao constantes dentro
+    do periodo."""
+    da_rede = signal_engine.analisa("AAA/USDT", "15m")
+    assert corretora_contada.n["fetch_ohlcv"] == 1
+    do_cache = signal_engine.analisa("AAA/USDT", "15m")
+    assert corretora_contada.n["fetch_ohlcv"] == 1              # nao foi a rede
+    assert do_cache == da_rede
+
+
+def test_f10_o_cache_serve_a_janela_pedida_e_nunca_uma_maior(corretora_contada):
+    """`avaliar_saida` calcula os indicadores sobre 120 velas. Servir as 200 do scan mudaria
+    o warmup e portanto o numero -- seria trocar "mesma resposta mais barata" por "resposta
+    diferente", que nao e o que este card autoriza."""
+    assert len(signal_engine._velas("AAA/USDT", "15m", 200)) == 200
+    assert len(signal_engine._velas("AAA/USDT", "15m", 120)) == 120
+    assert corretora_contada.n["fetch_ohlcv"] == 1              # a fatia saiu da mesma busca
+
+
+def test_f10_a_janela_maior_pedida_depois_da_menor_nao_e_servida_truncada(corretora_contada):
+    """A ordem inversa: o gestor de saida (120) chega antes do scan (200). O cache nao pode
+    devolver 120 para quem pediu 200 -- refaz, e passa a guardar a janela maior."""
+    assert len(signal_engine._velas("AAA/USDT", "15m", 120)) == 120
+    assert len(signal_engine._velas("AAA/USDT", "15m", 200)) == 200
+    assert corretora_contada.n["fetch_ohlcv"] == 2
+    assert len(signal_engine._velas("AAA/USDT", "15m", 200)) == 200
+    assert corretora_contada.n["fetch_ohlcv"] == 2              # a segunda ja cobre as duas
+
+
+def test_f10_falha_de_rede_nao_e_servida_do_cache_vencido(corretora_contada, monkeypatch):
+    """Cache que sobrevive a propria validade para "nao quebrar" e o defeito que o [P2-9] e o
+    `ultima_marcacao` existem para evitar: dado velho servido como se fosse de agora. Vencida
+    a vela, a excecao sobe igual a antes."""
+    signal_engine._velas("AAA/USDT", "15m", 200)
+    for ent in signal_engine._velas_cache.values():
+        ent["ate_ms"] = 0
+
+    def caiu(*a, **k):
+        raise RuntimeError("HTTP 451")
+
+    monkeypatch.setattr(signal_engine.ex, "fetch_ohlcv", caiu)
+    with pytest.raises(RuntimeError):
+        signal_engine._velas("AAA/USDT", "15m", 200)
 
 
 def test_f13_o_scan_gasta_uma_requisicao_por_par_ativo_x_timeframe(corretora_contada):
