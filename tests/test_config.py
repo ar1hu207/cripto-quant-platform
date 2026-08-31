@@ -11,7 +11,7 @@ sem dizer em voz alta e numero que ninguem audita.
 import pytest
 
 import db
-from conftest import semear_sinal
+from conftest import semear_posicao, semear_sinal
 
 
 @pytest.fixture
@@ -260,3 +260,284 @@ def test_com_stop_curto_o_conservador_esbarra_na_margem_antes_dos_slots(cliente,
     cliente.post("/perfil", json={"perfil": "conservador"})
     abertas, erro = abre_ate_recusar(6, 100.0, 98.0, db.get_config())
     assert abertas == 2 and "teto de margem" in erro
+
+
+# ============================== [P-3] as tres chaves de trailing em R, no catalogo do [P1-8]
+#
+# ANTES deste card o `POST /config` respondia 422 "chave desconhecida" as tres, e o
+# `GET /catalogo` nao as listava. O efeito nao era cosmetico: a onda A pos o trailing para
+# medir em R (`[N-13]`), entao a chave que DECIDE a politica de saida do vivo so valeria pelo
+# default em producao, e reverter exigiria um DEPLOY em vez de um clique -- que e o motivo
+# concreto da decisao D-7 ter segurado a VM ate aqui.
+
+TRAILING_R = ("trailing_unidade", "trailing_arma_r", "trailing_dist_r")
+
+
+def test_p3_o_post_config_aceita_as_tres_chaves_de_trailing_em_r(cliente):
+    """O antes/depois deste card, na porta por onde o painel fala.
+
+    As tres juntas num lote so, de proposito: `_validar_lote` e tudo-ou-nada, entao uma chave
+    ainda sem verbete derrubaria as outras duas com ela."""
+    r = cliente.post("/config", json={"trailing_unidade": "preco",
+                                      "trailing_arma_r": 2, "trailing_dist_r": 1.5})
+    assert r.status_code == 200, r.json()
+    cfg = cliente.get("/config").json()
+    assert cfg["trailing_unidade"] == "preco"
+    assert float(cfg["trailing_arma_r"]) == 2.0 and float(cfg["trailing_dist_r"]) == 1.5
+
+
+def test_p3_o_catalogo_publica_as_tres_com_racional(cliente):
+    """Sem verbete no `CONFIG_RACIONAL` o painel mostraria a chave e nao o PORQUE dela --
+    e a unidade R e justamente o que ninguem deduz do nome."""
+    p = cliente.get("/catalogo").json()["parametros"]
+    for chave in TRAILING_R:
+        assert chave in p, chave
+        assert p[chave]["racional"], chave
+    assert p["trailing_unidade"]["opcoes"] == ["R", "preco"]
+    assert (p["trailing_arma_r"]["min"], p["trailing_arma_r"]["max"]) == (0.1, 10.0)
+    assert (p["trailing_dist_r"]["min"], p["trailing_dist_r"]["max"]) == (0.1, 10.0)
+    # o racional tem de explicar a UNIDADE, que e a metade que o nome da chave nao conta
+    assert "R" in p["trailing_unidade"]["racional"]
+    assert "stop_abertura" in p["trailing_unidade"]["racional"]
+
+
+@pytest.mark.parametrize("chave,valor", [
+    ("trailing_unidade", "atr"),      # unidade que nao existe -- o [N-13] explica por que nao
+    ("trailing_unidade", ""),
+    ("trailing_arma_r", 0),           # 0 armaria o trailing na abertura: stop colado na entrada
+    ("trailing_arma_r", 10.1),
+    ("trailing_arma_r", "banana"),
+    ("trailing_dist_r", 0),           # 0 poria o stop EM CIMA do preco
+    ("trailing_dist_r", -1),
+    ("trailing_dist_r", 10.1),
+])
+def test_p3_valor_fora_de_faixa_e_recusado_sem_gravar_nada(cliente, chave, valor):
+    """A metade que importa mais que o "aceita": faixa aberta demais e o mesmo que faixa
+    nenhuma. E `_validar_lote` e tudo-ou-nada -- o valor bom que veio junto tambem nao grava."""
+    antes = cliente.get("/config").json()
+    r = cliente.post("/config", json={chave: valor, "trailing_ativo": 0})
+    assert r.status_code == 422, r.json()
+    assert cliente.get("/config").json() == antes      # nada gravado, nem o `trailing_ativo`
+
+
+def test_p3_o_default_vivo_do_trailing_em_r_passa_no_proprio_catalogo(banco):
+    """Config que o `init_db` grava e o `POST /config` recusaria seria config entrada pela
+    porta dos fundos -- o mesmo teste que os perfis ja fazem, aplicado ao default."""
+    import api
+    for chave in TRAILING_R:
+        assert api._validar_config(chave, db.CONFIG_PADRAO[chave]), chave
+    assert db.get_config()["trailing_unidade"] == "R"      # D-5: 1R arma, 1R de distancia
+    assert float(db.get_config()["trailing_arma_r"]) == 1.0
+    assert float(db.get_config()["trailing_dist_r"]) == 1.0
+
+
+# ================================== [P-3b] o modo de alavancagem entra no perfil `experimento`
+#
+# A metade travada do `[N-10]`: o modo nascia "fixo" no `CONFIG_PADRAO` e NAO no perfil, porque
+# declara-lo no perfil exigia verbete em `api.CONFIG_RACIONAL` -- e `api.py` nao era territorio
+# do T-RISCO. O buraco ficou medido em `tests/test_sizing.py`, e a promocao daquele teste e o
+# gatilho que este card cumpriu.
+
+def test_p3b_o_experimento_declara_o_modo_de_alavancagem(banco):
+    """O perfil e o retrato do que esta vivo. Um retrato que nao mostra o dial que multiplica
+    a alavancagem por 5,5x nao e retrato do mesmo sistema."""
+    assert db.PERFIS_RISCO["experimento"]["auto_lev_modo"] == "fixo"
+    assert db.CONFIG_PADRAO["auto_lev_modo"] == "fixo"     # e as duas pontas seguem iguais
+
+
+def test_p3b_com_o_modo_no_perfil_o_rotulo_para_de_mentir(cliente):
+    """O que a declaracao COMPRA, medido na porta do painel: antes disto, ligar a escala por
+    conviccao (2x-20x sobre um score que o [Q-13] mediu nao prever acerto) deixava o `/estado`
+    dizendo 'experimento'. Rotulo de risco que mente e pior que rotulo nenhum ([Q-3])."""
+    assert cliente.get("/estado").json()["perfil_risco"] == "experimento"
+    cliente.post("/auto", json={"auto_lev_modo": "conviccao"})
+    assert cliente.get("/estado").json()["perfil_risco"] == "personalizado"
+    cliente.post("/perfil", json={"perfil": "experimento"})       # e o perfil restaura o modo
+    cfg = cliente.get("/config").json()
+    assert cfg["auto_lev_modo"] == "fixo"
+    assert cliente.get("/estado").json()["perfil_risco"] == "experimento"
+
+
+def test_p3b_o_conservador_NAO_declara_o_modo_e_a_assimetria_e_deliberada(cliente, sem_rede):
+    """A metade que este card recusou fazer, medida em vez de virar nota de rodape.
+
+    Sob `conservador` declarar "fixo" seria AFROUXAR: `auto_lev_min`=1, entao o modo
+    "conviccao" entrega 1x na conviccao minima enquanto "fixo" entrega `alavancagem_padrao`=2x
+    SEMPRE. Subir o piso de 1x para 2x no perfil alinhado a base -- cuja §6.1 diz que o unico
+    regime que sobreviveu foi "trend-following SEM alavancagem" -- e decisao do dono, nao de
+    agente (CLAUDE.md §2).
+
+    O preco fica dito: la o rotulo continua sem enxergar o modo. E buraco LIMITADO, e o teto
+    de 2x e quem o limita -- os dois modos vivem inteiros dentro dele."""
+    import autotrader
+    assert "auto_lev_modo" not in db.PERFIS_RISCO["conservador"]
+    cliente.post("/perfil", json={"perfil": "conservador"})
+    cliente.post("/auto", json={"auto_lev_modo": "conviccao"})
+    assert cliente.get("/estado").json()["perfil_risco"] == "conservador"   # nao acusa
+    cfg = db.get_config()                                                   # e o teto e o motivo
+    assert autotrader._alavancagem(cfg, 60) == 1.0 and autotrader._alavancagem(cfg, 100) == 2.0
+
+
+# ============================================ [F-15][N-26] auditoria de config: TODO caminho
+#
+# A pergunta que nasceu sem resposta na analise de 2026-08-28 foi "quando o `auto_trade` foi
+# religado?", e ela nao tinha resposta porque a tabela `config` guarda o valor de AGORA: o
+# UPSERT apaga o anterior sem deixar marca.
+#
+# 🔴 O que estes testes NAO provam, e nao poderiam: que o passado esta la. Nao esta, nao ha de
+# onde tira-lo, e a `NOTA_AUDITORIA` diz isso na propria resposta da rota. O que se prova aqui
+# e a outra metade -- que daqui pra frente NENHUM caminho de escrita escapa. Uma auditoria com
+# um escritor de fora mente por omissao justamente sobre o escritor que se esqueceu, e o
+# `/panico` (que grava `auto_trade=0`) seria o pior candidato a ser esquecido.
+
+def ultima_auditoria(chave):
+    linhas = db.auditoria_config(50, chave)
+    return linhas[0] if linhas else None
+
+
+def test_f15_num_banco_novo_a_auditoria_nasce_VAZIA(banco):
+    """O `init_db` semeia o `CONFIG_PADRAO` com `INSERT OR IGNORE`, e isso NAO e mudanca de
+    config: e o default chegando. Registra-lo encheria a auditoria de dezenas de linhas que
+    nao sao eventos e enterraria a primeira mudanca real no meio delas -- e daria a impressao
+    de que a tabela sabe de onde o sistema veio, quando ela so sabe para onde ele foi."""
+    assert db.auditoria_config() == []
+
+
+def test_f15_post_config_aparece_na_auditoria_com_os_dois_valores(cliente):
+    cliente.post("/config", json={"min_conviccao": 70})
+    a = ultima_auditoria("min_conviccao")
+    assert a["valor_antigo"] == "55" and a["valor_novo"] == "70.0"
+    assert a["origem"] == "POST /config" and a["ts"]
+
+
+def test_f15_post_auto_aparece_e_e_o_caminho_do_auto_trade(cliente):
+    """A chave da pergunta original. O `/auto` e a porta pela qual o painel religa o bot."""
+    cliente.post("/auto", json={"auto_trade": 1})
+    a = ultima_auditoria("auto_trade")
+    assert (a["valor_antigo"], a["valor_novo"], a["origem"]) == ("0", "1", "POST /auto")
+
+
+def test_f15_o_panico_aparece_E_A_ORDEM_DO_P1_7_NAO_MUDA(cliente, sem_rede):
+    """Duas coisas num teste so porque sao a mesma: auditar nao pode custar a ordem.
+
+    O [P1-7] manda o `/panico` gravar `auto_trade=0` ANTES de fechar posicao -- se fechar
+    falhar no meio, o bot ja esta morto e nao reabre. A auditoria entra DENTRO do mesmo
+    `set_config`, na mesma transacao, entao ela nao acrescenta um passo antes de a fonte
+    morrer. A posicao aberta aqui prova que o desligamento ficou registrado mesmo havendo
+    trabalho depois dele."""
+    cliente.post("/auto", json={"auto_trade": 1})
+    semear_posicao()
+    r = cliente.post("/panico").json()
+    assert r["auto_desligado"] and r["fechadas"] == 1
+    a = ultima_auditoria("auto_trade")
+    assert (a["valor_antigo"], a["valor_novo"], a["origem"]) == ("1", "0", "POST /panico")
+
+
+def test_f15_o_perfil_aparece_com_o_nome_do_perfil_na_origem(cliente):
+    """`POST /perfil` grava VARIAS chaves de uma vez -- e sem o nome do perfil na origem, as
+    linhas soltas na auditoria nao contariam que foram um gesto so."""
+    cliente.post("/perfil", json={"perfil": "conservador"})
+    mudaram = [k for k in db.PERFIS_RISCO["conservador"]
+               if not db._igual_cfg(db.PERFIS_RISCO["experimento"].get(k),
+                                    db.PERFIS_RISCO["conservador"][k])]
+    assert len(mudaram) == 5                      # 5 das 6: `auto_max_posicoes` e "5" nos dois
+    for chave in mudaram:
+        a = ultima_auditoria(chave)
+        assert a and a["origem"] == "POST /perfil:conservador", chave
+    assert ultima_auditoria("risco_por_trade")["valor_antigo"] == "0.03"
+    # e o que NAO mudou de valor nao virou linha, mesmo tendo sido gravado no mesmo gesto
+    assert ultima_auditoria("auto_max_posicoes") is None
+
+
+def test_f15_o_reset_aparece_apesar_de_NAO_passar_pelo_set_config(cliente):
+    """O unico escritor que nao pode usar `db.set_config`: a limpeza da trava tem de cair na
+    MESMA transacao dos DELETEs do reset, e `set_config` abre a sua propria. Ele chama
+    `db._auditar_config` a mao com a conexao que ja tem -- e e por isso que este teste existe
+    separado: e o caminho que uma instrumentacao so do chokepoint deixaria de fora."""
+    db.set_config("trava_dia_em", "2026-08-22")
+    cliente.post("/reset", json={"confirmar": "RESET"})
+    a = ultima_auditoria("trava_dia_em")
+    assert (a["valor_antigo"], a["valor_novo"], a["origem"]) == ("2026-08-22", "", "POST /reset")
+
+
+def test_f15_a_trava_diaria_do_simulador_aparece_identificada_pelo_frame(banco, sem_rede):
+    """`simulador.guarda_risco` grava `trava_dia_em` e nao passa `origem` -- `simulador.py` e
+    territorio de outro agente. O fallback pelo frame do chamador e o que faz um escritor que
+    nao se declarou aparecer identificavel em vez de virar um "?" na tabela."""
+    import simulador
+    db.set_config("limite_perda_dia", "0.0")     # trava no primeiro centavo de perda
+    semear_posicao(entrada=100.0, valor_reais=100.0, alavancagem=10, preco_atual=99.0, pnl=-100.0)
+    assert simulador.guarda_risco()["trava_dia"] is True
+    a = ultima_auditoria("trava_dia_em")
+    assert a["valor_antigo"] == "" and a["valor_novo"] and a["origem"].startswith("simulador.py:")
+
+
+def test_f15_regravar_o_MESMO_valor_nao_e_evento(cliente):
+    """O `POST /perfil` reaplica o perfil inteiro e o painel reenvia o formulario todo. Se
+    regravacao identica virasse linha, a mudanca real ficaria enterrada no ruido -- e achar a
+    mudanca real e a unica coisa que esta tabela existe para fazer."""
+    cliente.post("/config", json={"min_conviccao": 70})
+    n = len(db.auditoria_config(500))
+    cliente.post("/config", json={"min_conviccao": 70})       # de novo, mesmo valor
+    cliente.post("/perfil", json={"perfil": "experimento"})   # ja e o perfil vivo
+    assert len(db.auditoria_config(500)) == n
+
+
+def test_f15_a_rota_expoe_a_auditoria_E_DIZ_QUE_O_PASSADO_NAO_EXISTE(cliente):
+    """A metade honesta da entrega, e ela viaja com o dado: lista vazia sem ressalva deixa
+    quem le concluir que nada mudou, que e a unica leitura pior que nao ter auditoria."""
+    import api
+    j = cliente.get("/config/auditoria").json()
+    assert j["total"] == 0 and j["linhas"] == []
+    assert "auto_trade" in j["nota"] and "2026-08-29" in j["nota"]
+    assert j["nota"] == api.NOTA_AUDITORIA
+
+    cliente.post("/auto", json={"auto_trade": 1})
+    cliente.post("/config", json={"min_conviccao": 70})
+    j = cliente.get("/config/auditoria").json()
+    assert j["total"] == 2 and j["linhas"][0]["chave"] == "min_conviccao"   # mais recente 1o
+    j = cliente.get("/config/auditoria", params={"chave": "auto_trade"}).json()
+    assert j["total"] == 1 and j["linhas"][0]["valor_novo"] == "1"
+
+
+def test_f15_a_auditoria_NAO_vai_para_o_estado(cliente):
+    """Mesmo motivo do `caps_geometria`: o `/estado` e polido a cada 3s contra uma franquia de
+    15 GB/mes (CLAUDE.md §2). Historico so se le quando alguem pergunta -- rota propria."""
+    cliente.post("/auto", json={"auto_trade": 1})
+    j = cliente.get("/estado").json()
+    assert "auditoria" not in j and "config_auditoria" not in j
+
+
+def test_f15_NENHUM_escritor_de_config_escapa_da_auditoria(banco):
+    """A trava que faz esta entrega durar mais que hoje.
+
+    Instrumentar os escritores que existem hoje nao impede o de amanha de gravar direto e
+    sumir da tabela -- e o defeito voltaria calado, que e como ele nasceu. Este teste varre o
+    codigo de PLATAFORMA atras de SQL que escreve na tabela `config` e exige que cada
+    ocorrencia esteja numa lista de excecoes conhecidas. Escritor novo nao passa sem alguem
+    decidir aqui que ele e legitimo.
+
+    `db.set_config` (o chokepoint) e o `/reset` (que audita a mao, na sua transacao) sao as
+    duas unicas. `db.init_db` semeia o default com `INSERT OR IGNORE` e nao e mudanca."""
+    import glob
+    import os
+    import re
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    padrao = re.compile(r"(INSERT|REPLACE)\s+(OR\s+\w+\s+)?INTO\s+config\b|UPDATE\s+config\b",
+                        re.I)
+    CONHECIDOS = {
+        ("db.py", "INSERT INTO CONFIG"),            # set_config: o chokepoint auditado
+        ("db.py", "INSERT OR IGNORE INTO CONFIG"),  # init_db: semeia o default, nao e mudanca
+        ("api.py", "INSERT INTO CONFIG"),           # /reset: audita a mao, na sua transacao
+    }
+    achados = set()
+    for caminho in sorted(glob.glob(os.path.join(raiz, "*.py"))):
+        nome = os.path.basename(caminho)
+        if nome.startswith(("test_", "prova_")):     # provas mexem no proprio banco, de fora
+            continue
+        with open(caminho, encoding="utf-8") as f:
+            for linha in f:
+                m = padrao.search(linha)
+                if m:
+                    achados.add((nome, " ".join(m.group(0).split()).upper()))
+    assert achados == CONHECIDOS, f"escritor de config fora da auditoria: {achados ^ CONHECIDOS}"

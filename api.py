@@ -300,6 +300,21 @@ CONFIG_CATALOGO = {
     "auto_lev_min":         ("float", 1.0, 50.0),
     "auto_lev_max":         ("float", 1.0, 50.0),
     "trailing_ativo":       ("bool",),
+    # [N-13][P-3] O trailing mede em R desde a onda A, e as tres chaves abaixo sao o que
+    # DECIDE esse comportamento -- sem verbete aqui o `POST /config` as recusava como "chave
+    # desconhecida" e elas so valeriam pelo default. A consequencia nao era cosmetica: em
+    # producao, reverter a politica de saida exigiria um DEPLOY em vez de um clique, e e por
+    # isso que a decisao D-7 segurou a VM ate este item fechar.
+    #
+    # Faixas: nenhuma das duas admite 0, e a ausencia e deliberada -- `arma_r=0` armaria o
+    # trailing no instante da abertura (stop colado na entrada, todo trade morre no primeiro
+    # ruido) e `dist_r=0` poria o stop EM CIMA do preco. O piso de 0,1R e o mesmo espirito do
+    # piso 0,001 de `trailing_dist`: apertar pode, zerar e outra coisa. O teto de 10R e
+    # folgado de proposito -- acima disso o trailing nunca arma na vida util de um trade
+    # intraday, o que equivale a `trailing_ativo=0` dito de um jeito que ninguem le no painel.
+    "trailing_unidade":     ("enum", ("R", "preco")),
+    "trailing_arma_r":      ("float", 0.1, 10.0),
+    "trailing_dist_r":      ("float", 0.1, 10.0),
     "trailing_dist":        ("float", 0.001, 0.5),
     # estado / integrações
     "trava_dia_em":         ("data",),
@@ -352,6 +367,23 @@ CONFIG_RACIONAL = {
         "'2x sempre pior que 1x'. MANTIDO pelo mesmo motivo do risco_por_trade, e com a "
         "mesma condição: é o dial que acelera o experimento, não uma aposta em edge. Vale "
         "para o fluxo manual e para o modo `auto_lev_modo=fixo`. No `conservador`: 2x."),
+    "auto_lev_modo": (
+        "VIVO \"fixo\" desde 2026-08-29 ([N-10]), e o motivo é MEDIÇÃO, não prudência. Em "
+        "\"conviccao\" a alavancagem escalava com o score: 60 pontos mapeavam em `auto_lev_min` "
+        "e 99 em `auto_lev_max`, ou seja 20 pontos viravam 5,5× mais dinheiro em risco. O "
+        "[Q-13] testou essa premissa em 2.945 sinais de tendência com desfecho marcado e ela "
+        "não se sustenta: os que bateram no STOP tinham convicção MÉDIA MAIOR (67,10 contra "
+        "66,47 dos que bateram no alvo), e o win% por faixa faz 63 → 38 → 45 → 50 → 47 — "
+        "serrilha, não escada. A faixa 80-90, que a escala premiava com ~12x, é a PIOR das "
+        "cinco. Desligar isto é REALOCAR risco, não reduzi-lo: o dinheiro espalhado sobre "
+        "sinais que a medição não distingue entre si é o que falta quando aparecer a "
+        "oportunidade que merece 20x (NORTE.md, PLANO-V2 Parte 0). O mecanismo continua "
+        "INTEIRO em `autotrader._alavancagem`, dormindo e travado por teste — o `N-10b` está "
+        "encarregado de construir um medidor que passe no teste do [Q-13] (win% monotônico "
+        "por faixa, em amostra FORA da usada para construí-lo), e no dia em que passar a "
+        "escala volta por config, sem reimplementar nada. Fora do perfil `conservador` de "
+        "propósito: lá `auto_lev_min`=1 e \"fixo\" usaria `alavancagem_padrao`=2x sempre, o "
+        "que SUBIRIA o piso — ver o comentário do `db.PERFIS_RISCO`."),
     "auto_lev_min": (
         "VIVO 2x — o piso da escala por convicção, aplicado na convicção mínima. Não é "
         "garantia de risco e nunca foi: o cap geométrico do [P1-11] desce ABAIXO dele quando "
@@ -386,6 +418,35 @@ CONFIG_RACIONAL = {
         "agressivo sobrevive: a 3% por trade, menos de dois stops cheios trancam o dia; a 1%, "
         "cinco. O mesmo 5% significa coisas diferentes em cada perfil, e por isso ele fica "
         "FORA dos perfis — mexer nele é mexer no freio de emergência, não no acelerador."),
+    "trailing_unidade": (
+        "VIVO \"R\". 1R é a distância entrada→stop DA ABERTURA (`posicoes.stop_abertura`, "
+        "imutável), que é a mesma unidade em que o stop de entrada já é dimensionado (3×ATR). "
+        "Substituiu \"preco\" (os 2% de `trailing_dist`) porque a unidade de preço estava "
+        "errada de duas maneiras opostas ao mesmo tempo. Primeira: multiplicada pela "
+        "alavancagem ela vira ROE — 2% de preço são 4% de ROE a 2x e 40% a 20x, então o "
+        "trailing DESARMAVA justamente onde a aposta era maior. Segunda: em unidade de risco "
+        "os mesmos 2% valem 3R com stop curto (arma tarde demais) e meio R com stop largo "
+        "(arma cedo demais) — o mesmo número significava coisas diferentes a cada trade. A "
+        "medição que fecha o argumento: 19 dos 20 trades que foram de lucro a prejuízo NUNCA "
+        "armaram o trailing (INVESTIGACAO-MOTOR-2026-08-24 §8), e essa cauda direita é "
+        "exatamente o que a meta do dono pede. \"preco\" NÃO é legado morto: é o caminho das "
+        "posições abertas antes de `stop_abertura` existir, que não têm R mensurável — para "
+        "elas, inventar um R a partir do stop de agora seria o defeito [F-1] renascendo."),
+    "trailing_arma_r": (
+        "VIVO 1R, ASSINADO PELO DONO em 2026-08-29 (decisão D-5 do PLANO-V2 — o portão humano "
+        "da §9.8, porque isto é `toca-risco`). Lucro, em R, que ARMA o trailing. Com "
+        "`trailing_dist_r` também em 1, o stop cai no zero-a-zero EXATO no instante em que "
+        "arma — que é o `be_em_R=1` que a pesquisa já prescrevia do seu lado "
+        "(`pesquisa/backtest_plataforma`), chegando ao vivo pela mesma porta. Só vale com "
+        "`trailing_unidade=R`; sob \"preco\" quem manda é `trailing_dist`."),
+    "trailing_dist_r": (
+        "VIVO 1R (D-5, mesma assinatura). Distância, em R, que o stop mantém atrás do preço "
+        "depois de armado. Vale a pena saber ler a relação com `trailing_arma_r`: no instante "
+        "em que arma, o stop vai para `entrada + (arma_r − dist_r)×R`, então dist_r > arma_r "
+        "arma ABAIXO da entrada e dist_r < arma_r já arma travando lucro. Nenhum dos dois é "
+        "afrouxamento — a catraca de `simulador._marcar_uma` só aceita stop que ande a favor, "
+        "nunca para trás. Apertar (dist_r menor) trava mais cedo e corta mais vencedor; "
+        "afrouxar dá mais corda à cauda direita. Só vale com `trailing_unidade=R`."),
     "exposicao_max": (
         "VIVO 50% da banca em margem somada. Teto de MARGEM, não de risco: limita quanto "
         "capital fica preso, não quanto se pode perder. A base não fala dele, mas ele muda de "
@@ -647,6 +708,13 @@ def reset(req: ResetReq):
         for t in tabelas:                       # é pior que reset nenhum
             c.execute(f"DELETE FROM {t}")
         c.execute("UPDATE banca SET atual=inicial WHERE id=1")
+        # [F-15] O reset e o UNICO escritor de config que nao passa pelo `db.set_config`, e
+        # continua nao passando: a limpeza da trava tem de cair na MESMA transacao dos DELETEs
+        # (reset pela metade e pior que reset nenhum), e `set_config` abre a sua propria. Entao
+        # ele chama a auditoria a mao, com a conexao que ja tem. Sem esta linha, o unico caminho
+        # que solta a trava diaria seria tambem o unico invisivel na auditoria -- e a trava e
+        # justamente uma das guardas cujo afrouxamento o CLAUDE.md §2 manda registrar.
+        db._auditar_config(c, "trava_dia_em", "", "POST /reset")
         c.execute("INSERT INTO config(chave,valor) VALUES('trava_dia_em','') "
                   "ON CONFLICT(chave) DO UPDATE SET valor=''")
     # estado derivado em memória: sem isto o painel exibe, até o próximo ciclo (15s),
@@ -725,6 +793,37 @@ def get_config():
     return db.get_config()
 
 
+# [F-15][N-26] A ressalva viaja JUNTO com o dado, e não num README que ninguém abre quando
+# está com a pergunta na mão. O card nasceu de "quando o `auto_trade` foi religado?", e a
+# resposta continua sendo "não dá para saber": esta tabela vale daqui pra frente, e inventar
+# a linha que falta seria trocar um "não sei" por um "sei errado" — que é a única coisa pior.
+NOTA_AUDITORIA = (
+    "A auditoria de config começa em 2026-08-29 ([F-15]). Mudança anterior a essa data NÃO "
+    "existe aqui e não foi reconstruída — não há de onde: a tabela `config` guarda só o valor "
+    "vigente e o log já rotacionou. Em particular, QUANDO O `auto_trade` FOI RELIGADO continua "
+    "sem resposta, e é a pergunta que originou este registro. Lista vazia significa 'nada "
+    "mudou desde que isto passou a ser gravado', nunca 'nada mudou'.")
+
+
+@app.get("/config/auditoria")
+def config_auditoria(limite: int = Query(100, ge=1, le=500), chave: str = ""):
+    """[F-15][N-26] Quando cada chave de config mudou, de que valor para qual, e por qual porta.
+
+    Rota PROPRIA, e não um campo do `/estado`, por decisão de custo: o painel faz poll do
+    `/estado` a cada 3s contra uma franquia de saída de 15 GB/mês (CLAUDE.md §2), e histórico
+    é exatamente o tipo de dado que só se lê quando alguém pergunta. Pendurá-lo no poll faria
+    o sistema pagar continuamente por uma resposta pedida uma vez por mês.
+
+    A `nota` vai no corpo de propósito. Ela é a metade honesta da entrega: a tabela nasceu em
+    2026-08-29 e não há de onde reconstruir o que veio antes — inclusive a pergunta que
+    originou o card. Uma lista que sai vazia sem dizer isso deixa quem lê concluir que nada
+    mudou, e essa é a única leitura pior do que não ter auditoria nenhuma.
+    """
+    linhas = db.auditoria_config(limite, chave.strip() or None)
+    return {"nota": NOTA_AUDITORIA, "chave": chave.strip() or None,
+            "total": len(linhas), "linhas": linhas}
+
+
 @app.get("/catalogo")
 def catalogo():
     """[Q-3] O contrato da config, legível por quem opera: o que cada parâmetro aceita, o que
@@ -773,7 +872,7 @@ def set_perfil(req: PerfilReq):
     antes = db.perfil_ativo()
     aceitos = _validar_lote(db.PERFIS_RISCO[req.perfil])
     for k, v in aceitos.items():
-        db.set_config(k, v)
+        db.set_config(k, v, f"POST /perfil:{req.perfil}")
     cfg = db.get_config()
     log(f"perfil de risco: {antes} -> {req.perfil} ({aceitos})")
     return {"ok": True, "perfil_ativo": db.perfil_ativo(cfg), "perfil_anterior": antes,
@@ -906,7 +1005,7 @@ def panico(pular_pendentes: bool = False):
     padrão: é decisão de produto (a fila pendente é combustível para religar por engano,
     mas o auto-trader já só opera sinal com até `auto_freshness_min` minutos, então ela
     envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
-    db.set_config("auto_trade", "0")            # mata o bot ANTES de fechar
+    db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
     _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
     log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
@@ -956,7 +1055,7 @@ def set_config(body: dict):
     longe daqui, dentro de guarda_risco()."""
     aceitos = _validar_lote(body)
     for k, v in aceitos.items():
-        db.set_config(k, v)
+        db.set_config(k, v, "POST /config")
     return db.get_config()
 
 
@@ -972,7 +1071,7 @@ def set_auto(body: dict):
     de valores: a whitelist sozinha deixava passar auto_max_posicoes="banana"."""
     aceitos = _validar_lote(body, AUTO_PERMITIDAS)
     for k, v in aceitos.items():
-        db.set_config(k, v)
+        db.set_config(k, v, "POST /auto")
     cfg = db.get_config()
     return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},
             "estado": _auto["v"]}
