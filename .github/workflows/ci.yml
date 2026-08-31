@@ -1,0 +1,64 @@
+# CI — o portao que o CLAUDE.md ja exigia e ninguem obrigava.
+#
+# O contrato do repo diz, em §0 e §6: "Antes de mergear, `python -m pytest`". Ate aqui isso
+# dependia de alguem lembrar. Uma suite de 793 testes que so roda por disciplina nao e um
+# portao: e um costume, e costume nao reprova PR.
+#
+# Roda a suite COMPLETA, nao o `-m "not lento"`. O marcador `lento` existe para o laco de
+# quem esta iterando na propria maquina (pytest.ini diz isso com todas as letras); o portao
+# de pre-merge tem de cobrir tudo, senao o que ele garante nao e o que o CLAUDE.md pede.
+#
+# Python 3.12 porque e o que roda na VM de producao. Testar em versao diferente da que
+# executa o dinheiro e testar outro programa.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# PR com varios pushes seguidos nao precisa de N execucoes da suite inteira.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # CLAUDE.md §0: o smoke da plataforma. Falha aqui e import quebrado, e a suite
+      # inteira ia falhar depois de 10 minutos dizendo a mesma coisa mais devagar.
+      - name: Smoke — a plataforma importa
+        run: python -c "import api"
+
+      # CLAUDE.md §2, invariante do `web/`: nenhum script de terceiro no painel, porque a
+      # credencial vive no localStorage e script de CDN no mesmo documento a le. O proprio
+      # contrato diz "confere em um segundo"; agora confere sozinho.
+      # A stylesheet do Google Fonts e a unica excecao declarada, e nao executa JS.
+      - name: Invariante — web/ nao carrega script de terceiro
+        run: |
+          if grep -rn "src=['\"]http" web/; then
+            echo "::error::web/ carregou script por URL absoluta. Invariante do CLAUDE.md §2."
+            exit 1
+          fi
+          echo "ok: nenhum src=http em web/"
+
+      - name: Suite completa (793 testes)
+        run: python -m pytest

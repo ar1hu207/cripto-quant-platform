@@ -13,8 +13,19 @@ EnvironmentFile=/home/ubuntu/cripto-bot/.env
 ExecStart=/home/ubuntu/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
-# nunca derruba por uso de memória idiota; o app é leve
-MemoryMax=900M
+# A VM tem 892,8 MiB de RAM (MemTotal 914.284 kB). O `MemoryMax=900M` que estava aqui era
+# MAIOR que a RAM física: o teto nunca podia disparar antes do OOM killer do kernel, e a
+# vítima do kernel não é escolhida por nós — o Caddy e o sshd concorrem com o bot. O guarda
+# existia no arquivo e não existia na máquina.
+#
+# Agora corta de verdade, em dois estágios:
+#   MemoryHigh -> freio: o kernel recupera cache e aplica pressão, sem matar ninguém.
+#   MemoryMax  -> teto: mata o bot, e o `Restart=always` acima o devolve em 5 s.
+# Medido em 31/08: ~410 MB RSS (466 MB de cgroup, com cache) logo após subir, e o total da
+# VM andando entre 79% e 89% ao longo de dias. 620M/760M dá dias de folga de crescimento e
+# ainda deixa ~130 MB para Caddy e sistema no instante do corte.
+MemoryHigh=620M
+MemoryMax=760M
 
 [Install]
 WantedBy=multi-user.target
