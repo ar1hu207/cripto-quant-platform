@@ -9,6 +9,7 @@ escrita ao lado, e nao de "nao explodiu".
 import pytest
 
 import db
+import mercado
 import simulador
 from conftest import semear_posicao
 
@@ -328,3 +329,195 @@ def test_as_metricas_leem_o_trade_com_gap_sem_quebrar(banco, sem_rede):
     assert m["win_rate"] == 0
     assert m["pnl_total"] == pytest.approx(round(100 * 10 * (98.0 / 102.0 - 1) - 1.0, 2))
     assert m["expectancia_r"] != 0                           # risco_inicial gravado -> R vivo
+
+
+# ============================== [F-12] a config do laco de marcacao, lida uma vez so
+
+def _contar_get_config(monkeypatch):
+    """Envelopa `db.get_config` contando as chamadas, sem mudar o que ela devolve."""
+    n = {"v": 0}
+    real = db.get_config
+
+    def contando():
+        n["v"] += 1
+        return real()
+
+    monkeypatch.setattr(db, "get_config", contando)
+    return n
+
+
+def test_f12_pnl_com_cfg_dado_nao_abre_o_banco(banco, monkeypatch):
+    """[F-12] O parametro existe para uma coisa so: nao reabrir o banco. Se `_pnl` ainda
+    chamar `get_config()` tendo recebido a config, o teste falha em vez de so ficar lento --
+    o custo do defeito e invisivel no resultado, entao a prova tem de ser sobre a CHAMADA."""
+    monkeypatch.setattr(db, "get_config",
+                        lambda: pytest.fail("_pnl abriu o banco mesmo com cfg no parametro"))
+    pnl, taxa, move = simulador._pnl(pos(), 101.0, {"taxa_por_lado": "0.0005"})
+    assert (move, taxa, pnl) == (pytest.approx(0.01), pytest.approx(1.0), pytest.approx(9.0))
+
+
+def test_f12_pnl_sem_cfg_continua_lendo_a_config_de_agora(banco, monkeypatch):
+    """A outra metade, e ela e deliberada: `fechar()` e chamado de FORA do ciclo (API,
+    panico, auto-trader) e ali a taxa vigente e a certa. Um default que nao lesse o banco
+    congelaria a config no valor do ultimo ciclo do worker."""
+    n = _contar_get_config(monkeypatch)
+    db.set_config("taxa_por_lado", "0.001")
+    _, taxa, _ = simulador._pnl(pos(), 101.0)
+    assert n["v"] == 1
+    assert taxa == pytest.approx(2.0)            # 2 x 0,1% x R$1.000 de nocional
+
+
+def test_f12_a_marcacao_le_a_config_uma_vez_por_CICLO_e_nao_por_posicao(banco, sem_rede,
+                                                                        monkeypatch):
+    """[F-12] Era uma conexao SQLite nova + PRAGMA + SELECT da tabela inteira + commit POR
+    POSICAO, a cada 15 s, para ler um numero que nao muda dentro do ciclo.
+
+    A asseracao e `== 1` e nao `<= n`: o ponto do card e que o custo pare de crescer com o
+    numero de posicoes, e um teto frouxo deixaria a leitura por posicao voltar de mansinho
+    numa carteira pequena."""
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=50.0, alavancagem=2)
+    n = _contar_get_config(monkeypatch)
+    simulador.atualizar()
+    assert simulador.ultima_marcacao["ok"] == 5      # as cinco foram marcadas de fato
+    assert n["v"] == 1
+
+
+def test_f12_a_config_do_ciclo_e_a_MESMA_para_todas_as_posicoes(banco, sem_rede, monkeypatch):
+    """Efeito colateral que vale como garantia, e e o mesmo argumento do `_trailing_cfg`:
+    com a leitura por posicao, um `POST /config` no meio do laco marcava metade da carteira
+    com a taxa velha e metade com a nova. Aqui a config muda DEPOIS da primeira posicao e
+    nenhuma das cinco enxerga a mudanca."""
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=100.0, alavancagem=10, preco_atual=100.0)
+    real = simulador._marcar_uma
+    vistos = []
+
+    def espiando(pos, trail, eventos, cfg=None, precos=None):
+        vistos.append((cfg or {}).get("taxa_por_lado"))
+        db.set_config("taxa_por_lado", "0.009")      # alguem mexe no painel no meio do laco
+        return real(pos, trail, eventos, cfg, precos)
+
+    monkeypatch.setattr(simulador, "_marcar_uma", espiando)
+    simulador.atualizar()
+    assert vistos == ["0.0005"] * 5
+
+
+# ====================== [F-11] uma cotacao para todas as posicoes, e a paridade que a limita
+
+class _SemFunding:
+    def fetch_funding_rate_history(self, ativo, since=None, limit=None):
+        return []
+
+
+def test_f11_a_marcacao_cota_em_LOTE_e_nao_uma_vez_por_posicao(banco, monkeypatch):
+    """[F-11] Era 1 `fetch_ticker` por posicao por ciclo. Passa a ser 1 `fetch_tickers` pela
+    lista inteira -- 5 idas a rede viram 1.
+
+    A asseracao e sobre a CHAMADA, e nao sobre o tempo: `preco_ao_vivo` faz `pytest.fail`, de
+    modo que qualquer posicao que escape do lote reprova em vez de so ficar lenta."""
+    chamadas = {"lote": 0}
+    ativos = [f"MOEDA{i}/USDT" for i in range(5)]
+
+    def lote(pedidos):
+        chamadas["lote"] += 1
+        return {a: 100.0 for a in pedidos}
+
+    monkeypatch.setattr(mercado, "precos", lote)
+    monkeypatch.setattr(simulador, "ex_fut", _SemFunding())
+    monkeypatch.setattr(simulador, "preco_ao_vivo",
+                        lambda a: pytest.fail(f"{a} saiu do lote e foi cotado sozinho"))
+    # a guarda de identidade olha o ORIGINAL: o teste troca `preco_ao_vivo` so para detectar
+    # o vazamento, entao o original tem de acompanhar, senao o lote se desliga sozinho.
+    monkeypatch.setattr(simulador, "_preco_ao_vivo_original", simulador.preco_ao_vivo)
+
+    db.set_config("trailing_ativo", "0")
+    for a in ativos:
+        semear_posicao(ativo=a, entrada=100.0, stop=50.0, valor_reais=50.0, alavancagem=2)
+    simulador.atualizar()
+
+    assert chamadas["lote"] == 1
+    assert simulador.ultima_marcacao["ok"] == 5
+    assert simulador.ultima_marcacao["falhas"] == 0
+
+
+def test_f11_o_que_o_lote_nao_trouxe_cai_no_preco_por_posicao(banco, monkeypatch):
+    """A degradacao e por POSICAO, dentro do try dela. Um ativo ausente do lote (par que a
+    corretora nao lista, resposta parcial) e cotado sozinho; os outros quatro nao pagam nada
+    por isso, e nenhum fica sem marcacao."""
+    sozinhos = []
+    monkeypatch.setattr(mercado, "precos",
+                        lambda pedidos: {a: 100.0 for a in pedidos if a != "MOEDA3/USDT"})
+    monkeypatch.setattr(simulador, "ex_fut", _SemFunding())
+    monkeypatch.setattr(simulador, "preco_ao_vivo",
+                        lambda a: (sozinhos.append(a), 100.0)[1])
+    monkeypatch.setattr(simulador, "_preco_ao_vivo_original", simulador.preco_ao_vivo)
+
+    db.set_config("trailing_ativo", "0")
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=50.0, alavancagem=2)
+    simulador.atualizar()
+
+    assert sozinhos == ["MOEDA3/USDT"]
+    assert simulador.ultima_marcacao["ok"] == 5
+
+
+def test_f11_lote_que_explode_degrada_para_o_caminho_de_sempre(banco, monkeypatch):
+    """[P1-1] O lote roda FORA do try por posicao. Se ele levantasse, tiraria as cinco
+    posicoes da vigilancia de stop/trailing/liquidacao de uma vez -- o defeito exato que
+    aquele invariante existe para impedir. Por isso a falha vira `{}`, nao excecao."""
+    def explode(_):
+        raise RuntimeError("HTTP 451")
+
+    monkeypatch.setattr(mercado, "precos", explode)
+    monkeypatch.setattr(simulador, "ex_fut", _SemFunding())
+    monkeypatch.setattr(simulador, "preco_ao_vivo", lambda a: 100.0)
+    monkeypatch.setattr(simulador, "_preco_ao_vivo_original", simulador.preco_ao_vivo)
+
+    db.set_config("trailing_ativo", "0")
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=100.0, stop=50.0,
+                       valor_reais=50.0, alavancagem=2)
+    simulador.atualizar()
+    assert simulador.ultima_marcacao["ok"] == 5
+    assert simulador.ultima_marcacao["falhas"] == 0
+
+
+def test_f11_quem_troca_preco_ao_vivo_desliga_o_lote(banco, monkeypatch):
+    """🔴 A PARIDADE. `pesquisa/backtest_portfolio.Ambiente` substitui
+    `simulador.preco_ao_vivo` para alimentar o backtest com a barra do candle corrente, e esse
+    backtest e de CARTEIRA -- varios ativos abertos ao mesmo tempo, que e justamente quando o
+    lote entraria. Sem esta guarda, marcar uma posicao de 2024 iria buscar o preco de mercado
+    de HOJE: olhar o futuro, em silencio.
+
+    Aqui `preco_ao_vivo` e trocado como o Ambiente faz (sem mexer no `_original`) e o lote tem
+    de ficar mudo: nenhuma chamada a `mercado.precos`, e o preco de todas as posicoes vindo da
+    funcao substituida."""
+    monkeypatch.setattr(mercado, "precos",
+                        lambda _: pytest.fail("o lote falou por cima do preco do backtest"))
+    monkeypatch.setattr(simulador, "ex_fut", _SemFunding())
+    monkeypatch.setattr(simulador, "preco_ao_vivo", lambda a: 250.0)
+
+    db.set_config("trailing_ativo", "0")
+    for i in range(5):
+        semear_posicao(ativo=f"MOEDA{i}/USDT", entrada=250.0, stop=100.0,
+                       valor_reais=50.0, alavancagem=2)
+    simulador.atualizar()
+
+    assert simulador.ultima_marcacao["ok"] == 5
+    with db.conectar() as c:
+        precos = [r[0] for r in c.execute("SELECT preco_atual FROM posicoes WHERE status='aberta'")]
+    assert precos == [pytest.approx(250.0)] * 5
+
+
+def test_f11_uma_posicao_so_nao_paga_request_de_lote(banco, monkeypatch):
+    """Com um ativo o lote nao economiza nada -- seria trocar um `fetch_ticker` por um
+    `fetch_tickers` de um item. `_precos_em_lote` devolve {} antes de sair da maquina."""
+    monkeypatch.setattr(mercado, "precos",
+                        lambda _: pytest.fail("cotou em lote com 1 ativo so"))
+    assert simulador._precos_em_lote(["BTC/USDT"]) == {}
+    assert simulador._precos_em_lote(["BTC/USDT", "BTC/USDT"]) == {}   # repetido nao vira dois
+    assert simulador._precos_em_lote([]) == {}

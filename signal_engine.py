@@ -7,6 +7,8 @@ Rodar:  python signal_engine.py               (loop)
         python signal_engine.py --once        (uma varredura)
         python signal_engine.py --desfechos   ([Q-4] marca desfecho hipotético agora)
         python signal_engine.py --relatorio   ([Q-4] portão de fluxo: passou x rejeitado)
+        python signal_engine.py --cronometro  ([F-13] cronometra um ciclo do worker, COM rede)
+        python signal_engine.py --cronometro --repetir 2   (o 2o ciclo ja e o REGIME: [F-10])
 """
 import sys
 import time
@@ -25,10 +27,60 @@ from scoring import preparar, pontuar, pontuar_reversao
 ex = ccxt.binance({"enableRateLimit": True})
 
 
+# ---------------------------------------------------- [F-10] cache de velas ate o fechamento
+
+_velas_cache = {}       # (ativo, tf) -> {"raw": [...], "ate_ms": instante em que a vela fecha}
+_VELAS_MAX = 200        # teto de entradas; a grade viva usa 72 (24 ativos x 3 TFs)
+
+
+def _velas(ativo, tf, limite):
+    """Candles de `ativo`/`tf`, servidos do cache enquanto a vela em formacao nao fechar.
+
+    ISTO NAO E UMA APROXIMACAO -- e uma igualdade, e o argumento e o que autoriza o cache a
+    existir sem config para desliga-lo:
+
+      * `analisa()` le o indice `i = len-2` (a ultima vela FECHADA) e, do `i+1`, **so o
+        timestamp de abertura**. `avaliar_saida()` le `i` e `i-1`, tambem fechadas.
+      * Todo indicador de `indicadores.py` e causal (EMA, ATR, ADX, RSI, Donchian, Bollinger
+        sao janelas para tras), entao o valor em `i` nao depende de `i+1`.
+      * Vela fechada e imutavel, e o timestamp de ABERTURA da vela em formacao e constante
+        durante todo o periodo dela.
+
+    Logo, dentro de um mesmo periodo de vela, refazer a requisicao devolve dados que produzem
+    **exatamente o mesmo sinal**. O que a rede trazia de novo a cada 15 s era o OHLC da vela em
+    formacao -- e nenhum dos dois consumidores olha para ele, de proposito (e o repaint).
+
+    Quem PRECISA da vela em formacao e o `analise()` (a tela de analise le `df.iloc[-1]`), e por
+    isso ele continua chamando `ex.fetch_ohlcv` direto. Nao e esquecimento: cachear ali
+    congelaria o preco do painel.
+
+    Serve fatia (`raw[-limite:]`) e nunca janela maior que a pedida: `avaliar_saida` calcula os
+    indicadores sobre 120 velas, e entregar 200 mudaria o warmup e portanto o numero -- seria
+    trocar "mesma resposta mais barata" por "resposta diferente", que e outro card.
+
+    Falha de rede nao vira dado velho: a excecao sobe, exatamente como antes.
+    """
+    agora_ms = time.time() * 1000
+    ent = _velas_cache.get((ativo, tf))
+    if ent and agora_ms < ent["ate_ms"] and len(ent["raw"]) >= limite:
+        return ent["raw"][-limite:]
+    # pede pelo menos a maior janela ja pedida deste par: o scan quer 200 e o gestor de saida
+    # 120, e guardar a menor faria o scan refazer a requisicao que o cache existe para poupar.
+    pedir = max(limite, len(ent["raw"]) if ent else 0)
+    raw = ex.fetch_ohlcv(ativo, timeframe=tf, limit=pedir)
+    if raw:
+        if len(_velas_cache) >= _VELAS_MAX:      # a grade e limitada (api.py capa em 60 pares),
+            for k in [k for k, v in _velas_cache.items() if agora_ms >= v["ate_ms"]]:
+                del _velas_cache[k]              # mas mudar `ativos` no painel troca as chaves
+        _velas_cache[(ativo, tf)] = {
+            "raw": raw, "ate_ms": raw[-1][0] + TF_MIN.get((tf or "").strip(), 15) * 60_000}
+    return raw[-limite:] if len(raw) > limite else raw
+
+
 def analisa(ativo, tf):
     """Avalia AMBAS as estratégias (tendência + reversão) pra um ativo/timeframe.
     Retorna LISTA de sinais candidatos (cada um com tipo e tf)."""
-    raw = ex.fetch_ohlcv(ativo, timeframe=tf, limit=200)
+    raw = _velas(ativo, tf, 200)
     df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
     i = len(df) - 2               # candle FECHADO (o último, -1, ainda está em formação = repaint)
     if i < 60:
@@ -108,6 +160,45 @@ def confirmado(s, ativo, cfg):
     return True, "confirmado"
 
 
+# [F-14] sinal_id -> tf do sinal (string crua; "" = não achado). Memoizável sem invalidação
+# porque o TF de um sinal é imutável: ele é gravado no INSERT do scan e nunca reescrito.
+_tf_por_sinal = {}
+_TF_SINAL_MAX = 500
+
+
+def tf_da_posicao(pos, cfg):
+    """[F-14] O timeframe em que a posição NASCEU — não o `timeframe` primário do painel.
+
+    O scanner varre `timeframes` (hoje `5m,15m,1h`) e grava o TF em cada sinal, mas o gestor
+    de saída lia sempre `cfg["timeframe"]` (15m). Uma posição aberta por sinal de 1 h era
+    vigiada em velas de 15 min: RSI, EMA20/50 e "perdeu a EMA" passavam a significar outra
+    coisa: o ruído de 15 min pedindo a saída de uma tese de 1 h, e a tendência de 1 h invisível
+    justamente para quem precisava dela. A regra que fica: a saída olha o mesmo gráfico em que
+    a entrada foi decidida.
+
+    Sinal sem TF gravado (linha antiga, coluna NULL) e posição sem `sinal_id` (aberta à mão,
+    pela rota da API) caem no `timeframe` da config — que é exatamente o que faziam antes.
+
+    O memo guarda o fato imutável ("" = não achado) e NUNCA o default: resolver o default a
+    cada chamada é o que faz uma troca de `timeframe` no painel valer na hora para as posições
+    sem TF próprio, em vez de ficar congelada no valor de quando a posição foi vista primeiro.
+    """
+    padrao = (cfg.get("timeframe") or "15m").strip() or "15m"
+    sid = pos.get("sinal_id")
+    if not sid:
+        return padrao
+    if sid not in _tf_por_sinal:
+        try:
+            with db.conectar() as con:
+                r = con.execute("SELECT tf FROM sinais WHERE id=?", (sid,)).fetchone()
+        except Exception:
+            return padrao                      # banco indisponível não vira TF errado gravado
+        if len(_tf_por_sinal) >= _TF_SINAL_MAX:
+            _tf_por_sinal.clear()              # teto simples: o mapa é derivável a qualquer hora
+        _tf_por_sinal[sid] = ((r["tf"] or "").strip() if r else "")
+    return _tf_por_sinal[sid] or padrao
+
+
 def avaliar_saida(pos, cfg=None):
     """Gestor de saída ativa: olha cada posição ABERTA e sugere fechar quando
     (a) já tem lucro razoável E (b) a tendência está revertendo / o fluxo virou.
@@ -117,8 +208,9 @@ def avaliar_saida(pos, cfg=None):
     valor = pos.get("valor_reais") or 1
     roe = (pos.get("pnl") or 0) / valor * 100
     alvo = float(cfg.get("alvo_roe", 5))
+    tf = tf_da_posicao(pos, cfg)               # [F-14] o TF da ENTRADA, não o primário
     try:
-        raw = ex.fetch_ohlcv(ativo, timeframe=cfg.get("timeframe", "15m"), limit=120)
+        raw = _velas(ativo, tf, 120)
         df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
     except Exception:
         return None
@@ -169,7 +261,12 @@ def avaliar_saida(pos, cfg=None):
 
 def analise(ativo, tf="15m", limite=200):
     """Candles + séries dos indicadores (EMA20/50, Bollinger) + snapshot (RSI/ADX/etc)
-    + leitura em texto do cenário. Pro modo 'analisar sinal' da UI."""
+    + leitura em texto do cenário. Pro modo 'analisar sinal' da UI.
+
+    [F-10] Unico consumidor de candle que NAO passa pelo `_velas`, e e deliberado: o snapshot
+    le `df.iloc[-1]`, a vela em FORMACAO. E a tela onde o dono olha o preco de agora -- servir
+    do cache congelaria o painel ate a vela fechar. Nao esta no ciclo do worker: roda por
+    clique, nao a cada 15 s."""
     raw = ex.fetch_ohlcv(ativo, timeframe=tf, limit=limite)
     df = preparar(pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"]))
 
@@ -466,6 +563,165 @@ def imprimir_relatorio_fluxo():
     return r
 
 
+# ============================================================ [F-13] o cronometro do ciclo
+
+class _Espiao:
+    """Envelope de um cliente ccxt que CONTA as chamadas de rede sem mudar nenhuma.
+
+    Delega tudo por `__getattr__` em vez de reimplementar a API do ccxt: o que interessa medir
+    e o numero de IDAS A REDE, e uma lista branca que ficasse velha silenciaria justamente a
+    chamada nova. Os metodos fora de `_REDE` passam intactos e nao sao contados -- `market()`,
+    `milliseconds()` e afins nao saem da maquina.
+    """
+    _REDE = ("fetch_ohlcv", "fetch_ticker", "fetch_tickers", "fetch_order_book",
+             "fetch_trades", "fetch_funding_rate", "fetch_funding_rates",
+             "fetch_funding_rate_history")
+
+    def __init__(self, alvo, contador):
+        self._alvo, self._contador = alvo, contador
+
+    def __getattr__(self, nome):
+        attr = getattr(self._alvo, nome)
+        if nome not in self._REDE:
+            return attr
+
+        def contando(*a, **k):
+            self._contador[nome] = self._contador.get(nome, 0) + 1
+            return attr(*a, **k)
+        return contando
+
+
+def _espioes(contador):
+    """Troca os clientes ccxt dos tres modulos do ciclo por espioes. Devolve o restaurador.
+
+    Sao cinco objetos e nao um: cada modulo instancia o seu no import (`signal_engine.ex`,
+    `simulador.ex`/`ex_fut`, `mercado.ex_spot`/`ex_fut`), e contar so um deles daria um numero
+    MENOR que o real justamente na conta que existe para expor o excesso.
+    """
+    import simulador
+    alvos = [(sys.modules[__name__], "ex"), (simulador, "ex"), (simulador, "ex_fut"),
+             (mercado, "ex_spot"), (mercado, "ex_fut")]
+    originais = [(m, n, getattr(m, n)) for m, n in alvos]
+    for m, n, o in originais:
+        setattr(m, n, _Espiao(o, contador))
+
+    def restaurar():
+        for m, n, o in originais:
+            setattr(m, n, o)
+    return restaurar
+
+
+def _semear_posicoes(n):
+    """n posicoes abertas nos primeiros n ativos da config, no preco de agora.
+
+    Preco real (1 `fetch_tickers`, colhido FORA do cronometro) porque o objeto medido e o custo
+    de marcar posicao viva: uma entrada inventada poderia cair do lado errado do stop e fechar a
+    posicao no primeiro ciclo, e ai o cronometro mediria um ciclo que nao existe. Stop e
+    alavancagem folgados (metade do preco, 2x) para que nada dispare durante a medicao.
+    """
+    ativos = [a.strip() for a in db.get_config()["ativos"].split(",") if a.strip()][:n]
+    precos = mercado.precos(ativos)
+    with db.conectar() as con:
+        for a in ativos:
+            p = precos.get(a)
+            if not p:
+                continue
+            con.execute("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,"
+                        "stop,stop_abertura,risco_abertura,preco_atual,pnl,aberto_em,status,"
+                        "conviccao) VALUES(?,'LONG',?,50,2,?,?,25,?,0,?,'aberta',70)",
+                        (a, p, p * 0.5, p * 0.5, p, str(pd.Timestamp.now())))
+    return ativos
+
+
+def cronometrar(n_pos=5, com_scan=True):
+    """[F-13] Cronometra UM ciclo do worker COM REDE, e conta as requisicoes de cada etapa.
+
+        python signal_engine.py --cronometro                    (5 posicoes, com scan)
+        python signal_engine.py --cronometro --pos 3 --sem-scan
+
+    Por que com rede e nao com duble: a hipotese do F-13 e sobre TEMPO DE PAREDE, e o tempo de
+    parede de um ciclo que so faz requisicao E o round-trip. Um duble mediria o custo do Python,
+    que nao e o que estoura o ciclo. O preco disso e que o numero varia com a latencia de quem
+    roda -- por isso o cronometro imprime tambem a CONTAGEM de requisicoes, que e determinista e
+    esta travada em teste, e a mediana medida por requisicao, para o leitor refazer a conta na
+    latencia dele.
+
+    Banco TEMPORARIO (`db.DB` reapontado, restaurado no `finally`) e somente endpoints publicos
+    de leitura da Binance: nao toca `trading.db`, nao manda ordem, nao le chave.
+
+    Reproduz o corpo de `api.worker()` etapa por etapa em vez de chama-lo: o worker e um
+    `while True` com `sleep`, e `api.py` nao e territorio deste card. `POLL_ATUALIZAR` e
+    `INTERVALO_SCAN` sao IMPORTADOS de la, e nao recopiados, para que o teto contra o qual se
+    compara nao vire uma segunda fonte da cadencia.
+    """
+    import os
+    import tempfile
+    import simulador
+    from api import POLL_ATUALIZAR, INTERVALO_SCAN    # local: `api` importa este modulo
+
+    original = db.DB
+    db.DB = os.path.join(tempfile.mkdtemp(prefix="cronometro_"), "cronometro.db")
+    contador = {}
+    restaurar = _espioes(contador)
+    try:
+        db.init_db()
+        ativos = _semear_posicoes(n_pos)
+        contador.clear()          # a colheita de precos da semeadura NAO e do ciclo
+        # ...e o CACHE dela tambem nao. `mercado._tickers` guarda 5 s por ativo, e a semeadura
+        # acabou de cotar os mesmos ativos: sem esvaziar, o `atualizar()` medido comecaria
+        # quente e mostraria 0 requisicoes. O worker nunca esta nesse estado -- o ciclo dele
+        # e de 15 s para cima, entao a cotacao de um ciclo sempre venceu no seguinte. Medir
+        # quente seria medir um regime que nao existe.
+        mercado._tcache.clear()
+        cfg = db.get_config()
+        tfs = [t.strip() for t in cfg.get("timeframes", cfg["timeframe"]).split(",") if t.strip()]
+        n_ativos = len([a for a in cfg["ativos"].split(",") if a.strip()])
+        print("[F-13] CRONOMETRO DO CICLO DO WORKER")
+        print("  ciclo do worker: %ss   scan a cada: %ss" % (POLL_ATUALIZAR, INTERVALO_SCAN))
+        print("  posicoes abertas: %d   grade do scan: %d ativos x %d tf = %d pares\n"
+              % (len(ativos), n_ativos, len(tfs), n_ativos * len(tfs)))
+
+        etapas = []
+        acum = {"t": 0.0}
+
+        def etapa(nome, fn):
+            antes = sum(contador.values())
+            t = time.perf_counter()
+            fn()
+            dt = time.perf_counter() - t
+            reqs = sum(contador.values()) - antes
+            etapas.append((nome, dt, reqs))
+            acum["t"] += dt
+            print("  %-34s%8.2fs   %4d req" % (nome, dt, reqs))
+
+        etapa("simulador.processar_ordens()", simulador.processar_ordens)
+        etapa("simulador.atualizar()", simulador.atualizar)
+        abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
+        etapa("avaliar_saida() x %d" % len(abertas), lambda: [avaliar_saida(p) for p in abertas])
+        t_sem_scan, r_sem_scan = acum["t"], sum(r for _, _, r in etapas)
+        if com_scan:
+            etapa("signal_engine.scan()", scan)
+
+        print()
+        print("  CICLO SEM SCAN  %8.2fs   %4d req   (teto %ss) %s"
+              % (t_sem_scan, r_sem_scan, POLL_ATUALIZAR,
+                 "ESTOURA" if t_sem_scan > POLL_ATUALIZAR else "cabe"))
+        if com_scan:
+            print("  CICLO COM SCAN  %8.2fs   %4d req   (teto %ss) %s"
+                  % (acum["t"], sum(contador.values()), POLL_ATUALIZAR,
+                     "ESTOURA" if acum["t"] > POLL_ATUALIZAR else "cabe"))
+        reqs = sum(contador.values())
+        if reqs:
+            print("\n  mediana por requisicao: %.0f ms (medida AQUI; na VM e outra -- "
+                  "refaca a conta com a sua)" % (acum["t"] / reqs * 1000))
+        print("  por metodo: " + ", ".join("%s=%d" % kv for kv in sorted(contador.items())))
+        return {"etapas": etapas, "requisicoes": dict(contador),
+                "s_sem_scan": t_sem_scan, "s_com_scan": acum["t"] if com_scan else None}
+    finally:
+        restaurar()
+        db.DB = original
+
+
 if __name__ == "__main__":
     if "--relatorio" in sys.argv:
         db.init_db()
@@ -473,5 +729,14 @@ if __name__ == "__main__":
     elif "--desfechos" in sys.argv:
         db.init_db()
         print(f"{marcar_desfechos(limite=200)} desfechos marcados")
+    elif "--cronometro" in sys.argv:
+        n = int(sys.argv[sys.argv.index("--pos") + 1]) if "--pos" in sys.argv else 5
+        # `--repetir 2` e o que mede o [F-10]: o primeiro ciclo enche o cache de velas, o
+        # segundo e o REGIME -- e regime e o que o worker faz 5.760 vezes por dia.
+        vezes = int(sys.argv[sys.argv.index("--repetir") + 1]) if "--repetir" in sys.argv else 1
+        for _volta in range(vezes):
+            if _volta:
+                print()
+            cronometrar(n_pos=n, com_scan="--sem-scan" not in sys.argv)
     else:
         run(once="--once" in sys.argv)

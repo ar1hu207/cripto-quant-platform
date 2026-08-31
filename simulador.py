@@ -10,6 +10,7 @@ import pandas as pd
 
 import db
 import alertas
+import mercado                      # [F-11] `mercado.precos`: 1 request por LISTA de ativos
 from logbot import log
 
 ex = ccxt.binance({"enableRateLimit": True})
@@ -81,6 +82,45 @@ def preco_ao_vivo(ativo):
     return float(ex.fetch_ticker(ativo)["last"])
 
 
+# [F-11] Guardado no import para que `_precos_em_lote` saiba se ainda é ele que manda no preço.
+_preco_ao_vivo_original = preco_ao_vivo
+
+
+def _precos_em_lote(ativos):
+    """[F-11] Preço de VÁRIOS ativos num request só. `{}` quando não dá — e aí quem chama cai
+    no `preco_ao_vivo` por ativo, que é o comportamento de sempre.
+
+    `mercado.precos` já existia, com batch (`fetch_tickers`, 1 request pela lista) e cache de
+    5 s por ativo, e o caminho da marcação simplesmente não a usava: eram N `fetch_ticker`
+    sequenciais para N posições, a cada 15 s, 24/7.
+
+    **A checagem de identidade não é paranoia — é a paridade.** `preco_ao_vivo` é o ponto que
+    `pesquisa/backtest_portfolio.py` substitui para alimentar o backtest com a barra do candle
+    corrente (`Ambiente._trocar`), e esse backtest é de CARTEIRA: tem vários ativos abertos ao
+    mesmo tempo, que é exatamente quando o lote valeria a pena. Sem esta guarda, `atualizar()`
+    dentro de um backtest iria buscar o preço de mercado de HOJE para marcar uma posição de
+    2024 — olhar o futuro, e pior, silenciosamente. A regra que fica: o lote é uma otimização
+    DE `preco_ao_vivo`; quem trocou `preco_ao_vivo` trocou a fonte de preço, e o lote sai de
+    cena. Vale igual para as fixtures de teste, que substituem a mesma função.
+
+    A falha vira `{}` e não exceção porque o lote está FORA do try por posição do `atualizar()`
+    ([P1-1]): uma cotação em lote que explodisse ali derrubaria a vigilância de stop/trailing/
+    liquidação de todas as posições de uma vez — que é precisamente o que aquele invariante
+    existe para impedir.
+    """
+    if preco_ao_vivo is not _preco_ao_vivo_original:   # fonte de preço trocada: o lote não manda
+        return {}
+    ativos = list(dict.fromkeys(a for a in ativos if a))
+    if len(ativos) < 2:                                # 1 ativo: o lote não economiza request
+        return {}
+    try:
+        return {a: float(p) for a, p in mercado.precos(ativos).items() if p}
+    except Exception as e:                             # degrada para o caminho por posição
+        log(f"[F-11] lote de precos falhou ({len(ativos)} ativos): {type(e).__name__}: {e}",
+            "warning")
+        return {}
+
+
 def _preco_liquidacao(entrada, d, lev):
     """Movimento adverso que zera a margem ~= LIQ_BUFFER/lev. d=1 long, d=-1 short."""
     if not lev:
@@ -109,7 +149,20 @@ def _liq_antes_do_stop(entrada, stop, alavancagem, d):
     return dist_stop / entrada, dist_liq / entrada
 
 
-def _pnl(pos, preco_saida):
+def _pnl(pos, preco_saida, cfg=None):
+    """[F-12] `cfg` entra por parâmetro para que o LAÇO de marcação não reabra o banco.
+
+    `db.get_config()` é uma conexão SQLite nova, um `PRAGMA journal_mode=WAL`, um SELECT da
+    tabela inteira e um commit — por posição, a cada 15 s, para ler UM número (`taxa_por_lado`)
+    que não muda dentro do ciclo. `atualizar()` já lê a config uma vez, pelo mesmo motivo que o
+    `_trailing_cfg` existe: todas as posições de um ciclo marcadas sob a MESMA política.
+
+    `None` continua abrindo o banco, e isso não é preguiça: `fechar()` é chamado de fora do
+    ciclo (API, pânico, auto-trader) e ali a config de agora é a certa. A versão-sintoma seria
+    memoizar `get_config()` num cache global de N segundos — barateava o mesmo laço e de quebra
+    deixava o `POST /config` demorar para valer em TODO o resto do sistema, que é afrouxar uma
+    garantia de config para pagar um problema de laço.
+    """
     if not pos["entrada"] or not pos["alavancagem"]:            # guard divisão por zero
         return 0.0, 0.0, 0.0
     d = 1 if pos["direcao"] == "LONG" else -1
@@ -121,7 +174,7 @@ def _pnl(pos, preco_saida):
     # gravado NA POSICAO (`taxa_entrada`), nao na config: as duas convivem enquanto posicoes
     # abertas a mercado ainda estao vivas, e cobrar a taxa de hoje sobre a entrada de ontem
     # inventaria lucro que nao houve. NULL = entrou a mercado.
-    t_saida = _cfg_float(db.get_config(), "taxa_por_lado", 0.0005)
+    t_saida = _cfg_float(db.get_config() if cfg is None else cfg, "taxa_por_lado", 0.0005)
     try:
         t_entrada = pos["taxa_entrada"]
     except (KeyError, IndexError):
@@ -548,11 +601,15 @@ def atualizar():
         abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
     ultima_marcacao.update(ts=str(pd.Timestamp.now()), total=len(abertas), ok=0, falhas=0,
                            ultimo_erro=None)     # zera a cada ciclo: erro velho não vira alarme eterno
+    # [F-11] Uma cotação para TODAS as posições, antes do laço. Fora do try por posição de
+    # propósito, e sem try próprio aqui: `_precos_em_lote` já devolve {} em qualquer falha, e
+    # {} significa "cada posição busca o preço dela", que é o comportamento anterior inteiro.
+    precos = _precos_em_lote([p["ativo"] for p in abertas])
     for pos in abertas:
         # try POR POSIÇÃO, não em volta do for: uma moeda que falha não pode tirar as OUTRAS
         # posições da vigilância de stop/trailing/liquidação, nem derrubar o resto do ciclo.
         try:
-            _marcar_uma(pos, trail, eventos)
+            _marcar_uma(pos, trail, eventos, cfg, precos)
             ultima_marcacao["ok"] += 1
         except Exception as e:
             ultima_marcacao["falhas"] += 1
@@ -631,10 +688,19 @@ def _trailing_novo_stop(pos, preco, d, trail):
     return None
 
 
-def _marcar_uma(pos, trail, eventos):
+def _marcar_uma(pos, trail, eventos, cfg=None, precos=None):
     """Marca UMA posição no preço ao vivo. Extraído do for de atualizar() para que o
-    try/except tenha a granularidade de uma posição — os `continue` viram `return`."""
-    preco = preco_ao_vivo(pos["ativo"])
+    try/except tenha a granularidade de uma posição — os `continue` viram `return`.
+
+    [F-12] `cfg` desce de `atualizar()` já lido, e segue para o `_pnl` — mesma razão do
+    `trail`: leitura de banco a menos, e a mesma política para todas as posições do ciclo.
+
+    [F-11] `precos` é o lote já colhido do ciclo. Ausente ou sem este ativo, o preço vem do
+    `preco_ao_vivo` de sempre — o fallback é por POSIÇÃO, dentro do try dela, então uma moeda
+    que o lote não trouxe não tira as outras da vigilância."""
+    preco = (precos or {}).get(pos["ativo"])
+    if preco is None:
+        preco = preco_ao_vivo(pos["ativo"])
     d = 1 if pos["direcao"] == "LONG" else -1
     # trailing: só sobe o stop (LONG) / só desce (SHORT). O `novo` só é aceito se andar a favor —
     # a catraca não muda de unidade, e um stop que anda para trás é um stop que o mercado escolhe.
@@ -652,7 +718,7 @@ def _marcar_uma(pos, trail, eventos):
         fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
     if hit_stop:
         return _fecha_stop(pos, eventos, preco, liq)
-    pnl, _, _ = _pnl(pos, preco)
+    pnl, _, _ = _pnl(pos, preco, cfg)
     with db.conectar() as con:                              # persiste o stop trailado (sobe entre ciclos)
         con.execute("UPDATE posicoes SET preco_atual=?, pnl=?, stop=? WHERE id=? AND status='aberta'",
                     (preco, pnl, pos["stop"], pos["id"]))
