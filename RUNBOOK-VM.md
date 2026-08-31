@@ -200,5 +200,22 @@ que **está desligado** — o código existe desde o Sprint 7 e sem token é no-
 curl -s -X POST http://127.0.0.1:8000/config      -u "admin:$DASH_PASS" -H 'Content-Type: application/json'      -d '{"telegram_token":"<TOKEN>","telegram_chat_id":"<CHAT_ID>"}'
 ```
 
+### O lock barra TODA exclusão no RG, não só a da VM
+
+Descoberto testando, não deduzido: apagar uma regra de alerta dentro de `rg-cripto-bot` volta
+`ScopeLocked`. O `CanNotDelete` vale para o grupo inteiro, então qualquer exclusão — alerta,
+regra, recurso auxiliar — passa por tirar e recolocar:
+
+```bash
+az lock delete --name protege-cripto-bot -g rg-cripto-bot
+# ... a operação que precisa apagar ...
+az lock create --name protege-cripto-bot --lock-type CanNotDelete -g rg-cripto-bot
+```
+
+Não afeta escrita: o backup diário continua subindo blob normalmente com o lock no lugar
+(conferido em 31/08 rodando o `cripto-backup.sh` com o lock ativo). O que ele impede é
+exatamente o acidente que se quer impedir — um `az group delete` levar VM, disco, IP e o
+storage dos backups de uma vez, que hoje moram todos no mesmo grupo.
+
 **Rever quando:** o e-mail do action group mudar de dono · a VM mudar de tamanho (o teto de
 100 MB foi calibrado para os 892 MiB de hoje) · o `MemoryHigh`/`MemoryMax` do §5 mudar.
