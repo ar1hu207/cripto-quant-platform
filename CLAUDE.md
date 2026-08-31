@@ -153,7 +153,8 @@ Apertar guarda pode. Afrouxar, só o dono.
 
 Versão completa: `RUNBOOK-VM.md`. Topologia e o porquê: `ARQUITETURA.md` §8.
 
-- **A VM É repositório git desde 2026-08-22** (`P2-3`), privada, por deploy key SSH read-only.
+- **A VM É repositório git desde 2026-08-22** (`P2-3`), por deploy key SSH read-only. O
+  repositório é **público**: a chave não protege leitura, protege o *push* (`RUNBOOK-VM.md` §5.0).
   Deploy é `cripto-deploy`, que aborta em cada portão (árvore suja, backup falho, `py_compile`)
   e **não religa o `auto_trade`** — religar sozinho seria o script decidindo por você que está
   tudo bem. `/health` devolve o commit rodando; rollback é `bash deploy/atualizar.sh <sha>`.

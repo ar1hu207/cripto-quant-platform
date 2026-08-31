@@ -73,7 +73,10 @@ estiver indisponível.
 
 A VM **é** repositório git. `/home/ubuntu/cripto-bot` está na branch `main`, com árvore limpa, e
 autentica no GitHub por **deploy key SSH somente-leitura** (`/home/ubuntu/.ssh/deploy_cripto`,
-600; a pública é deploy key read-only do repo — que é **privado**). Deploy é um comando:
+600; a pública é deploy key read-only do repo). ⚠️ **O repositório é PÚBLICO** —
+conferido em 31/08 por `gh repo view ar1hu207/cripto-quant-platform --json visibility`.
+A chave não guarda segredo de leitura nenhum: o que ela garante é que a VM **não consegue
+dar push**. Não escreva nada no repo contando com privacidade. Deploy é um comando:
 
 ```bash
 az vm run-command invoke -g rg-cripto-bot -n vm-cripto-bot --command-id RunShellScript   --scripts @deploy.sh --query "value[0].message" -o tsv
@@ -159,3 +162,43 @@ sqlite3 trading.db "SELECT 'equity_10min='||COUNT(*) FROM equity WHERE ts > date
 ```
 
 A última linha é o teste de vida do worker: zero por mais de ~1 min = ciclo parado.
+
+## 8. Observabilidade — o que avisa, e o que não avisa
+
+Montado em 2026-08-31. Antes disso não existia canal nenhum: se a VM morresse às 3h da manhã,
+a descoberta era abrir o painel e reparar.
+
+| Recurso | O quê |
+|---|---|
+| Action group | `ag-cripto-bot` (em `rg-cripto-bot`) → e-mail `abonizioa10@gmail.com` |
+| `cripto-vm-fora-do-ar` | sev 1 · `VmAvailabilityMetric < 1` · janela e avaliação de 5 min |
+| `cripto-memoria-baixa` | sev 2 · `Available Memory Bytes < 104857600` (100 MB) · 5 min |
+| `cripto-creditos-cpu-acabando` | sev 3 · `CPU Credits Remaining < 30` · 15 min |
+| Boot diagnostics | ligado (managed) — screenshot e serial console quando a VM não sobe |
+| Lock | `protege-cripto-bot`, `CanNotDelete`, no RG inteiro (VM, disco, IP e storage de backup) |
+
+As três regras usam **métrica de plataforma**: são medidas pelo host, não por agente dentro da
+VM, então continuam reportando mesmo com o convidado travado. Custo: `Alerts Metric Monitored`
+a US$ 0,10/mês por regra, e as 10 primeiras entram no grant gratuito.
+
+O de crédito de CPU é o menos óbvio e o mais específico desta máquina: `B2ats_v2` é
+**burstable**. Sem crédito, a CPU cai para a baseline e o ciclo do worker degrada **sem erro no
+log** — o sintoma é lentidão, não exceção, e o teste de vida do §7 continua verde enquanto isso.
+
+### O que estes alertas NÃO pegam
+
+Processo do bot morto com a VM viva · ciclo parado com processo vivo · banco corrompido ·
+trava do dia disparada. Nada disso tem métrica de plataforma. Quem cobriria é o `alertas.py`,
+que **está desligado** — o código existe desde o Sprint 7 e sem token é no-op.
+
+```bash
+# Ligar o Telegram. As chaves já estão no catálogo do POST /config (api.py:321-322) e no
+# db.CONFIG_PADRAO — é config de banco, nunca constante no módulo (CLAUDE.md §1).
+#   1. @BotFather no Telegram -> /newbot -> guardar o token
+#   2. @userinfobot -> devolve o seu chat id
+#   3. gravar (de dentro da VM; o backend só atende loopback sem credencial):
+curl -s -X POST http://127.0.0.1:8000/config      -u "admin:$DASH_PASS" -H 'Content-Type: application/json'      -d '{"telegram_token":"<TOKEN>","telegram_chat_id":"<CHAT_ID>"}'
+```
+
+**Rever quando:** o e-mail do action group mudar de dono · a VM mudar de tamanho (o teto de
+100 MB foi calibrado para os 892 MiB de hoje) · o `MemoryHigh`/`MemoryMax` do §5 mudar.
