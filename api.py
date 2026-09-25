@@ -34,7 +34,8 @@ POLL_ATUALIZAR = 15   # marca posições a cada 15s
 INTERVALO_SCAN = 60   # [P2-15] scan de sinais a cada 60s, por RELÓGIO (ver _scan_devido)
 _worker_on = {"v": True}
 _health = {"iniciado": None, "ultimo_ciclo": None, "ciclos": 0, "erros": 0}
-_saidas = {"v": []}   # recomendações de saída ativa, atualizadas pelo worker
+_saidas = {"v": [], "t": None}   # recomendações de saída ativa + monotonic do cálculo ([F-9])
+SAIDAS_TTL_S = 30     # [F-9] o painel reusa o cálculo por até 30 s em vez de pedir 2 req/posição
 _auto = {"v": {"ativo": False}}   # último ciclo do auto-trader
 _poda = {"dia": None, "ultimo": None}   # [P2-11] retenção da curva de equity, 1x/dia
 _scan_sched = {"proximo": 0.0}          # [P2-15] instante (monotonic) do próximo scan; 0 = já vence
@@ -98,6 +99,23 @@ def equity_total():
     return banca + (unreal or 0)
 
 
+def _saidas_decidem(cfg):
+    """[F-9] O auto-trader FECHA pelo gestor de saída? Só com `auto_fechar_saida` ligado E o
+    trailing desligado -- a mesma condição do passo 1 de `autotrader.auto_executar`. Fora
+    dela a recomendação não decide nada no ciclo, e calculá-la a cada 15 s por posição (livro
+    de ofertas + trades na rede) era o desperdício que o [F-9] mediu: zero `auto-saida` em 62
+    trades. Lê a condição do lugar que a aplica, para as duas não divergirem."""
+    return (autotrader._verdade(cfg.get("auto_fechar_saida", "1"))
+            and not autotrader._verdade(cfg.get("trailing_ativo", "1")))
+
+
+def _calcular_saidas():
+    abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
+    v = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
+    _saidas.update(v=v, t=time.monotonic())
+    return v
+
+
 def worker():
     _health["iniciado"] = str(pd.Timestamp.now())
     log("worker iniciado")
@@ -105,11 +123,12 @@ def worker():
         try:
             simulador.processar_ordens()                # [EX-1] ordens post-only: enche ou expira
             simulador.atualizar()                       # marca/fecha posições no preço real
-            abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
-            _saidas["v"] = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
+            # [F-9] o gestor de saída só roda no ciclo quando o auto-trader PODE agir sobre ele;
+            # com o trailing ligado (o vivo), quem pede é o painel, sob demanda (`GET /saidas`).
+            saidas = _calcular_saidas() if _saidas_decidem(db.get_config()) else []
             dca.processar_devidos()                     # aportes DCA vencidos
             try:
-                _auto["v"] = autotrader.auto_executar(_saidas["v"])   # bot abre/fecha sozinho (se ligado)
+                _auto["v"] = autotrader.auto_executar(saidas)   # bot abre/fecha sozinho (se ligado)
             except Exception as e:                      # falha do bot não derruba o snapshot de equity abaixo
                 _health["erros"] += 1
                 log(f"auto-trader erro: {e}", "error")
@@ -783,7 +802,7 @@ def reset(req: ResetReq):
                   "ON CONFLICT(chave) DO UPDATE SET valor=''")
     # estado derivado em memória: sem isto o painel exibe, até o próximo ciclo (15s),
     # recomendações de saída e um contador de marcação de posições que não existem mais.
-    _saidas["v"] = []
+    _saidas.update(v=[], t=None)
     _auto["v"] = {"ativo": False}
     simulador.ultima_marcacao.update(ts=None, total=0, ok=0, falhas=0, ultimo_erro=None)
     return {"ok": True, "trava_dia_limpa": True, "dca_apagado": req.incluir_dca}
@@ -993,7 +1012,14 @@ def book(ativo: str = "BTC/USDT"):
 
 @app.get("/saidas")
 def saidas():
-    """Recomendações de saída ativa por posição (lucro + reversão)."""
+    """Recomendações de saída ativa por posição (lucro + reversão).
+
+    [F-9] Com o trailing ligado o worker não calcula mais isto a cada ciclo; quem pede é o
+    painel, e o cálculo sai daqui, reusado por `SAIDAS_TTL_S`. Painel fechado = zero
+    requisição de rede para uma recomendação que ninguém lê."""
+    t = _saidas["t"]
+    if t is None or time.monotonic() - t > SAIDAS_TTL_S:
+        return _calcular_saidas()
     return _saidas["v"]
 
 
