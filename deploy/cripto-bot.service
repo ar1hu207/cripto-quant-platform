@@ -13,6 +13,15 @@ EnvironmentFile=/home/ubuntu/cripto-bot/.env
 ExecStart=/home/ubuntu/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
+# [vigia] Processo vivo com o ciclo parado: o `Restart=always` acima nao ve, porque o processo
+# nao morre. O worker avisa o systemd a cada ciclo COMPLETO (`api._sd_notify`); sem aviso por
+# 300 s o systemd mata o servico e o `Restart=always` o devolve. 300 = `api.VIGIA_CICLO_S`, e um
+# teste trava os dois iguais. `NotifyAccess=main` e obrigatorio com Type=simple: sem ele o aviso
+# e descartado e o bot seria reiniciado a cada 5 min com o worker perfeitamente vivo.
+# Mudou este arquivo? Ele NAO e instalado pelo `cripto-deploy`: copie para /etc/systemd/system/
+# e rode `systemctl daemon-reload` (RUNBOOK-VM.md §8).
+WatchdogSec=300
+NotifyAccess=main
 # A VM tem 892,8 MiB de RAM (MemTotal 914.284 kB). O `MemoryMax=900M` que estava aqui era
 # MAIOR que a RAM física: o teto nunca podia disparar antes do OOM killer do kernel, e a
 # vítima do kernel não é escolhida por nós — o Caddy e o sshd concorrem com o bot. O guarda

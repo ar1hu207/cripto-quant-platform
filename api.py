@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -38,6 +38,36 @@ _saidas = {"v": []}   # recomendações de saída ativa, atualizadas pelo worker
 _auto = {"v": {"ativo": False}}   # último ciclo do auto-trader
 _poda = {"dia": None, "ultimo": None}   # [P2-11] retenção da curva de equity, 1x/dia
 _scan_sched = {"proximo": 0.0}          # [P2-15] instante (monotonic) do próximo scan; 0 = já vence
+
+# [vigia] Quanto tempo sem ciclo completo conta como "o bot parou". O ciclo leva ~7,5 s
+# (F-10) mais os 15 s de sono; 300 s são ~13 ciclos perdidos, folga para um scan lento ou
+# uma rede engasgada sem virar alarme falso. É o mesmo número no watchdog do systemd
+# (`WatchdogSec` em `deploy/cripto-bot.service`) e no `/health` que a vigia externa lê.
+VIGIA_CICLO_S = 300
+_INICIO_MONO = time.monotonic()
+_vigia = {"ultimo": None}               # monotonic do último ciclo COMPLETO
+
+
+def _sd_notify(msg: bytes) -> bool:
+    """[vigia] Avisa o systemd (protocolo sd_notify) sem dependência nova. No-op fora dele.
+
+    Com `WatchdogSec` na unit, o systemd mata e reinicia o serviço se este aviso parar de
+    chegar -- que é o caso que nada cobria: processo VIVO com o ciclo parado (thread do worker
+    presa ou morta). `Restart=always` só pega processo que morre; métrica da Azure só vê a VM.
+    """
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return False
+    if addr.startswith("@"):                  # socket abstrato do Linux
+        addr = "\0" + addr[1:]
+    try:
+        import socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(addr)
+            s.sendall(msg)
+        return True
+    except (OSError, AttributeError):         # AttributeError: AF_UNIX não existe no Windows
+        return False
 
 
 def _scan_devido(agora=None):
@@ -87,6 +117,8 @@ def worker():
                 c.execute("INSERT INTO equity(ts,banca,equity_total) VALUES(?,?,?)",
                           (str(pd.Timestamp.now()), db.get_banca()["atual"], equity_total()))
             _health["ultimo_ciclo"] = str(pd.Timestamp.now())
+            _vigia["ultimo"] = time.monotonic()
+            _sd_notify(b"WATCHDOG=1")           # [vigia] só ciclo COMPLETO alimenta o watchdog
         except Exception as e:                          # nunca derruba o loop
             _health["erros"] += 1
             log(f"worker erro: {e}", "error")
@@ -646,9 +678,26 @@ def _commit_em_producao(raiz=None):
 COMMIT = _commit_em_producao()
 
 
+def _estado_vigia(agora=None):
+    """[vigia] (vivo, idade do último ciclo em s). Nos primeiros `VIGIA_CICLO_S` do processo
+    conta como vivo mesmo sem ciclo: um restart de deploy não pode virar alarme."""
+    agora = time.monotonic() if agora is None else agora
+    ultimo = _vigia["ultimo"]
+    idade = None if ultimo is None else round(agora - ultimo, 1)
+    subindo = agora - _INICIO_MONO <= VIGIA_CICLO_S
+    return (idade is not None and idade <= VIGIA_CICLO_S) or subindo, idade
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "versao": VERSAO, "commit": COMMIT}
+    # [vigia] Público de propósito: é o que a vigia externa (`.github/workflows/vigia.yml`) lê
+    # sem credencial. 503 quando o ciclo parou -- "o processo responde" deixou de bastar,
+    # porque processo vivo com worker parado era exatamente o buraco. Não expõe nada além da
+    # idade do ciclo: nem posição, nem banca, nem config.
+    vivo, idade = _estado_vigia()
+    corpo = {"status": "ok" if vivo else "ciclo parado", "versao": VERSAO, "commit": COMMIT,
+             "ciclo_ha_s": idade}
+    return corpo if vivo else JSONResponse(corpo, status_code=503)
 
 
 @app.get("/status")

@@ -1,0 +1,41 @@
+# Vigia — o aviso de "o bot parou" que nenhuma outra peca da.
+#
+# As regras de metrica da Azure (RUNBOOK-VM.md §8) veem a VM, nunca o processo. O
+# `alertas.py` so avisa de trade, e de DENTRO do processo: bot morto nao manda mensagem. O
+# watchdog do systemd reinicia o bot quando o ciclo para, mas reiniciar em silencio para
+# sempre esconde o defeito. Esta vigia olha de FORA: le o `/health` de producao, que responde
+# 503 quando o ciclo esta parado ha mais de `api.VIGIA_CICLO_S`, e falha o job. O GitHub manda
+# e-mail de job agendado que falhou para quem escreveu o cron -- o dono. Custo zero: o repo e
+# publico, e o Actions de repo publico nao cobra.
+#
+# O que ela NAO pega, dito aqui para nao virar falsa cobertura: o GitHub atrasa cron em horario
+# de pico (5-15 min e comum) e DESLIGA workflow agendado depois de 60 dias sem atividade no
+# repositorio -- se o repo parar, reative em Actions > Vigia. O hostname nao e segredo: o front
+# publico o serve em `web/config.js`.
+name: Vigia
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      # Tres tentativas com 60 s entre elas: um restart de deploy ou um engasgo de rede nao
+      # pode virar e-mail. Ciclo parado de verdade continua parado nos tres minutos.
+      - name: /health de producao responde 200
+        run: |
+          url="https://cripto-bot-24517.southafricanorth.cloudapp.azure.com/health"
+          for i in 1 2 3; do
+            code=$(curl -s -o corpo.json -w '%{http_code}' --max-time 20 "$url" || echo 000)
+            echo "tentativa $i: HTTP $code $(cat corpo.json 2>/dev/null)"
+            [ "$code" = "200" ] && exit 0
+            [ "$i" -lt 3 ] && sleep 60
+          done
+          echo "::error::Producao sem ciclo vivo ou fora do ar. Diagnostico: RUNBOOK-VM.md §7."
+          exit 1
