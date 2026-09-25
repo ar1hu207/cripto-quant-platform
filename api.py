@@ -1316,6 +1316,9 @@ def _prova_api():
           "scan" in st and "marcacao" in st)
 
     # ---------- [P2-3] /health responde QUAL commit esta rodando
+    # [vigia] a prova nao sobe o worker; um ciclo recente fixado aqui mantem o /health no
+    # ramo 200, que e o que esta prova confere (versao e commit), sem depender do relogio.
+    _vigia["ultimo"] = time.monotonic()
     print("  [P2-3] /health =", health())
     h = health()
     # a auto-checagem confere que a versao VEM DA FONTE UNICA -- nunca que ela vale um
