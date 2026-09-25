@@ -2439,3 +2439,22 @@ def test_log_inexistente_le_vazio_sem_quebrar(tmp_path):
     """Primeira maquina, primeira rodada: o log ainda nao existe e isso nao e erro."""
     assert V.ler_tentativas(str(tmp_path / "nao-existe.jsonl")) == ([], 0)
     assert V.contar_tentativas(str(tmp_path / "nao-existe.jsonl"))["varreduras"] == 0
+
+
+def test_N9b_o_log_de_tentativas_e_UM_por_clone_e_nao_um_por_worktree():
+    """[N-9b] O caminho era relativo a `validacao.py`, e aqui toda pesquisa roda em worktree:
+    cada uma tinha o seu log, e ele sumia com ela. Em 2026-09-24 nao havia um unico
+    `tentativas.jsonl` em ~30 worktrees. O log mora agora no checkout PRINCIPAL -- o pai do
+    `git-common-dir`, que e o mesmo visto de qualquer worktree."""
+    import subprocess
+    r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                       cwd=os.path.dirname(os.path.abspath(V.__file__)),
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        pytest.skip("fora de um checkout git")
+    principal = os.path.dirname(os.path.normpath(r.stdout.strip()))
+    assert os.path.normcase(V._raiz_do_clone()) == os.path.normcase(principal)
+    if "REGUA_TENTATIVAS" not in os.environ:
+        esperado = os.path.join(principal, "pesquisa", "dados_cache", "tentativas.jsonl")
+        assert os.path.normcase(V.CAMINHO_TENTATIVAS) == os.path.normcase(esperado)
+

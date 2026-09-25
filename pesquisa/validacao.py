@@ -1467,14 +1467,37 @@ def _nucleo_wf(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste
 #
 # O arquivo NAO e versionado (mora no `dados_cache/`, ignorado). Isso e limitacao declarada, nao
 # descuido: um log append-only versionado gera conflito em toda rodada e a contagem passa a ser
-# a de quem pushou por ultimo. A consequencia -- ele conta as varreduras DESTA maquina -- esta
+# a de quem pushou por ultimo. A consequencia -- ele conta as varreduras DESTE CLONE -- esta
 # no relatorio do card, para quem for decidir onde o registro definitivo deve morar.
+#
+# [N-9b] "Deste clone", e nao "desta worktree". O caminho era relativo a ESTE arquivo, e aqui
+# toda pesquisa roda em worktree (`CLAUDE.md` §6): cada uma tinha o seu log, e ele sumia com
+# ela. Em 2026-09-24 nao existia um unico `tentativas.jsonl` em nenhuma das ~30 worktrees -- o
+# registro que devia tornar o `n_trials` medido nunca acumulou nada. Achado pelo pre-registro
+# do [N-19] em 09/09 e nunca virado card. Agora o log mora no checkout PRINCIPAL do clone (o
+# pai do `git-common-dir`), o mesmo para todas as worktrees; fora de um repositorio git, cai
+# no caminho antigo.
 #
 #     python -m pesquisa.validacao tentativas        # le o log e conta
 
+
+def _raiz_do_clone():
+    """[N-9b] A raiz do checkout principal -- a mesma vista de qualquer worktree do clone."""
+    import subprocess
+    aqui = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                           cwd=aqui, capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return os.path.dirname(os.path.normpath(r.stdout.strip()))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return aqui
+
+
 CAMINHO_TENTATIVAS = os.environ.get(
     "REGUA_TENTATIVAS",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "tentativas.jsonl"))
+    os.path.join(_raiz_do_clone(), "pesquisa", "dados_cache", "tentativas.jsonl"))
 
 REGISTRAR_TENTATIVAS = True     # desligado sob pytest e dentro do golden -- ver a secao acima
 
