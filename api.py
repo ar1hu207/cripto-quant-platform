@@ -328,10 +328,16 @@ CONFIG_CATALOGO = {
 #
 # O card nasceu de uma contradição: a `BASE-CONHECIMENTO-TRADING.md`, escrita com as nossas
 # próprias medições, conclui 0,5-1% de risco e alavancagem ≤2x, e o que está vivo é 3% e
-# 10x/20x. A contradição não é o defeito — o auto-trader é um experimento declarado para ver
-# o "no edge" acontecer (`autotrader.py:8-13`), e agressividade acelera esse experimento. O
-# defeito era não estar escrito em lugar nenhum que a escolha foi deliberada, qual seria o
-# perfil conservador equivalente, e o que muda quando isto encostar em dinheiro real.
+# 10x/20x. A contradição não é o defeito — é decisão do dono, com o motivo dele: a meta é o
+# bot preparado para a semana de ganho grande (`PLANO-V2` Parte 0, 29/08), e 3%/10x é o
+# perfil que ele escolheu para ela. O defeito era não estar escrito em lugar nenhum que a
+# escolha foi deliberada, qual seria o perfil conservador equivalente, e o que muda quando
+# isto encostar em dinheiro real.
+#
+# [F-20] Até 2026-09-24 este bloco e os verbetes abaixo diziam que a agressividade existia
+# para ACELERAR um experimento de ver o "no edge" acontecer. Era a direção antiga, que o dono
+# desautorizou em 26/08 (`NORTE.md`): um racional de risco que descreve um objetivo que o
+# projeto não tem mais é o rótulo mentindo sobre o dial. Os números não mudaram — o porquê sim.
 #
 # [EX-1] Racional das chaves de execucao, para o `GET /catalogo`:
 #   exec_modo       -- "mercado" e o de hoje: o sinal vira posicao na hora, pagando taker nas
@@ -353,20 +359,25 @@ CONFIG_CATALOGO = {
 CONFIG_RACIONAL = {
     "risco_por_trade": (
         "VIVO 3%. A base (§5, linhas 178-182) põe 0,5-1% como conservador, 1-2% moderado e "
-        "chama >3% de território de ruína em sequência de perdas. MANTIDO AGRESSIVO de "
-        "propósito: o auto-trader existe para tornar visível a deriva por taxa+funding de uma "
-        "estratégia sem edge, e a 0,5% por trade essa deriva leva meses para aparecer no "
-        "equity — o experimento demoraria mais que a paciência de quem o observa. O que "
-        "torna isso aceitável não é o número, são as três guardas em volta: trava diária "
-        "sticky, teto de risco aberto e dinheiro fictício. Tire qualquer uma e 3% deixa de "
-        "ser defensável. No perfil `conservador`: 1%."),
+        "chama >3% de território de ruína em sequência de perdas. MANTIDO em 3% por decisão "
+        "do dono, e pelo motivo dele: a meta é o bot preparado para aproveitar a semana de "
+        "ganho grande, não 15-30%/ano (PLANO-V2 Parte 0). O custo fica escrito ao lado: o "
+        "[F-16] calculou 3% como ~2,8× Kelly sobre o edge estimado, e acima de 2× o "
+        "crescimento esperado é negativo mesmo com edge real. Enquanto não existir medidor "
+        "que distinga a oportunidade boa da ruim (N-10b), 3% é aposta UNIFORME, não "
+        "proporcional à evidência. O que torna o número defensável são as três guardas em "
+        "volta: trava diária sticky, teto de risco aberto e dinheiro fictício. Tire qualquer "
+        "uma e 3% deixa de ser defensável. No perfil `conservador`: 1%."),
     "alavancagem_padrao": (
         "VIVO 10x. A base (§5.4, linha 281) mede o imposto da volatilidade: a mesma "
         "estratégia de +0,1%/dia com vol 2% rende +0,08%/dia a 1x e −1,9%/dia a 10x — "
         "'a 10x a mesma estratégia vira ruína', e o nosso próprio backtest registrou que "
-        "'2x sempre pior que 1x'. MANTIDO pelo mesmo motivo do risco_por_trade, e com a "
-        "mesma condição: é o dial que acelera o experimento, não uma aposta em edge. Vale "
-        "para o fluxo manual e para o modo `auto_lev_modo=fixo`. No `conservador`: 2x."),
+        "'2x sempre pior que 1x'. Essas medições são de NOCIONAL fixo; aqui o tamanho sai do "
+        "risco (`autotrader._tamanho`): o nocional é risco/distância-do-stop e, fora dos "
+        "tetos de margem, não depende da alavancagem — então 10x decide quanta margem a posição prende e onde fica a "
+        "liquidação (~9% adversos), não quanto se perde no stop. MANTIDO por decisão do "
+        "dono, pelo mesmo motivo do risco_por_trade. Vale para o fluxo manual e para o modo "
+        "`auto_lev_modo=fixo`. No `conservador`: 2x."),
     "auto_lev_modo": (
         "VIVO \"fixo\" desde 2026-08-29 ([N-10]), e o motivo é MEDIÇÃO, não prudência. Em "
         "\"conviccao\" a alavancagem escalava com o score: 60 pontos mapeavam em `auto_lev_min` "

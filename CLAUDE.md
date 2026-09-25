@@ -12,11 +12,13 @@ divergirem, o `NORTE.md` manda e este é que se conserta.
 
 **O objetivo é lucro; a honestidade é como se chega nele.** O walk-forward + DSR já concluiu
 que **não existe edge deployável no que está implementado**, e o M4 estendeu a conclusão às
-quatro políticas de saída — inclusive à que o sistema executa ao vivo (`C trailing`: 5.342
-trades OOS em 3 anos, Sharpe anualizado 0,645, **DSR = 0,060**, `SEM EVIDÊNCIA DE EDGE`; ver
-`VEREDITO-M4.md` e `README.md`). O auto-trader roda essa estratégia ao vivo dentro de guardas
-para *ver o "no edge" acontecer* (`autotrader.py:8-14`) — e é ela que sai do ar quando entrar
-sinal com evidência. **Não maquie o resultado ruim: não ajuste parâmetro até o backtest ficar
+quatro políticas de saída — inclusive à que o sistema executava ao vivo até 31/08 (`C
+trailing` em % de preço: 5.342 trades OOS em 3 anos, Sharpe anualizado 0,645, **DSR = 0,060**,
+`SEM EVIDÊNCIA DE EDGE`; ver `VEREDITO-M4.md` e `README.md`; o vivo roda trailing em R desde
+então, `PLANO-V2` D-6). O auto-trader roda essa entrada ao vivo dentro de guardas, porque o
+log de fill do post-only só existe assim (`PLANO-V2` D-2), com o perfil de risco que o dono
+escolheu (`api.CONFIG_RACIONAL`, [F-20]) — e é ela que sai do ar quando entrar sinal com
+evidência. **Não maquie o resultado ruim: não ajuste parâmetro até o backtest ficar
 bonito.** O medido é o piso da busca, não a meta dela.
 
 **Produção:** backend na VM Azure `vm-cripto-bot` (southafricanorth,

@@ -228,11 +228,12 @@ CONFIG_PADRAO = {
 # o teto em "1/4 a 1/2 Kelly, nunca acima".
 #
 # O que estava vivo contradizia tudo isso -- e a contradicao NAO era o defeito. O defeito era
-# nao estar escrito em lugar nenhum que ela e deliberada. O auto-trader e um experimento
-# declarado para VER o "no edge" acontecer ao vivo dentro de guardas (`autotrader.py:8-13`),
-# e agressividade ACELERA um experimento assim: com 0,5% por trade e 1x de alavancagem, a
-# deriva por taxa+funding que se quer observar leva meses para aparecer no equity. Escolher
-# o agressivo e defensavel. Escolher sem escrever que se escolheu e o que o [Q-3] fecha.
+# nao estar escrito em lugar nenhum que ela e deliberada. A escolha e do dono, com o motivo
+# dele: a meta e o bot preparado para a semana de ganho grande (`PLANO-V2` Parte 0, 29/08).
+# Escolher o agressivo e defensavel. Escolher sem escrever que se escolheu e o que o [Q-3]
+# fecha. [F-20] Ate 2026-09-24 este paragrafo dizia que a agressividade existia para ACELERAR
+# um experimento de ver o "no edge" acontecer -- a direcao antiga, desautorizada em 26/08
+# (`NORTE.md`). Os numeros nao mudaram; o porque sim (`api.CONFIG_RACIONAL`).
 #
 # Por isso sao DOIS perfis e nao um numero novo:
 #
