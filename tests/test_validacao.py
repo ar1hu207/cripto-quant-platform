@@ -690,10 +690,10 @@ def test_purga_fica_ATIVA_com_os_trades_do_motor_de_verdade():
 
 
 def test_sensibilidade_roda_atribuir_so_quando_ha_ts_saida():
-    """[F3] `atribuir='saida'` virou possivel com o `ts_saida`, e mesmo assim NAO virou o
-    `PADRAO`: ele aparece como variante de diagnostico, ao lado de 'entrada'. Trocar o
-    criterio travado do veredito e decisao de dono, nao efeito colateral de um campo novo."""
-    assert V.PADRAO["atribuir"] == "entrada"
+    """[F3] `atribuir='saida'` virou possivel com o `ts_saida` e, por decisao do dono em
+    2026-09-24 ([C-4]), virou o `PADRAO`. 'entrada' continua como variante de diagnostico, ao
+    lado -- e as duas so rodam quando o gerador grava `ts_saida`."""
+    assert V.PADRAO["atribuir"] == "saida"
     sem = V.sensibilidade(_res_sintetico(mu=0.0, seed=3, n_dias=300))
     assert sem["atribuir"] == []                        # gerador sintetico nao grava ts_saida
 
@@ -704,6 +704,27 @@ def test_sensibilidade_roda_atribuir_so_quando_ha_ts_saida():
     com = V.sensibilidade(res)
     assert [nome for nome, _ in com["atribuir"]] == ["entrada", "saida"]
     assert all(r is not None for _, r in com["atribuir"])
+
+
+def test_atribuir_saida_e_o_veredito_e_cai_para_entrada_dizendo_quando_falta_ts_saida():
+    """[C-4] O veredito sai sob "saida" -- o P&L entra na serie no dia em que foi realizado.
+    Painel sem `ts_saida` nao quebra nem mente: cai para "entrada" e o resultado DIZ qual foi
+    usado (`atribuir_efetivo`), o mesmo contrato da purga. A prova de que "saida" mudou o
+    numero e o proprio trade de 2 dias: a serie do veredito bate com a atribuida na saida e
+    NAO com a atribuida na entrada."""
+    pnls = serie_ar1(300, 0.0, seed=4)
+    saidas = [T0 + (i + 2) * DIA for i in range(300)]
+    com = {(50, 22): trades_diarios(pnls, ts_saida=saidas)}
+    r = V.walk_forward(gerador_constante(com), list(com), n_trials=100)
+    assert r["atribuir_efetivo"] == "saida"
+    oos, grade = r["oos"], r["grade_oos"]
+    assert r["serie_oos"] == V.pnl_por_periodo(oos, grade, atribuir="saida")
+    assert r["serie_oos"] != V.pnl_por_periodo(oos, grade, atribuir="entrada")
+
+    sem = {(50, 22): trades_diarios(pnls)}
+    r2 = V.walk_forward(gerador_constante(sem), list(sem), n_trials=100)
+    assert r2["atribuir_efetivo"] == "entrada"
+    assert r2["padrao"]["atribuir"] == "saida"          # o pedido continua registrado
 
 
 def test_duracao_da_barra_sai_do_df_e_nao_do_default_de_tf():
@@ -1942,9 +1963,14 @@ def test_N7_o_walk_forward_continua_dando_EXATAMENTE_o_numero_de_antes():
 
     O painel e o do golden, e o numero e o que o golden congelava ANTES do [N-7]:
     Sharpe anualizado -1,14 e IC-bloco (-1,2478 ; 0,0928) na trajetoria unica do walk-forward.
+
+    [C-4] Esse numero foi medido com `atribuir="entrada"`, que era o PADRAO ate 2026-09-24. O
+    teste pede "entrada" explicitamente: o que ele guarda e o MOTOR, e o motor tem de devolver
+    o mesmo numero sob o mesmo criterio. Deixar o PADRAO novo entrar aqui trocaria a pergunta
+    ("o motor quebrou?") por outra ("a atribuicao muda o numero?"), que o golden ja responde.
     """
     por_cfg, meta = V.carregar_golden_entrada()
-    base = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward"})
+    base = V._nucleo(por_cfg, **{**V.PADRAO, "cv": "walk_forward", "atribuir": "entrada"})
     assert V.sharpe_anualizado(base["serie_oos"]) == pytest.approx(-1.14, abs=0.005)
     ic = V.bootstrap_ci(base["serie_oos"], n_boot=2000, modo="bloco", eh_serie_temporal=True,
                         block=5, seed=42)
