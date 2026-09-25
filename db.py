@@ -210,8 +210,10 @@ CONFIG_PADRAO = {
     # posicoes abertas ANTES destas colunas continuam usando (sem `stop_abertura` nao ha R
     # medivel, e inventar um seria o defeito do F-1 nascendo de novo noutra funcao).
     "trailing_unidade": "R",      # "R" = multiplo do risco-ate-o-stop da ABERTURA | "preco" = fração do preço
-    "trailing_arma_r": "1",       # [unidade=R] lucro, em R, que ARMA o trailing (1R => stop vai ao zero-a-zero)
-    "trailing_dist_r": "1",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
+    # [paridade 3R] 3R/3R desde 2026-09-09, decisao do dono sobre a autopsia da saida (5.147
+    # sinais: +0,101R/sinal em 7 de 8 recortes). Arma em +3R com o stop no zero-a-zero exato.
+    "trailing_arma_r": "3",       # [unidade=R] lucro, em R, que ARMA o trailing (arma=dist => stop vai ao zero-a-zero)
+    "trailing_dist_r": "3",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
     "trailing_dist": "0.02",      # [unidade=preco] distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
     "telegram_token": "",
     "telegram_chat_id": "",

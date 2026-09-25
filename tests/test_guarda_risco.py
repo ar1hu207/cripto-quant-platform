@@ -490,6 +490,16 @@ def _pos(pid):
         return dict(c.execute("SELECT * FROM posicoes WHERE id=?", (pid,)).fetchone())
 
 
+def _trailing_1r():
+    """A geometria em que o MECANISMO do [F-1]/[N-13] foi provado: arma em +1R, 1R de distancia.
+    Desde 2026-09-09 o default vivo e 3R/3R ([paridade 3R]) -- e os testes abaixo continuam
+    pedindo 1R/1R explicitamente porque o que eles guardam e o mecanismo (ancora imovel, catraca,
+    lado do SHORT, unidade), nao o numero do default. Quem guarda o default e o
+    `test_n13_o_default_arma_em_3R_e_leva_o_stop_ao_zero_a_zero`."""
+    db.set_config("trailing_arma_r", "1")
+    db.set_config("trailing_dist_r", "1")
+
+
 def test_f1_a_abertura_grava_as_duas_ancoras_a_mercado(banco, sem_rede):
     """Entrada 100, stop 98, R$100 a 10x: 2% x 10x x R$100 = R$20 de risco-ate-o-stop."""
     p = _pos(_abre_com_stop(sem_rede))
@@ -516,6 +526,7 @@ def test_f1_o_trailing_move_o_stop_e_NAO_move_o_risco_da_abertura(banco, sem_red
     (`valor x lev x sd_max`). Os R$177,55 medidos em producao virariam R$49,86, o numero
     pararia de ofender a vista, e continuaria sendo o risco de um stop que a posicao nunca teve
     na entrada. Corrigir a APARENCIA do sintoma e o que fecharia o card sem consertar nada."""
+    _trailing_1r()
     pid = _abre_com_stop(sem_rede)
     sem_rede(110.0)
     simulador.atualizar()
@@ -585,6 +596,7 @@ def test_f1_o_caminho_post_only_grava_as_ancoras_no_preco_do_FILL(banco, sem_red
     As ancoras saem do `preco_limite` (99,90), nao do preco de mercado no instante do fill
     (99,50): post-only significa que o preco foi NOSSO, e a posicao nasce no limite."""
     _sem_tetos()
+    _trailing_1r()
     db.set_config("exec_modo", "post_only")
     sem_rede(100.0)
     sid = semear_sinal(preco=100.0, stop=98.0)
@@ -614,6 +626,7 @@ def test_f2_as_metricas_dividem_pelo_denominador_que_nao_se_move(banco, sem_rede
     4,95R -- o que o operador de fato arriscou para ganhar aquilo. Sobre o legado (o stop
     trailado, que passou da entrada) sao menos de 1,5R. Nao e diferenca de arredondamento entre
     os dois numeros: e um fator maior que 3, no mesmo trade, no mesmo instante."""
+    _trailing_1r()
     pid = _abre_com_stop(sem_rede)
     sem_rede(110.0)
     simulador.atualizar()
@@ -652,13 +665,18 @@ def test_f2_trade_antigo_sem_a_coluna_nova_NAO_entra_na_serie(banco):
 # FRACAO DA MARGEM que o stop arrisca. O trailing arma quando o trade ganhou o que ele arrisca.
 
 
-def test_n13_o_default_arma_em_1R_e_leva_o_stop_ao_zero_a_zero(banco, sem_rede):
-    """Com `trailing_arma_r=1` e `trailing_dist_r=1`, no instante da armacao o stop cai
-    exatamente na entrada. Nao e coincidencia de numeros: e o `be_em_R=1` que a pesquisa ja
-    prescrevia do seu lado (`pesquisa/backtest_plataforma`), chegando ao vivo pela mesma porta."""
+def test_n13_o_default_arma_em_3R_e_leva_o_stop_ao_zero_a_zero(banco, sem_rede):
+    """[paridade 3R] O default e 3R/3R desde 2026-09-09 (decisao do dono sobre a autopsia da
+    saida). Com arma = dist, no instante da armacao o stop cai exatamente na entrada -- so que
+    agora em +3R, e ate la o trade anda com o stop de abertura. A +1R e a +2R o trailing NAO
+    arma: e essa corda que devolve a cauda direita que o 1R/1R cortava."""
     assert db.get_config()["trailing_unidade"] == "R"
     pid = _abre_com_stop(sem_rede)                     # entrada 100, stop 98 => 1R = 2,00
-    sem_rede(102.0)                                    # +1R
+    for preco in (102.0, 104.0):                       # +1R, +2R
+        sem_rede(preco)
+        simulador.atualizar()
+        assert _pos(pid)["stop"] == pytest.approx(98.0)
+    sem_rede(106.0)                                    # +3R
     simulador.atualizar()
     assert _pos(pid)["stop"] == pytest.approx(100.0)
 
@@ -669,6 +687,7 @@ def test_n13_com_stop_curto_o_R_arma_onde_os_2pct_de_preco_nao_armavam(banco, se
     Stop de 0,5% (1R = 0,50). A 101,00 o trade ja ganhou 2R e o trailing em R protege; a regra
     velha so olharia para 102,00, e ate la 2% de preco a 10x sao 20% de ROE correndo SEM
     protecao nenhuma. Mesmo preco, mesma posicao, so a unidade muda."""
+    _trailing_1r()
     pid = _abre_com_stop(sem_rede, stop=99.5)
     sem_rede(101.0)
     simulador.atualizar()
@@ -711,6 +730,7 @@ def test_n13_posicao_sem_ancora_cai_no_preco_em_vez_de_inventar_um_R(banco, sem_
 def test_n13_a_catraca_vale_em_R_tambem(banco, sem_rede):
     """O stop nunca anda para tras. Trocar a unidade nao pode reabrir essa porta: um trailing
     que desce e um stop que o mercado escolhe."""
+    _trailing_1r()
     pid = _abre_com_stop(sem_rede)
     sem_rede(110.0)
     simulador.atualizar()
@@ -723,6 +743,7 @@ def test_n13_a_catraca_vale_em_R_tambem(banco, sem_rede):
 def test_n13_o_short_arma_em_R_do_lado_certo(banco, sem_rede):
     """SHORT com entrada 100 e stop 102: 1R = 2,00, e o lucro e para BAIXO. A 98,00 arma e o
     stop desce ao zero-a-zero. Sinal trocado aqui viraria um trailing que persegue a perda."""
+    _trailing_1r()
     pid = _abre_com_stop(sem_rede, stop=102.0, direcao="SHORT")
     assert _pos(pid)["stop_abertura"] == pytest.approx(102.0)
     sem_rede(98.0)

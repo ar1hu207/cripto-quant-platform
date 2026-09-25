@@ -444,14 +444,18 @@ CONFIG_RACIONAL = {
         "posições abertas antes de `stop_abertura` existir, que não têm R mensurável — para "
         "elas, inventar um R a partir do stop de agora seria o defeito [F-1] renascendo."),
     "trailing_arma_r": (
-        "VIVO 1R, ASSINADO PELO DONO em 2026-08-29 (decisão D-5 do PLANO-V2 — o portão humano "
-        "da §9.8, porque isto é `toca-risco`). Lucro, em R, que ARMA o trailing. Com "
-        "`trailing_dist_r` também em 1, o stop cai no zero-a-zero EXATO no instante em que "
-        "arma — que é o `be_em_R=1` que a pesquisa já prescrevia do seu lado "
-        "(`pesquisa/backtest_plataforma`), chegando ao vivo pela mesma porta. Só vale com "
-        "`trailing_unidade=R`; sob \"preco\" quem manda é `trailing_dist`."),
+        "VIVO 3R desde 2026-09-09, decisão do dono (registrada em `config_auditoria`). Lucro, "
+        "em R, que ARMA o trailing. Com `trailing_dist_r` também em 3, o stop cai no "
+        "zero-a-zero EXATO no instante em que arma. A D-5 (29/08) tinha assinado 1R/1R; a "
+        "autópsia da saída de 07/09 mediu, sobre 5.147 sinais do próprio vivo, que 1R/1R "
+        "cortava a cauda direita — alargar para 3R/3R rendeu +0,101R por sinal, positivo em 7 "
+        "de 8 recortes, com o acerto caindo de 45% para 31% e o maior trade subindo de +7,9R "
+        "para +22,7R: convexidade, que é a meta. ⚠️ Não DESLIGUE o trailing para deixar "
+        "correr: `trailing_ativo=0` liga o `auto_fechar_saida`, que realiza em `alvo_roe` "
+        "(~0,6R) — um cortador mais apertado. Só vale com `trailing_unidade=R`; sob \"preco\" "
+        "quem manda é `trailing_dist`."),
     "trailing_dist_r": (
-        "VIVO 1R (D-5, mesma assinatura). Distância, em R, que o stop mantém atrás do preço "
+        "VIVO 3R (09/09, mesma decisão). Distância, em R, que o stop mantém atrás do preço "
         "depois de armado. Vale a pena saber ler a relação com `trailing_arma_r`: no instante "
         "em que arma, o stop vai para `entrada + (arma_r − dist_r)×R`, então dist_r > arma_r "
         "arma ABAIXO da entrada e dist_r < arma_r já arma travando lucro. Nenhum dos dois é "

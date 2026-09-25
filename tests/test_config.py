@@ -326,9 +326,9 @@ def test_p3_o_default_vivo_do_trailing_em_r_passa_no_proprio_catalogo(banco):
     import api
     for chave in TRAILING_R:
         assert api._validar_config(chave, db.CONFIG_PADRAO[chave]), chave
-    assert db.get_config()["trailing_unidade"] == "R"      # D-5: 1R arma, 1R de distancia
-    assert float(db.get_config()["trailing_arma_r"]) == 1.0
-    assert float(db.get_config()["trailing_dist_r"]) == 1.0
+    assert db.get_config()["trailing_unidade"] == "R"      # 3R arma, 3R de distancia (09/09)
+    assert float(db.get_config()["trailing_arma_r"]) == 3.0
+    assert float(db.get_config()["trailing_dist_r"]) == 3.0
 
 
 # ================================== [P-3b] o modo de alavancagem entra no perfil `experimento`

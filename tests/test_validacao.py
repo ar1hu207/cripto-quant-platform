@@ -1121,11 +1121,17 @@ def test_P1_o_DEFAULT_do_trailing_e_R_e_nao_mais_espaco_preco():
     omissao -- e este arquivo inteiro roda por omissao.
     """
     assert B.TRAILING_UNIDADE == "R"
-    assert (B.TRAILING_ARMA_R, B.TRAILING_DIST_R) == (1.0, 1.0)
+    assert (B.TRAILING_ARMA_R, B.TRAILING_DIST_R) == (3.0, 3.0)    # [paridade 3R], 09/09
     assert B.UNIDADES_TRAILING == ("R", "preco")
     with pytest.raises(ValueError, match="trailing_unidade deve ser"):
         B.backtest_ativo("X/USDT", 0, 100, 10, df=df_com_indicadores([100.0] * 70),
                          sinal_fn=sinal_em([60]), saida="trailing", trailing_unidade="atr")
+
+
+# [paridade 3R] O default do backtest acompanha o vivo e virou 3R/3R em 2026-09-09. Os testes
+# de MECANISMO abaixo continuam na geometria em que foram escritos (1R/1R, a D-5) e pedem isso
+# explicitamente: o que eles guardam e a ancora, a unidade e o lado, nao o numero do default.
+R1 = {"trailing_arma_r": 1.0, "trailing_dist_r": 1.0}
 
 
 def test_P1_em_R_o_gatilho_e_a_distancia_saem_do_stop_de_ABERTURA():
@@ -1148,20 +1154,20 @@ def test_P1_em_R_o_gatilho_e_a_distancia_saem_do_stop_de_ABERTURA():
     curto = [100.0] * 62 + [101.5] * 2 + [97.0] * 6     # pico 1,5 < 1R
     t = B.backtest_ativo("X/USDT", 0, 100, 10,
                          df=df_com_indicadores(curto, highs=list(curto), lows=list(curto)),
-                         sinal_fn=fn, saida="trailing")[0]
+                         sinal_fn=fn, saida="trailing", **R1)[0]
     assert t["motivo"] == "stop" and t["pnl"] < 0
 
     longo = [100.0] * 62 + [106.0] * 3 + [104.5] * 5    # pico 6,0 = 3R -> stop em ~104,0
     lows = list(longo)
     lows[65] = 103.9
     df = df_com_indicadores(longo, highs=list(longo), lows=lows)
-    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")[0]
+    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing", **R1)[0]
     assert t["motivo"] == "trailing" and t["pnl"] > 0
     # o MESMO df com 1R MAIOR (stop_dist=4% -> 1R~4,0): arma em 104 e poe o stop em ~102, que
     # a queda a 103,9 nao encontra -- a posicao segue aberta. Prova que gatilho e distancia
     # escalam com o R do trade, e nao com um numero fixo em preco.
     assert B.backtest_ativo("X/USDT", 0, 100, 10, df=df,
-                            sinal_fn=sinal_em([60], stop_dist=0.04), saida="trailing") == []
+                            sinal_fn=sinal_em([60], stop_dist=0.04), saida="trailing", **R1) == []
 
 
 def test_P1_o_gatilho_em_R_NAO_muda_de_significado_com_a_alavancagem_F19():
@@ -1182,7 +1188,7 @@ def test_P1_o_gatilho_em_R_NAO_muda_de_significado_com_a_alavancagem_F19():
     fn = sinal_em([60], stop_dist=0.02)
 
     def roda(lev):
-        return B.backtest_ativo("X/USDT", 0, 100, lev, df=df, sinal_fn=fn, saida="trailing")[0]
+        return B.backtest_ativo("X/USDT", 0, 100, lev, df=df, sinal_fn=fn, saida="trailing", **R1)[0]
 
     a, b = roda(2), roda(20)
     assert a["motivo"] == b["motivo"] == "trailing"
@@ -1209,7 +1215,7 @@ def test_P1_em_1R_1R_o_stop_cai_no_zero_a_zero_no_instante_em_que_ARMA():
     df = df_com_indicadores(precos, highs=list(precos), lows=list(precos))
     fn = sinal_em([60], stop_dist=0.01)
 
-    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")[0]
+    t = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing", **R1)[0]
     cheio = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing",
                              trailing_unidade="preco", trailing_dist=0.02)[0]
     assert t["motivo"] == "trailing"                    # armou: o stop subiu ate a entrada
@@ -1239,7 +1245,7 @@ def test_P1_k_ATR_FORCA_espaco_preco_e_nao_convive_em_silencio_com_o_R():
     df = df_com_indicadores(precos, highs=list(precos), lows=lows, atr=[5.0] * len(precos))
     fn = sinal_em([60], stop_dist=0.03)                 # 1R ~ 3,00
 
-    em_r = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing")
+    em_r = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida="trailing", **R1)
     assert [t["motivo"] for t in em_r] == ["trailing"]  # stop em ~103,0 -> a queda a 102,5 bate
     # o mesmo df com k=1 (5%): stop em ~101,0, a queda a 102,5 NAO bate. E `trailing_k_atr`
     # sozinho basta -- nao e preciso lembrar de passar `trailing_unidade`.
@@ -1259,9 +1265,9 @@ def test_P1_as_politicas_do_M4_continuam_reproduzindo_a_unidade_que_o_nome_prome
     por_nome = dict(V.POLITICAS_M4)
     assert por_nome["C trailing 2% fixo"]["trailing_unidade"] == "preco"
     assert por_nome["C trailing 2% fixo"]["trailing_dist"] == 0.02
-    assert por_nome["C trailing 1R/1R (vivo)"]["trailing_unidade"] == "R"
-    assert (por_nome["C trailing 1R/1R (vivo)"]["trailing_arma_r"],
-            por_nome["C trailing 1R/1R (vivo)"]["trailing_dist_r"]) == (1.0, 1.0)
+    assert por_nome["C trailing 3R/3R (vivo)"]["trailing_unidade"] == "R"
+    assert (por_nome["C trailing 3R/3R (vivo)"]["trailing_arma_r"],
+            por_nome["C trailing 3R/3R (vivo)"]["trailing_dist_r"]) == (3.0, 3.0)
     # o k*ATR nao precisa pinar: ele forca a unidade sozinho (teste acima)
     assert "trailing_unidade" not in por_nome["C trailing 3xATR"]
     # e as cinco politicas continuam distintas duas a duas -- se colapsarem, a comparacao do
@@ -1439,7 +1445,7 @@ def test_as_tres_politicas_dao_saidas_DIFERENTES_na_mesma_trajetoria():
     df = df_com_indicadores(precos, lows=lows, rsi=rsi)
     saidas = {}
     for pol in B.POLITICAS:
-        tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida=pol)
+        tr = B.backtest_ativo("X/USDT", 0, 100, 10, df=df, sinal_fn=fn, saida=pol, **R1)
         assert len(tr) == 1, (pol, tr)
         saidas[pol] = (tr[0]["motivo"], tr[0]["ts_saida"], round(tr[0]["pnl"], 4))
     assert saidas["auto"][1] < saidas["trailing"][1] < saidas["regime"][1]

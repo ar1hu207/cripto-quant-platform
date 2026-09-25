@@ -628,8 +628,8 @@ def _trailing_cfg(cfg):
     metade sob outra no ciclo em que alguém mexesse no painel."""
     return {"on": str(cfg.get("trailing_ativo", "1")) in ("1", "true", "True"),
             "unidade": str(cfg.get("trailing_unidade", "R")).strip(),
-            "arma_r": _cfg_float(cfg, "trailing_arma_r", 1.0),
-            "dist_r": _cfg_float(cfg, "trailing_dist_r", 1.0),
+            "arma_r": _cfg_float(cfg, "trailing_arma_r", 3.0),     # = db.CONFIG_PADRAO
+            "dist_r": _cfg_float(cfg, "trailing_dist_r", 3.0),
             "dist_preco": _cfg_float(cfg, "trailing_dist", 0.02)}
 
 

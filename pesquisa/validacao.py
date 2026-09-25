@@ -2020,8 +2020,9 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
 #     reproduzivel por esta tupla -- mudanca de numero em silencio, dentro do arquivo cujo
 #     trabalho e impedir isso. Com a unidade pinada, as quatro linhas historicas seguem
 #     medindo exatamente o que os seus nomes dizem;
-#   * entrou uma QUINTA linha, `C trailing 1R/1R (vivo)`, que e a politica que o sistema
-#     executa desde a assinatura do dono (`D-5`). Sem ela, `python -m pesquisa.validacao
+#   * entrou uma QUINTA linha, a politica que o sistema executa -- 1R/1R na assinatura do
+#     dono (`D-5`, 29/08), 3R/3R desde que ele alargou o vivo em 09/09 ([paridade 3R]).
+#     O rotulo acompanha o vivo, como a `D-6` manda. Sem ela, `python -m pesquisa.validacao
 #     politicas` compararia quatro politicas e NENHUMA seria a de producao -- exatamente o
 #     defeito que o [Q-12] existe para denunciar, renascido.
 #
@@ -2031,8 +2032,8 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
 POLITICAS_M4 = (
     ("A stop+flip de regime", {"saida": "regime"}),
     ("B auto-saida", {"saida": "auto"}),
-    ("C trailing 1R/1R (vivo)", {"saida": "trailing", "trailing_unidade": "R",
-                                 "trailing_arma_r": 1.0, "trailing_dist_r": 1.0}),
+    ("C trailing 3R/3R (vivo)", {"saida": "trailing", "trailing_unidade": "R",
+                                 "trailing_arma_r": 3.0, "trailing_dist_r": 3.0}),
     ("C trailing 2% fixo", {"saida": "trailing", "trailing_unidade": "preco",
                             "trailing_dist": 0.02}),
     ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0}),
