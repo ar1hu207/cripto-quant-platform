@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -34,10 +34,41 @@ POLL_ATUALIZAR = 15   # marca posições a cada 15s
 INTERVALO_SCAN = 60   # [P2-15] scan de sinais a cada 60s, por RELÓGIO (ver _scan_devido)
 _worker_on = {"v": True}
 _health = {"iniciado": None, "ultimo_ciclo": None, "ciclos": 0, "erros": 0}
-_saidas = {"v": []}   # recomendações de saída ativa, atualizadas pelo worker
+_saidas = {"v": [], "t": None}   # recomendações de saída ativa + monotonic do cálculo ([F-9])
+SAIDAS_TTL_S = 30     # [F-9] o painel reusa o cálculo por até 30 s em vez de pedir 2 req/posição
 _auto = {"v": {"ativo": False}}   # último ciclo do auto-trader
 _poda = {"dia": None, "ultimo": None}   # [P2-11] retenção da curva de equity, 1x/dia
 _scan_sched = {"proximo": 0.0}          # [P2-15] instante (monotonic) do próximo scan; 0 = já vence
+
+# [vigia] Quanto tempo sem ciclo completo conta como "o bot parou". O ciclo leva ~7,5 s
+# (F-10) mais os 15 s de sono; 300 s são ~13 ciclos perdidos, folga para um scan lento ou
+# uma rede engasgada sem virar alarme falso. É o mesmo número no watchdog do systemd
+# (`WatchdogSec` em `deploy/cripto-bot.service`) e no `/health` que a vigia externa lê.
+VIGIA_CICLO_S = 300
+_INICIO_MONO = time.monotonic()
+_vigia = {"ultimo": None}               # monotonic do último ciclo COMPLETO
+
+
+def _sd_notify(msg: bytes) -> bool:
+    """[vigia] Avisa o systemd (protocolo sd_notify) sem dependência nova. No-op fora dele.
+
+    Com `WatchdogSec` na unit, o systemd mata e reinicia o serviço se este aviso parar de
+    chegar -- que é o caso que nada cobria: processo VIVO com o ciclo parado (thread do worker
+    presa ou morta). `Restart=always` só pega processo que morre; métrica da Azure só vê a VM.
+    """
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return False
+    if addr.startswith("@"):                  # socket abstrato do Linux
+        addr = "\0" + addr[1:]
+    try:
+        import socket
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(addr)
+            s.sendall(msg)
+        return True
+    except (OSError, AttributeError):         # AttributeError: AF_UNIX não existe no Windows
+        return False
 
 
 def _scan_devido(agora=None):
@@ -68,6 +99,23 @@ def equity_total():
     return banca + (unreal or 0)
 
 
+def _saidas_decidem(cfg):
+    """[F-9] O auto-trader FECHA pelo gestor de saída? Só com `auto_fechar_saida` ligado E o
+    trailing desligado -- a mesma condição do passo 1 de `autotrader.auto_executar`. Fora
+    dela a recomendação não decide nada no ciclo, e calculá-la a cada 15 s por posição (livro
+    de ofertas + trades na rede) era o desperdício que o [F-9] mediu: zero `auto-saida` em 62
+    trades. Lê a condição do lugar que a aplica, para as duas não divergirem."""
+    return (autotrader._verdade(cfg.get("auto_fechar_saida", "1"))
+            and not autotrader._verdade(cfg.get("trailing_ativo", "1")))
+
+
+def _calcular_saidas():
+    abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
+    v = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
+    _saidas.update(v=v, t=time.monotonic())
+    return v
+
+
 def worker():
     _health["iniciado"] = str(pd.Timestamp.now())
     log("worker iniciado")
@@ -75,11 +123,12 @@ def worker():
         try:
             simulador.processar_ordens()                # [EX-1] ordens post-only: enche ou expira
             simulador.atualizar()                       # marca/fecha posições no preço real
-            abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
-            _saidas["v"] = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
+            # [F-9] o gestor de saída só roda no ciclo quando o auto-trader PODE agir sobre ele;
+            # com o trailing ligado (o vivo), quem pede é o painel, sob demanda (`GET /saidas`).
+            saidas = _calcular_saidas() if _saidas_decidem(db.get_config()) else []
             dca.processar_devidos()                     # aportes DCA vencidos
             try:
-                _auto["v"] = autotrader.auto_executar(_saidas["v"])   # bot abre/fecha sozinho (se ligado)
+                _auto["v"] = autotrader.auto_executar(saidas)   # bot abre/fecha sozinho (se ligado)
             except Exception as e:                      # falha do bot não derruba o snapshot de equity abaixo
                 _health["erros"] += 1
                 log(f"auto-trader erro: {e}", "error")
@@ -87,6 +136,8 @@ def worker():
                 c.execute("INSERT INTO equity(ts,banca,equity_total) VALUES(?,?,?)",
                           (str(pd.Timestamp.now()), db.get_banca()["atual"], equity_total()))
             _health["ultimo_ciclo"] = str(pd.Timestamp.now())
+            _vigia["ultimo"] = time.monotonic()
+            _sd_notify(b"WATCHDOG=1")           # [vigia] só ciclo COMPLETO alimenta o watchdog
         except Exception as e:                          # nunca derruba o loop
             _health["erros"] += 1
             log(f"worker erro: {e}", "error")
@@ -328,10 +379,16 @@ CONFIG_CATALOGO = {
 #
 # O card nasceu de uma contradição: a `BASE-CONHECIMENTO-TRADING.md`, escrita com as nossas
 # próprias medições, conclui 0,5-1% de risco e alavancagem ≤2x, e o que está vivo é 3% e
-# 10x/20x. A contradição não é o defeito — o auto-trader é um experimento declarado para ver
-# o "no edge" acontecer (`autotrader.py:8-13`), e agressividade acelera esse experimento. O
-# defeito era não estar escrito em lugar nenhum que a escolha foi deliberada, qual seria o
-# perfil conservador equivalente, e o que muda quando isto encostar em dinheiro real.
+# 10x/20x. A contradição não é o defeito — é decisão do dono, com o motivo dele: a meta é o
+# bot preparado para a semana de ganho grande (`PLANO-V2` Parte 0, 29/08), e 3%/10x é o
+# perfil que ele escolheu para ela. O defeito era não estar escrito em lugar nenhum que a
+# escolha foi deliberada, qual seria o perfil conservador equivalente, e o que muda quando
+# isto encostar em dinheiro real.
+#
+# [F-20] Até 2026-09-24 este bloco e os verbetes abaixo diziam que a agressividade existia
+# para ACELERAR um experimento de ver o "no edge" acontecer. Era a direção antiga, que o dono
+# desautorizou em 26/08 (`NORTE.md`): um racional de risco que descreve um objetivo que o
+# projeto não tem mais é o rótulo mentindo sobre o dial. Os números não mudaram — o porquê sim.
 #
 # [EX-1] Racional das chaves de execucao, para o `GET /catalogo`:
 #   exec_modo       -- "mercado" e o de hoje: o sinal vira posicao na hora, pagando taker nas
@@ -353,20 +410,25 @@ CONFIG_CATALOGO = {
 CONFIG_RACIONAL = {
     "risco_por_trade": (
         "VIVO 3%. A base (§5, linhas 178-182) põe 0,5-1% como conservador, 1-2% moderado e "
-        "chama >3% de território de ruína em sequência de perdas. MANTIDO AGRESSIVO de "
-        "propósito: o auto-trader existe para tornar visível a deriva por taxa+funding de uma "
-        "estratégia sem edge, e a 0,5% por trade essa deriva leva meses para aparecer no "
-        "equity — o experimento demoraria mais que a paciência de quem o observa. O que "
-        "torna isso aceitável não é o número, são as três guardas em volta: trava diária "
-        "sticky, teto de risco aberto e dinheiro fictício. Tire qualquer uma e 3% deixa de "
-        "ser defensável. No perfil `conservador`: 1%."),
+        "chama >3% de território de ruína em sequência de perdas. MANTIDO em 3% por decisão "
+        "do dono, e pelo motivo dele: a meta é o bot preparado para aproveitar a semana de "
+        "ganho grande, não 15-30%/ano (PLANO-V2 Parte 0). O custo fica escrito ao lado: o "
+        "[F-16] calculou 3% como ~2,8× Kelly sobre o edge estimado, e acima de 2× o "
+        "crescimento esperado é negativo mesmo com edge real. Enquanto não existir medidor "
+        "que distinga a oportunidade boa da ruim (N-10b), 3% é aposta UNIFORME, não "
+        "proporcional à evidência. O que torna o número defensável são as três guardas em "
+        "volta: trava diária sticky, teto de risco aberto e dinheiro fictício. Tire qualquer "
+        "uma e 3% deixa de ser defensável. No perfil `conservador`: 1%."),
     "alavancagem_padrao": (
         "VIVO 10x. A base (§5.4, linha 281) mede o imposto da volatilidade: a mesma "
         "estratégia de +0,1%/dia com vol 2% rende +0,08%/dia a 1x e −1,9%/dia a 10x — "
         "'a 10x a mesma estratégia vira ruína', e o nosso próprio backtest registrou que "
-        "'2x sempre pior que 1x'. MANTIDO pelo mesmo motivo do risco_por_trade, e com a "
-        "mesma condição: é o dial que acelera o experimento, não uma aposta em edge. Vale "
-        "para o fluxo manual e para o modo `auto_lev_modo=fixo`. No `conservador`: 2x."),
+        "'2x sempre pior que 1x'. Essas medições são de NOCIONAL fixo; aqui o tamanho sai do "
+        "risco (`autotrader._tamanho`): o nocional é risco/distância-do-stop e, fora dos "
+        "tetos de margem, não depende da alavancagem — então 10x decide quanta margem a posição prende e onde fica a "
+        "liquidação (~9% adversos), não quanto se perde no stop. MANTIDO por decisão do "
+        "dono, pelo mesmo motivo do risco_por_trade. Vale para o fluxo manual e para o modo "
+        "`auto_lev_modo=fixo`. No `conservador`: 2x."),
     "auto_lev_modo": (
         "VIVO \"fixo\" desde 2026-08-29 ([N-10]), e o motivo é MEDIÇÃO, não prudência. Em "
         "\"conviccao\" a alavancagem escalava com o score: 60 pontos mapeavam em `auto_lev_min` "
@@ -433,14 +495,18 @@ CONFIG_RACIONAL = {
         "posições abertas antes de `stop_abertura` existir, que não têm R mensurável — para "
         "elas, inventar um R a partir do stop de agora seria o defeito [F-1] renascendo."),
     "trailing_arma_r": (
-        "VIVO 1R, ASSINADO PELO DONO em 2026-08-29 (decisão D-5 do PLANO-V2 — o portão humano "
-        "da §9.8, porque isto é `toca-risco`). Lucro, em R, que ARMA o trailing. Com "
-        "`trailing_dist_r` também em 1, o stop cai no zero-a-zero EXATO no instante em que "
-        "arma — que é o `be_em_R=1` que a pesquisa já prescrevia do seu lado "
-        "(`pesquisa/backtest_plataforma`), chegando ao vivo pela mesma porta. Só vale com "
-        "`trailing_unidade=R`; sob \"preco\" quem manda é `trailing_dist`."),
+        "VIVO 3R desde 2026-09-09, decisão do dono (registrada em `config_auditoria`). Lucro, "
+        "em R, que ARMA o trailing. Com `trailing_dist_r` também em 3, o stop cai no "
+        "zero-a-zero EXATO no instante em que arma. A D-5 (29/08) tinha assinado 1R/1R; a "
+        "autópsia da saída de 07/09 mediu, sobre 5.147 sinais do próprio vivo, que 1R/1R "
+        "cortava a cauda direita — alargar para 3R/3R rendeu +0,101R por sinal, positivo em 7 "
+        "de 8 recortes, com o acerto caindo de 45% para 31% e o maior trade subindo de +7,9R "
+        "para +22,7R: convexidade, que é a meta. ⚠️ Não DESLIGUE o trailing para deixar "
+        "correr: `trailing_ativo=0` liga o `auto_fechar_saida`, que realiza em `alvo_roe` "
+        "(~0,6R) — um cortador mais apertado. Só vale com `trailing_unidade=R`; sob \"preco\" "
+        "quem manda é `trailing_dist`."),
     "trailing_dist_r": (
-        "VIVO 1R (D-5, mesma assinatura). Distância, em R, que o stop mantém atrás do preço "
+        "VIVO 3R (09/09, mesma decisão). Distância, em R, que o stop mantém atrás do preço "
         "depois de armado. Vale a pena saber ler a relação com `trailing_arma_r`: no instante "
         "em que arma, o stop vai para `entrada + (arma_r − dist_r)×R`, então dist_r > arma_r "
         "arma ABAIXO da entrada e dist_r < arma_r já arma travando lucro. Nenhum dos dois é "
@@ -631,9 +697,26 @@ def _commit_em_producao(raiz=None):
 COMMIT = _commit_em_producao()
 
 
+def _estado_vigia(agora=None):
+    """[vigia] (vivo, idade do último ciclo em s). Nos primeiros `VIGIA_CICLO_S` do processo
+    conta como vivo mesmo sem ciclo: um restart de deploy não pode virar alarme."""
+    agora = time.monotonic() if agora is None else agora
+    ultimo = _vigia["ultimo"]
+    idade = None if ultimo is None else round(agora - ultimo, 1)
+    subindo = agora - _INICIO_MONO <= VIGIA_CICLO_S
+    return (idade is not None and idade <= VIGIA_CICLO_S) or subindo, idade
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "versao": VERSAO, "commit": COMMIT}
+    # [vigia] Público de propósito: é o que a vigia externa (`.github/workflows/vigia.yml`) lê
+    # sem credencial. 503 quando o ciclo parou -- "o processo responde" deixou de bastar,
+    # porque processo vivo com worker parado era exatamente o buraco. Não expõe nada além da
+    # idade do ciclo: nem posição, nem banca, nem config.
+    vivo, idade = _estado_vigia()
+    corpo = {"status": "ok" if vivo else "ciclo parado", "versao": VERSAO, "commit": COMMIT,
+             "ciclo_ha_s": idade}
+    return corpo if vivo else JSONResponse(corpo, status_code=503)
 
 
 @app.get("/status")
@@ -719,7 +802,7 @@ def reset(req: ResetReq):
                   "ON CONFLICT(chave) DO UPDATE SET valor=''")
     # estado derivado em memória: sem isto o painel exibe, até o próximo ciclo (15s),
     # recomendações de saída e um contador de marcação de posições que não existem mais.
-    _saidas["v"] = []
+    _saidas.update(v=[], t=None)
     _auto["v"] = {"ativo": False}
     simulador.ultima_marcacao.update(ts=None, total=0, ok=0, falhas=0, ultimo_erro=None)
     return {"ok": True, "trava_dia_limpa": True, "dca_apagado": req.incluir_dca}
@@ -929,7 +1012,14 @@ def book(ativo: str = "BTC/USDT"):
 
 @app.get("/saidas")
 def saidas():
-    """Recomendações de saída ativa por posição (lucro + reversão)."""
+    """Recomendações de saída ativa por posição (lucro + reversão).
+
+    [F-9] Com o trailing ligado o worker não calcula mais isto a cada ciclo; quem pede é o
+    painel, e o cálculo sai daqui, reusado por `SAIDAS_TTL_S`. Painel fechado = zero
+    requisição de rede para uma recomendação que ninguém lê."""
+    t = _saidas["t"]
+    if t is None or time.monotonic() - t > SAIDAS_TTL_S:
+        return _calcular_saidas()
     return _saidas["v"]
 
 
@@ -1226,6 +1316,9 @@ def _prova_api():
           "scan" in st and "marcacao" in st)
 
     # ---------- [P2-3] /health responde QUAL commit esta rodando
+    # [vigia] a prova nao sobe o worker; um ciclo recente fixado aqui mantem o /health no
+    # ramo 200, que e o que esta prova confere (versao e commit), sem depender do relogio.
+    _vigia["ultimo"] = time.monotonic()
     print("  [P2-3] /health =", health())
     h = health()
     # a auto-checagem confere que a versao VEM DA FONTE UNICA -- nunca que ela vale um

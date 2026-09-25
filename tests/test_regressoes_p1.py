@@ -216,8 +216,9 @@ class _ExContado:
 
 @pytest.fixture
 def corretora_contada(banco, monkeypatch):
-    """Substitui os clientes ccxt dos TRES modulos do ciclo. Sao objetos distintos, criados
-    no import de cada modulo: trocar so um deles daria uma contagem menor que a real."""
+    """Substitui os clientes ccxt dos TRES modulos do ciclo, pelos cinco NOMES. Desde o
+    [memoria] eles apontam para dois objetos (`mercado.ex_spot`/`ex_fut`), mas cada modulo chama
+    pelo seu nome: trocar so um deles daria uma contagem menor que a real."""
     fake = _ExContado()
     for modulo, nome in [(signal_engine, "ex"), (simulador, "ex"), (simulador, "ex_fut"),
                          (mercado, "ex_spot"), (mercado, "ex_fut")]:

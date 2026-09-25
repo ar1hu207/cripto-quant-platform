@@ -210,8 +210,10 @@ CONFIG_PADRAO = {
     # posicoes abertas ANTES destas colunas continuam usando (sem `stop_abertura` nao ha R
     # medivel, e inventar um seria o defeito do F-1 nascendo de novo noutra funcao).
     "trailing_unidade": "R",      # "R" = multiplo do risco-ate-o-stop da ABERTURA | "preco" = fração do preço
-    "trailing_arma_r": "1",       # [unidade=R] lucro, em R, que ARMA o trailing (1R => stop vai ao zero-a-zero)
-    "trailing_dist_r": "1",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
+    # [paridade 3R] 3R/3R desde 2026-09-09, decisao do dono sobre a autopsia da saida (5.147
+    # sinais: +0,101R/sinal em 7 de 8 recortes). Arma em +3R com o stop no zero-a-zero exato.
+    "trailing_arma_r": "3",       # [unidade=R] lucro, em R, que ARMA o trailing (arma=dist => stop vai ao zero-a-zero)
+    "trailing_dist_r": "3",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
     "trailing_dist": "0.02",      # [unidade=preco] distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
     "telegram_token": "",
     "telegram_chat_id": "",
@@ -228,11 +230,12 @@ CONFIG_PADRAO = {
 # o teto em "1/4 a 1/2 Kelly, nunca acima".
 #
 # O que estava vivo contradizia tudo isso -- e a contradicao NAO era o defeito. O defeito era
-# nao estar escrito em lugar nenhum que ela e deliberada. O auto-trader e um experimento
-# declarado para VER o "no edge" acontecer ao vivo dentro de guardas (`autotrader.py:8-13`),
-# e agressividade ACELERA um experimento assim: com 0,5% por trade e 1x de alavancagem, a
-# deriva por taxa+funding que se quer observar leva meses para aparecer no equity. Escolher
-# o agressivo e defensavel. Escolher sem escrever que se escolheu e o que o [Q-3] fecha.
+# nao estar escrito em lugar nenhum que ela e deliberada. A escolha e do dono, com o motivo
+# dele: a meta e o bot preparado para a semana de ganho grande (`PLANO-V2` Parte 0, 29/08).
+# Escolher o agressivo e defensavel. Escolher sem escrever que se escolheu e o que o [Q-3]
+# fecha. [F-20] Ate 2026-09-24 este paragrafo dizia que a agressividade existia para ACELERAR
+# um experimento de ver o "no edge" acontecer -- a direcao antiga, desautorizada em 26/08
+# (`NORTE.md`). Os numeros nao mudaram; o porque sim (`api.CONFIG_RACIONAL`).
 #
 # Por isso sao DOIS perfis e nao um numero novo:
 #

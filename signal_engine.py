@@ -16,7 +16,6 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
-import ccxt
 import pandas as pd
 
 import db
@@ -24,7 +23,7 @@ from logbot import log
 import mercado
 from scoring import preparar, pontuar, pontuar_reversao
 
-ex = ccxt.binance({"enableRateLimit": True})
+ex = mercado.ex_spot                # [memoria] o cliente do processo, nao uma copia (~110 MB cada)
 
 
 # ---------------------------------------------------- [F-10] cache de velas ate o fechamento
@@ -594,9 +593,11 @@ class _Espiao:
 def _espioes(contador):
     """Troca os clientes ccxt dos tres modulos do ciclo por espioes. Devolve o restaurador.
 
-    Sao cinco objetos e nao um: cada modulo instancia o seu no import (`signal_engine.ex`,
-    `simulador.ex`/`ex_fut`, `mercado.ex_spot`/`ex_fut`), e contar so um deles daria um numero
-    MENOR que o real justamente na conta que existe para expor o excesso.
+    Sao cinco NOMES e, desde o [memoria] (2026-09-24), dois objetos: `signal_engine.ex` e
+    `simulador.ex` apontam para `mercado.ex_spot`, e `simulador.ex_fut` para `mercado.ex_fut`.
+    Cada modulo chama pelo SEU nome, e o espiao e posto por nome -- trocar so um deixaria de
+    contar as chamadas feitas pelos outros, um numero MENOR que o real justamente na conta que
+    existe para expor o excesso.
     """
     import simulador
     alvos = [(sys.modules[__name__], "ex"), (simulador, "ex"), (simulador, "ex_fut"),

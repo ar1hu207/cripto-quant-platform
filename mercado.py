@@ -15,6 +15,13 @@ import ccxt
 
 import db
 
+# [memoria] Os DOIS clientes ccxt do processo inteiro. `simulador` e `signal_engine` apontam para
+# estes em vez de instanciar os seus: cada `ccxt.binance` carrega a tabela de mercados inteira da
+# Binance (4.650 mercados, spot + perp + futuro) e ela custa ~110 MB de RSS por copia -- medido em
+# 2026-09-24. Eram tres copias do spot e duas do perp num processo de ~470 MB numa VM de 892 MiB.
+# Este `ex_spot` ja era compartilhado entre o worker e as rotas da API; compartilhar com os outros
+# dois modulos nao cria concorrencia nova. Os testes continuam trocando `simulador.ex` e
+# `signal_engine.ex` por NOME de modulo (monkeypatch), o que segue valendo.
 ex_spot = ccxt.binance({"enableRateLimit": True})
 ex_fut = ccxt.binanceusdm({"enableRateLimit": True})
 _cache = {"sent": None, "sent_t": 0.0}

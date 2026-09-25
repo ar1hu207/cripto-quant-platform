@@ -58,12 +58,19 @@ def test_nenhum_modulo_repete_a_string_da_versao():
                          "VERSAO`. Copia e o que deixou o `0.3` parado por seis meses")
 
 
-def test_health_devolve_versao_da_fonte_unica_E_o_commit():
+def test_health_devolve_versao_da_fonte_unica_E_o_commit(monkeypatch):
     """Os dois, sempre. `versao` responde "o que e isto"; `commit` responde "qual codigo esta
     rodando" -- e as duas maquinas na mesma versao podem estar em commits diferentes, porque a
     `main` avanca e o deploy e ato deliberado (`CLAUDE.md` 5). Trocar um pelo outro devolve o
-    painel ao estado em que ele mentia."""
+    painel ao estado em que ele mentia.
+
+    [vigia] O `/health` responde 503 quando o ciclo do worker parou -- e sob pytest o worker
+    nunca sobe. Este teste fixa um ciclo recente porque o assunto dele e versao e commit; a
+    vida do ciclo tem teste proprio (`tests/test_vigia.py`). Sem isto ele passava ou falhava
+    pela DURACAO da suite (graca de 300 s do processo), que e o pior tipo de teste."""
+    import time
     api = pytest.importorskip("api")
+    monkeypatch.setattr(api, "_vigia", {"ultimo": time.monotonic()})
     h = api.health()
     assert h["status"] == "ok"
     assert h["versao"] == versao.VERSAO

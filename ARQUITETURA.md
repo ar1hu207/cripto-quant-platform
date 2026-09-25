@@ -19,10 +19,11 @@ posições, escaneia sinais por relógio, e um auto-trader opcional abre e fecha
 guardas de risco.
 
 A postura importa para entender o desenho: o walk-forward + DSR já concluiu que **não há edge
-comprovado** (`README.md` §"O veredito": DSR = 0,004 na tendência). O auto-trader existe para
-*ver o "no edge" acontecer ao vivo dentro de guardas* — está escrito no cabeçalho do módulo,
-`autotrader.py:8-13`. Consequência de arquitetura, não de humor: **o valor do sistema está nas
-guardas e na paridade backtest↔live**, e é isso que o resto deste documento protege.
+comprovado** (`README.md` §"O veredito": DSR = 0,004 na tendência). O objetivo é lucro
+(`NORTE.md`), e o auto-trader roda essa entrada ao vivo dentro de guardas até entrar sinal com
+evidência — o porquê está no cabeçalho do módulo (`autotrader.py:8-16`). Consequência de
+arquitetura, não de humor: **o valor do sistema está nas guardas e na paridade
+backtest↔live**, e é isso que o resto deste documento protege.
 
 ---
 

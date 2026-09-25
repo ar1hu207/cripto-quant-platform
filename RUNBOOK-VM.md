@@ -16,9 +16,11 @@ verdade em 2026-08-22 (backup, transferências, deploy do M1); nada é teoria.
 
 ## 2. Acesso: esqueça o SSH, use o plano de controle
 
-O NSG libera a porta 22 para **um único IP**, e o IP do dono é residencial dinâmico — o SSH
-morre com *Connection timed out* toda vez que a rede dele muda, sem aviso. **Não conserte a
-regra de NSG**: é fronteira do classificador (`CLAUDE.md` §8).
+A regra `ssh` do NSG está em **`Deny`** desde 2026-09-24. Ela liberava a porta 22 para um
+único IP residencial dinâmico, e naquela data o IP liberado (`187.101.26.74`) já não era o do
+dono: a porta ficava aberta para quem herdasse aquele IP, e fechada para o dono. **Não
+reabra a regra**: é fronteira do classificador (`CLAUDE.md` §8), e o caminho abaixo não
+precisa dela.
 
 O caminho que sempre funciona não passa pela rede:
 
@@ -185,15 +187,35 @@ O de crédito de CPU é o menos óbvio e o mais específico desta máquina: `B2a
 **burstable**. Sem crédito, a CPU cai para a baseline e o ciclo do worker degrada **sem erro no
 log** — o sintoma é lentidão, não exceção, e o teste de vida do §7 continua verde enquanto isso.
 
-### O que estes alertas NÃO pegam
+### O que estes alertas NÃO pegam — e o que passou a pegar (2026-09-24)
 
-Processo do bot morto com a VM viva · ciclo parado com processo vivo · banco corrompido ·
-trava do dia disparada. Nada disso tem métrica de plataforma. Quem cobriria é o `alertas.py`,
-que **está desligado** — o código existe desde o Sprint 7 e sem token é no-op.
+As três regras veem a VM, nunca o processo. Processo morto com a VM viva, ciclo parado com
+o processo vivo e banco que quebra o ciclo ficavam invisíveis. A afirmação que estava aqui
+— *"quem cobriria é o `alertas.py`"* — **era falsa**: ele só avisa de trade aberto e fechado,
+e de DENTRO do processo. Bot morto não manda mensagem dizendo que morreu. E publicar métrica
+própria na Azure exige `az role assignment create`, que a assinatura Students recusa (§8 do
+`CLAUDE.md`). O que cobre hoje, sem custo e sem token:
+
+| camada | o quê | o que faz |
+|---|---|---|
+| auto-cura | `WatchdogSec=300` + `NotifyAccess=main` na unit; o worker avisa a cada ciclo COMPLETO (`api._sd_notify`) | 5 min sem ciclo → o systemd mata e o `Restart=always` devolve |
+| sinal | `/health` público responde **503** com `"status": "ciclo parado"` e `ciclo_ha_s` | nos primeiros 300 s do processo responde 200 (restart de deploy não vira alarme) |
+| aviso | `.github/workflows/vigia.yml`, a cada 15 min, 3 tentativas | falhou → o GitHub manda **e-mail** ao dono |
+
+`trava do dia disparada` não é incidente: é a guarda funcionando, e o painel mostra.
+
+⚠️ **A unit NÃO é instalada pelo `cripto-deploy`.** Depois de mergear uma mudança nela:
 
 ```bash
-# Ligar o Telegram. As chaves já estão no catálogo do POST /config (api.py:321-322) e no
-# db.CONFIG_PADRAO — é config de banco, nunca constante no módulo (CLAUDE.md §1).
+sudo cp /home/ubuntu/cripto-bot/deploy/cripto-bot.service /etc/systemd/system/cripto-bot.service
+sudo systemctl daemon-reload && sudo systemctl restart cripto-bot
+systemctl show cripto-bot -p WatchdogUSec -p NotifyAccess -p MemoryMax   # 5min / main / 796917760
+```
+
+O Telegram continua opcional, e para o que ele é: notificação de **trade**. As chaves já
+estão no catálogo do `POST /config` e no `db.CONFIG_PADRAO`:
+
+```bash
 #   1. @BotFather no Telegram -> /newbot -> guardar o token
 #   2. @userinfobot -> devolve o seu chat id
 #   3. gravar (de dentro da VM; o backend só atende loopback sem credencial):

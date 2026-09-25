@@ -60,5 +60,5 @@ jobs:
           fi
           echo "ok: nenhum src=http em web/"
 
-      - name: Suite completa (793 testes)
+      - name: Suite completa
         run: python -m pytest

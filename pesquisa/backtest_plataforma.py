@@ -106,8 +106,10 @@ ROE_MIN_LUCRO = 1.0
 # `"preco"` continua inteiro, e nao por nostalgia: e o que mantem `POLITICAS_M4` reproduzindo os
 # numeros do M4 e a varredura de geometria do [Q-8]/[Q-9] rodando na unidade em que foi medida.
 TRAILING_UNIDADE = "R"
-TRAILING_ARMA_R = 1.0        # espelha `db.CONFIG_PADRAO["trailing_arma_r"]` (D-5)
-TRAILING_DIST_R = 1.0        # espelha `db.CONFIG_PADRAO["trailing_dist_r"]` (D-5)
+# [paridade 3R] 3R/3R desde 2026-09-09 (o dono alargou o vivo depois da autopsia da saida; a
+# D-5 de 29/08 era 1R/1R). A D-6 manda a pesquisa acompanhar o vivo, entao o espelho anda junto.
+TRAILING_ARMA_R = 3.0        # espelha `db.CONFIG_PADRAO["trailing_arma_r"]`
+TRAILING_DIST_R = 3.0        # espelha `db.CONFIG_PADRAO["trailing_dist_r"]`
 TRAILING_DIST = 0.02         # so no caminho `trailing_unidade="preco"` (a politica ANTIGA)
 UNIDADES_TRAILING = ("R", "preco")
 

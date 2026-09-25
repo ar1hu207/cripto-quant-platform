@@ -53,11 +53,12 @@ O que o `T-EDGE` (onda 3 do M4) destravou, e que ate 2026-08-23 estava desligado
     negativa -- deixa de estar presente e nao medido (F13). Numero que mudar por causa disso
     e o instrumento funcionando, nao regressao.
   * `atribuir="saida"` (`ITEM1` §3.3 / F3): a revisao quer o P&L atribuido ao dia da SAIDA,
-    porque e onde ele e realizado. Isso passou a ser POSSIVEL, e mesmo assim o `PADRAO`
-    continua `"entrada"`: trocar o criterio travado do veredito e decisao de dono, nao efeito
-    colateral de um campo novo ([F3] existe justamente para o criterio nao virar grau de
-    liberdade). A variante roda em `sensibilidade()`, que imprime as duas lado a lado sempre
-    -- que e o lugar onde uma escolha se torna auditavel sem virar escolha de quem chama.
+    porque e onde ele e realizado. Isso passou a ser POSSIVEL em 23/08 e o `PADRAO` ficou em
+    `"entrada"` ate o dono decidir: trocar o criterio travado do veredito e decisao de dono,
+    nao efeito colateral de um campo novo ([F3] existe justamente para o criterio nao virar
+    grau de liberdade). **[C-4] O dono decidiu em 2026-09-24: `"saida"`.** A variante
+    `"entrada"` continua em `sensibilidade()`, impressa lado a lado sempre -- que e o lugar
+    onde a troca fica auditavel sem virar escolha de quem chama.
 """
 import datetime
 import hashlib
@@ -175,7 +176,7 @@ PADRAO = {
     "cv": "cpcv",               # [N-7] "cpcv" | "walk_forward" (o antigo, hoje diagnostico)
     "criterio": "sharpe",
     "modo": "expandindo",       # so tem efeito em cv="walk_forward"
-    "atribuir": "entrada",      # "saida" ja e possivel (ha `ts_saida`); trocar e do dono
+    "atribuir": "saida",        # [C-4] decisao do dono, 2026-09-24; sem `ts_saida` cai p/ "entrada" e avisa
     "block": 5,
     "purga": True,              # pedida sempre; desliga sozinha e avisa se faltar ts_saida
     "gap_pre_teste_ms": 0,
@@ -1377,9 +1378,18 @@ def _nucleo(por_cfg, *, cv="cpcv", modo="expandindo", embargo_frac=CPCV_EMBARGO_
     """
     if cv not in CVS:
         raise ValueError(f"cv deve ser um de {CVS}, veio {cv!r}")
-    if cv == "cpcv":
-        return _nucleo_cpcv(por_cfg, embargo_frac=embargo_frac, **kw)
-    return _nucleo_wf(por_cfg, modo=modo, **kw)
+    # [C-4] "saida" e o PADRAO desde 2026-09-24, e todo gerador real grava `ts_saida`. Painel
+    # que nao grava (sintetico de teste, gerador antigo) cai para "entrada" -- o mesmo contrato
+    # da purga: pedida sempre, desliga sozinha e DIZ que desligou (`atribuir_efetivo`). Levantar
+    # erro aqui quebraria todo painel sem o campo; cair calado deixaria o relatorio afirmar um
+    # criterio que nao foi o usado.
+    if kw.get("atribuir") == "saida" and not _tem_ts_saida(por_cfg):
+        kw["atribuir"] = "entrada"
+    r = (_nucleo_cpcv(por_cfg, embargo_frac=embargo_frac, **kw) if cv == "cpcv"
+         else _nucleo_wf(por_cfg, modo=modo, **kw))
+    if r is not None:
+        r["atribuir_efetivo"] = kw.get("atribuir")
+    return r
 
 
 def _nucleo_wf(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste_ms,
@@ -1457,14 +1467,37 @@ def _nucleo_wf(por_cfg, *, criterio, modo, atribuir, block, purga, gap_pre_teste
 #
 # O arquivo NAO e versionado (mora no `dados_cache/`, ignorado). Isso e limitacao declarada, nao
 # descuido: um log append-only versionado gera conflito em toda rodada e a contagem passa a ser
-# a de quem pushou por ultimo. A consequencia -- ele conta as varreduras DESTA maquina -- esta
+# a de quem pushou por ultimo. A consequencia -- ele conta as varreduras DESTE CLONE -- esta
 # no relatorio do card, para quem for decidir onde o registro definitivo deve morar.
+#
+# [N-9b] "Deste clone", e nao "desta worktree". O caminho era relativo a ESTE arquivo, e aqui
+# toda pesquisa roda em worktree (`CLAUDE.md` §6): cada uma tinha o seu log, e ele sumia com
+# ela. Em 2026-09-24 nao existia um unico `tentativas.jsonl` em nenhuma das ~30 worktrees -- o
+# registro que devia tornar o `n_trials` medido nunca acumulou nada. Achado pelo pre-registro
+# do [N-19] em 09/09 e nunca virado card. Agora o log mora no checkout PRINCIPAL do clone (o
+# pai do `git-common-dir`), o mesmo para todas as worktrees; fora de um repositorio git, cai
+# no caminho antigo.
 #
 #     python -m pesquisa.validacao tentativas        # le o log e conta
 
+
+def _raiz_do_clone():
+    """[N-9b] A raiz do checkout principal -- a mesma vista de qualquer worktree do clone."""
+    import subprocess
+    aqui = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                           cwd=aqui, capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return os.path.dirname(os.path.normpath(r.stdout.strip()))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return aqui
+
+
 CAMINHO_TENTATIVAS = os.environ.get(
     "REGUA_TENTATIVAS",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "dados_cache", "tentativas.jsonl"))
+    os.path.join(_raiz_do_clone(), "pesquisa", "dados_cache", "tentativas.jsonl"))
 
 REGISTRAR_TENTATIVAS = True     # desligado sob pytest e dentro do golden -- ver a secao acima
 
@@ -1669,6 +1702,7 @@ def walk_forward(gerar_trades, grid, *, n_trials, rotulo="", m_calibracao=M_CONT
            "padrao": dict(PADRAO), "purga_ativa": PADRAO["purga"] and base["tem_ts_saida"],
            "purga_motivo": ("" if base["tem_ts_saida"] else
                             "o gerador nao grava ts_saida nos trades"),
+           "atribuir_efetivo": base["atribuir_efetivo"],
            "sensibilidade_n_trials": sensibilidade_n_trials(serie_naive),
            # o numero antigo, preservado para o contraste do relatorio
            "dsr_legado_trades": deflated_sharpe([t["pnl"] for t in base["oos"]], n_trials),
@@ -1817,9 +1851,9 @@ def sensibilidade(res):
         r = _nucleo(por_cfg, **{**PADRAO, "cv": "walk_forward", "modo": m})
         fora["modo"].append((m, _resumo_variante(r, n_trials)))
     # `atribuir` so entra aqui depois que o gerador passou a gravar `ts_saida`. Enquanto o
-    # campo faltava, "saida" nem era rodavel; agora que e, ele NAO vira default em silencio --
-    # vira linha de diagnostico ao lado de "entrada", que e onde a revisao (F3/`ITEM1` §3.3)
-    # pode ser conferida sem que o veredito passe a depender da escolha.
+    # campo faltava, "saida" nem era rodavel. Desde o [C-4] (2026-09-24) "saida" e o PADRAO,
+    # por decisao do dono e nao em silencio; "entrada" segue aqui como linha de diagnostico,
+    # que e onde a troca pode ser conferida sem que alguem tenha de rodar o commit anterior.
     if _tem_ts_saida(por_cfg):
         for at in ATRIBUIR:
             r = _nucleo(por_cfg, **{**PADRAO, "atribuir": at})
@@ -2009,8 +2043,9 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
 #     reproduzivel por esta tupla -- mudanca de numero em silencio, dentro do arquivo cujo
 #     trabalho e impedir isso. Com a unidade pinada, as quatro linhas historicas seguem
 #     medindo exatamente o que os seus nomes dizem;
-#   * entrou uma QUINTA linha, `C trailing 1R/1R (vivo)`, que e a politica que o sistema
-#     executa desde a assinatura do dono (`D-5`). Sem ela, `python -m pesquisa.validacao
+#   * entrou uma QUINTA linha, a politica que o sistema executa -- 1R/1R na assinatura do
+#     dono (`D-5`, 29/08), 3R/3R desde que ele alargou o vivo em 09/09 ([paridade 3R]).
+#     O rotulo acompanha o vivo, como a `D-6` manda. Sem ela, `python -m pesquisa.validacao
 #     politicas` compararia quatro politicas e NENHUMA seria a de producao -- exatamente o
 #     defeito que o [Q-12] existe para denunciar, renascido.
 #
@@ -2020,8 +2055,8 @@ def gerador_tendencia(dfs, estrategia, funding_8h, saida_kw=None):
 POLITICAS_M4 = (
     ("A stop+flip de regime", {"saida": "regime"}),
     ("B auto-saida", {"saida": "auto"}),
-    ("C trailing 1R/1R (vivo)", {"saida": "trailing", "trailing_unidade": "R",
-                                 "trailing_arma_r": 1.0, "trailing_dist_r": 1.0}),
+    ("C trailing 3R/3R (vivo)", {"saida": "trailing", "trailing_unidade": "R",
+                                 "trailing_arma_r": 3.0, "trailing_dist_r": 3.0}),
     ("C trailing 2% fixo", {"saida": "trailing", "trailing_unidade": "preco",
                             "trailing_dist": 0.02}),
     ("C trailing 3xATR", {"saida": "trailing", "trailing_k_atr": 3.0}),
@@ -2437,6 +2472,10 @@ def relatorio(res):
           f"modo={p['modo']} atribuir={p['atribuir']} block={p['block']} "
           f"n_boot={p['n_boot']} seed={p['seed']}")
     print(f"purga: {'ATIVA' if res['purga_ativa'] else 'INATIVA -- ' + res['purga_motivo']}")
+    ae = res.get("atribuir_efetivo", p["atribuir"])
+    print(f"atribuir: {ae}" + ("" if ae == p["atribuir"] else
+                               f" -- o PADRAO pede {p['atribuir']!r}, e o gerador nao grava "
+                               f"ts_saida nos trades [C-4]"))
     print(f"n_trials = {res['n_trials']} (PISO CONTADO, nao estimativa)")
     cal = res.get("calibracao")
     if cal:
@@ -2796,6 +2835,7 @@ def golden_snapshot(res):
         "n_trials": res["n_trials"],
         "padrao": res["padrao"],
         "purga_ativa": bool(res["purga_ativa"]),
+        "atribuir_efetivo": res["atribuir_efetivo"],
         "naive_cfg": res["naive_cfg"],
         "por_fold": res["por_fold"],
         "veredito_classe": v["classe"],

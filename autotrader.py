@@ -2,16 +2,18 @@
 Auto-trader (EXPERIMENTO) — executa trades sozinho no preço real (paper trading).
 
 A cada ciclo do worker: pega os MELHORES sinais novos (maior convicção, ja passaram
-pelos portões do scan), dimensiona pelo risco e ABRE a posição automaticamente; e
-fecha sozinho quando o gestor de saída aponta reversão com lucro.
+pelos portões do scan), dimensiona pelo risco e ABRE a posição automaticamente. Quem
+fecha é o stop/trailing do `simulador`; o gestor de saída só fecha sozinho com o
+trailing DESLIGADO (`auto_fechar_saida`, passo 1 abaixo) — com ele ligado, que é o vivo,
+a recomendação dele vai para o painel (`GET /saidas`) e a decisão é de quem olha.
 
-IMPORTANTE — o objetivo do projeto e LUCRO. A confluência técnica, que e o que este
-auto-trader executa, nao mostrou edge ate hoje (walk-forward + DSR ~0), entao o
-esperado AQUI e o bot DERIVAR pra perda por causa de taxa + alavancagem: rodar ao
-vivo dentro das guardas e como se ve isso acontecer — e e esta estratégia que sai do
-ar quando entrar sinal com evidência. Roda dentro dos mesmos portões de risco (trava
-diária + teto de exposição), entao e um experimento CONTROLADO, nao um cassino sem
-freio.
+IMPORTANTE — o objetivo do projeto e LUCRO (`NORTE.md`). A confluência técnica, que e o
+que este auto-trader executa, nao mostrou edge na régua ate hoje (walk-forward + DSR ~0,
+e o [Q-4] mediu retorno direcional negativo na ENTRADA), e e esta estratégia que sai do
+ar quando entrar sinal com evidência. Roda ao vivo porque o log de fill e de markout do
+post-only só existe assim (`PLANO-V2` D-2), com o perfil de risco que o dono escolheu
+(`api.CONFIG_RACIONAL`, [F-20]), e dentro dos mesmos portões de risco (trava diária +
+teto de exposição): experimento CONTROLADO, nao um cassino sem freio.
 
 Liga/desliga: config auto_trade = "1"/"0".
 """
