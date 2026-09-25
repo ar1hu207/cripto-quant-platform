@@ -5,7 +5,6 @@ Dinheiro fictício; preço de verdade.
 """
 import threading
 
-import ccxt
 import pandas as pd
 
 import db
@@ -13,8 +12,8 @@ import alertas
 import mercado                      # [F-11] `mercado.precos`: 1 request por LISTA de ativos
 from logbot import log
 
-ex = ccxt.binance({"enableRateLimit": True})
-ex_fut = ccxt.binanceusdm({"enableRateLimit": True})   # funding (perp)
+ex = mercado.ex_spot                # [memoria] o cliente do processo, nao uma copia (~110 MB cada)
+ex_fut = mercado.ex_fut             # funding (perp)
 LIQ_BUFFER = 0.9   # liquida quando a perda chega a ~90% da margem (buffer de manutenção)
 _abrir_lock = threading.Lock()   # serializa aberturas concorrentes (worker + API) — evita TOCTOU no teto
 
