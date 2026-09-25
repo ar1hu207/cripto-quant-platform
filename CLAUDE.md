@@ -56,7 +56,7 @@ de propósito — não conserte esses imports (`legado/README.md`).
 ```bash
 pip install -r requirements.txt && uvicorn api:app --port 8000  # local; painel em :8000
 pip install -r requirements-dev.txt
-python -m pytest                    # 594 testes (~3 min) — rode antes de mergear
+python -m pytest                    # ~810 testes (3-5 min) — rode antes de mergear; o CI roda também
 python -m pytest -m "not lento"     # laço rápido, sem a prova de 1 ano de curva de equity
 python -m pesquisa.validacao        # a régua (da RAIZ; `python pesquisa/validacao.py` NÃO roda)
 python -c "import api"              # smoke da plataforma
@@ -164,8 +164,9 @@ Versão completa: `RUNBOOK-VM.md`. Topologia e o porquê: `ARQUITETURA.md` §8.
 - **Nunca deploye copiando arquivo de uma árvore Windows.** Foi assim no M1 e os quatro `.py`
   chegaram em CRLF: rodam igual, mas o md5 deixa de bater justamente nos arquivos que o deploy
   toca (o `.gitattributes` normaliza em checkout, não em `tar`). O caminho é `git checkout`.
-- **SSH quase sempre falha**: o NSG libera 1 IP e o do dono é dinâmico. Não conserte a regra
-  (bloqueado, §8) — use `az vm run-command invoke ... --scripts @arquivo.sh`. Três armadilhas:
+- **SSH está fechado** desde 2026-09-24: a regra `ssh` do NSG ficou em `Deny` (o IP que ela
+  liberava não era mais o do dono). Não reabra (§8) — use `az vm run-command invoke ...
+  --scripts @arquivo.sh`. Três armadilhas:
   aspas aninhadas em script inline quebram no meio (**sempre `@arquivo`**); a saída trunca em
   4.095 chars; uma execução por vez (`Conflict` se sobrepor).
 - **Backup diário**: cron 03:17 → Azure Blob, de **dentro para fora**. O SAS em

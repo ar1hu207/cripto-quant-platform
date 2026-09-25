@@ -16,9 +16,11 @@ verdade em 2026-08-22 (backup, transferências, deploy do M1); nada é teoria.
 
 ## 2. Acesso: esqueça o SSH, use o plano de controle
 
-O NSG libera a porta 22 para **um único IP**, e o IP do dono é residencial dinâmico — o SSH
-morre com *Connection timed out* toda vez que a rede dele muda, sem aviso. **Não conserte a
-regra de NSG**: é fronteira do classificador (`CLAUDE.md` §8).
+A regra `ssh` do NSG está em **`Deny`** desde 2026-09-24. Ela liberava a porta 22 para um
+único IP residencial dinâmico, e naquela data o IP liberado (`187.101.26.74`) já não era o do
+dono: a porta ficava aberta para quem herdasse aquele IP, e fechada para o dono. **Não
+reabra a regra**: é fronteira do classificador (`CLAUDE.md` §8), e o caminho abaixo não
+precisa dela.
 
 O caminho que sempre funciona não passa pela rede:
 
