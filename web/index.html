@@ -2,8 +2,19 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Cripto Bot — Terminal</title>
+<!-- App instalavel (PWA): o mesmo painel, aberto da tela inicial em tela cheia. viewport-fit=cover
+     + black-translucent deixam o app ocupar a area do notch; quem devolve a folga e o
+     env(safe-area-inset-*) da topbar e da statusbar (ver "app instalado" no CSS). -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#171924">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cripto Bot">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- Inter, e so Inter: e o que o CMC usa em 647 de 647 elementos com texto (medido). Sem face de
@@ -500,7 +511,21 @@
     .sb-hora{margin-left:0}
     /* topbar em tres linhas: a conta do #tvchart cresce junto */
     #tvchart{height:calc(100vh - var(--sb-h) - 300px)}
+    /* No celular os cinco tiles empilhados enchiam a primeira tela inteira antes de qualquer
+       posicao ou sinal. Duas colunas, com o equity na largura toda: o resumo cabe em meia tela. */
+    .tiles{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+    .tile-eq{grid-column:1/-1}
+    .tile{padding:12px}
+    .tile .val{font-size:var(--fs-300)}
+    .tile-eq .val{font-size:var(--fs-800)}
+    .spark{margin:auto -12px -12px}
   }
+  /* ---------- app instalado ----------
+     Com viewport-fit=cover o app desenha embaixo do notch e da barra de gestos. env() vale 0
+     no navegador comum e no desktop, entao estas linhas so agem onde ha o que desviar. Ficam
+     DEPOIS dos @media de largura porque o padding deles e shorthand e apagaria esta folga. */
+  .topbar{padding-top:max(8px,env(safe-area-inset-top))}
+  .statusbar{padding-bottom:max(7px,env(safe-area-inset-bottom))}
 
   /* modal */
   /* Backdrop no --overlay-bg, que e o --c-color-overlay-bg do CMC. Era rgba(6,10,22,.72), navy
@@ -1817,6 +1842,10 @@ requestAnimationFrame(folgaStatusBar);
 if(window.ResizeObserver){ const sb=document.querySelector('.statusbar');
   if(sb)new ResizeObserver(folgaStatusBar).observe(sb); }
 else window.addEventListener('resize',folgaStatusBar);
+
+// App instalavel: o service worker guarda so a casca (ver web/sw.js). Ele so existe em https
+// ou localhost; no http da VM o navegador recusa e o painel segue igual, sem app.
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
