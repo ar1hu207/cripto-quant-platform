@@ -6,4 +6,4 @@
 // Front separado no Vercel: troque pela URL **HTTPS** do backend na VM Azure, ex:
 //   window.API_BASE = "https://meu-bot.brazilsouth.cloudapp.azure.com";
 // Tem que ser https:// — página HTTPS não pode chamar http:// (mixed content).
-window.API_BASE = "https://cripto-bot-24517.southafricanorth.cloudapp.azure.com";
+window.API_BASE = "https://arthur-dl380.taild8de53.ts.net";

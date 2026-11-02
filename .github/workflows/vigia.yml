@@ -30,7 +30,7 @@ jobs:
       # pode virar e-mail. Ciclo parado de verdade continua parado nos tres minutos.
       - name: /health de producao responde 200
         run: |
-          url="https://cripto-bot-24517.southafricanorth.cloudapp.azure.com/health"
+          url="https://arthur-dl380.taild8de53.ts.net/health"
           for i in 1 2 3; do
             code=$(curl -s -o corpo.json -w '%{http_code}' --max-time 20 "$url" || echo 000)
             echo "tentativa $i: HTTP $code $(cat corpo.json 2>/dev/null)"
