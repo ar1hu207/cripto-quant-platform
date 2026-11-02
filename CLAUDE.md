@@ -21,9 +21,11 @@ escolheu (`api.CONFIG_RACIONAL`, [F-20]) — e é ela que sai do ar quando entra
 evidência. **Não maquie o resultado ruim: não ajuste parâmetro até o backtest ficar
 bonito.** O medido é o piso da busca, não a meta dela.
 
-**Produção:** backend na VM Azure `vm-cripto-bot` (southafricanorth,
-`cripto-bot-24517.southafricanorth.cloudapp.azure.com`) · front no Vercel
-(`cripto-quant-dashboard.vercel.app`) · banco SQLite `trading.db` **na VM** — o local está vazio.
+**Produção:** backend no contêiner `arthur` do dl380, usuário Linux `cripto`, desde 2026-11-02,
+publicado por Tailscale Funnel (`arthur-dl380.taild8de53.ts.net`) · front no Vercel
+(`cripto-quant-dashboard.vercel.app`) · banco SQLite `trading.db` **no dl380** — o local está vazio.
+A VM Azure caiu com a assinatura (`SpendingLimitReached`) e guarda o histórico anterior a 02/11:
+§5 e o `RUNBOOK-VM.md` descrevem essa VM, e o que mudou está no topo do runbook.
 Como o sistema funciona por dentro, com `arquivo:linha`: **`ARQUITETURA.md`**.
 
 ---

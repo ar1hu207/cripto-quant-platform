@@ -3,6 +3,25 @@
 **Versão completa do operacional que o `CLAUDE.md` §5 resume.** Tudo aqui foi executado de
 verdade em 2026-08-22 (backup, transferências, deploy do M1); nada é teoria.
 
+## 0. Produção saiu da Azure em 2026-11-02
+
+A assinatura foi suspensa em 02/11 02:30 UTC (`SpendingLimitReached`, crédito de US$100 de
+estudante) e desalocou a VM. Quem consumiu foi a `vm-dev-box`, na mesma assinatura. Disco e blob
+seguem lá, inacessíveis até reativar: **o histórico anterior a 02/11 só existe neles.** O resto
+deste runbook descreve a VM e **não vale para o dl380**.
+
+| | |
+|---|---|
+| Host | dl380 do Rogério, contêiner `arthur` (`ssh dl380`, login do Cloudflare Access vence em 24 h) |
+| App | `/home/cripto/cripto-bot/`, usuário `cripto`, serviço systemd `cripto-bot` em `127.0.0.1:8000` |
+| Unit | a de `deploy/cripto-bot.service` trocando `ubuntu` por `cripto`, mais `Environment=TZ=America/Sao_Paulo` (o contêiner é UTC e compartilhado) |
+| Entrada | Tailscale Funnel, tailnet do dono: `https://arthur-dl380.taild8de53.ts.net` |
+| Python | 3.12 por `uv`, no usuário `cripto`; o sistema tem 3.13 e o CI roda 3.12 |
+
+**`cripto-deploy` não existe aqui**, e `deploy/atualizar.sh` tem o caminho da VM fixo. **Backup
+ainda não existe**: disco único, sem cron, e o blob está fora. Medido em 02/11 com `auto_trade=0`:
+1,5% de uma thread, 387 MB de RAM, 72/72 no scan.
+
 ## 1. Fatos
 
 | | |
