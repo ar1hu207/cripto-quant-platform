@@ -395,10 +395,10 @@ def test_f12_a_config_do_ciclo_e_a_MESMA_para_todas_as_posicoes(banco, sem_rede,
     real = simulador._marcar_uma
     vistos = []
 
-    def espiando(pos, trail, eventos, cfg=None, precos=None):
+    def espiando(pos, trail, eventos, cfg=None, precos=None, tp=None):
         vistos.append((cfg or {}).get("taxa_por_lado"))
         db.set_config("taxa_por_lado", "0.009")      # alguem mexe no painel no meio do laco
-        return real(pos, trail, eventos, cfg, precos)
+        return real(pos, trail, eventos, cfg, precos, tp)
 
     monkeypatch.setattr(simulador, "_marcar_uma", espiando)
     simulador.atualizar()

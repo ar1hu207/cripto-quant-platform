@@ -177,6 +177,8 @@ CONFIG_PADRAO = {
     # FORA da usada para construi-lo), e no dia em que passar a escala volta com fundamento --
     # ligada por config, sem re-implementar nada.
     "auto_lev_modo": "fixo",      # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
+                                  # | "risco"=[LEV-1] risco_por_trade / (stop x margem por slot), ver autotrader._lev_por_risco
+    "auto_lev_margem_frac": "0",  # [LEV-1] margem por trade (fração da banca); 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min": "2",          # alavancagem na convicção mínima
     "auto_lev_max": "20",         # TETO de alavancagem (na convicção máxima)
                                   # [Q-3] DIVERGE da base, e encosta no ponto de virada da
@@ -215,6 +217,15 @@ CONFIG_PADRAO = {
     "trailing_arma_r": "3",       # [unidade=R] lucro, em R, que ARMA o trailing (arma=dist => stop vai ao zero-a-zero)
     "trailing_dist_r": "3",       # [unidade=R] distância, em R, que o stop mantém atrás do pico
     "trailing_dist": "0.02",      # [unidade=preco] distância do trailing (2% atrás do pico) — ativa quando o lucro passa disso
+    # [TP-1] Take profit por ESTRUTURA (suporte/resistência + Fibonacci), saída em parcelas.
+    # Nasce DESLIGADO: ligar é decisão do dono, pelo POST /config. Ver `alvos.py`.
+    "tp_ativo": "0",              # 1 = realiza nos alvos TP1/TP2/TP3
+    "tp_n": "3",                  # quantos alvos por posição
+    "tp_fracoes": "0.34,0.33,0.33",  # fração da posição ORIGINAL em cada TP (o último leva o resto)
+    "tp_min_r": "1",              # alvo mais perto permitido, em R (abaixo disso não paga o risco)
+    "tp_max_r": "12",             # alvo mais longe considerado, em R
+    "tp_forca_min": "2",          # força mínima da zona (pivô 4h=2, pivô 1h=1, Fibo=1) p/ ter prioridade
+    "tp_fallback_r": "2,4,6",     # sem estrutura suficiente, alvos em múltiplos de R
     "telegram_token": "",
     "telegram_chat_id": "",
 }
@@ -354,7 +365,8 @@ def _migrar(c):
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
-                              ("stop_abertura", "REAL"), ("risco_abertura", "REAL")],
+                              ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),
+                              ("tps", "TEXT")],   # [TP-1] plano de take profit, JSON (alvos.calcular)
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
                             ("risco_inicial", "REAL"), ("funding", "REAL"),
                             ("ret_pct_liq", "REAL"),

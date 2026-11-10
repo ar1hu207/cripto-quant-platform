@@ -111,6 +111,38 @@ def _cap_geometrico(lev, stop_dist, ativo=None):
     return capada
 
 
+def _lev_por_risco(cfg, stop_dist):
+    """[LEV-1] Alavancagem que sai da conta do trade, e não de um número cravado.
+
+    O tamanho já sai do risco: nocional = banca x risco_por_trade / distância-do-stop. Falta
+    decidir só QUANTA MARGEM esse nocional prende, e é isso que a alavancagem é aqui. A conta:
+
+        margem por trade = banca x m,   m = exposicao_max / auto_max_posicoes  (0,5/5 = 10%)
+        alavancagem      = nocional / margem = risco_por_trade / (stop_dist x m)
+
+    Stop curto pede nocional grande e portanto mais alavancagem; stop largo, menos. Com isso
+    todo slot prende a MESMA fatia de margem, e as N posições cabem no teto de exposição em vez
+    de uma posição de stop largo comer a margem das outras. `auto_lev_margem_frac` > 0 fixa o
+    `m` à mão.
+
+    Arredonda PARA CIMA: para baixo a margem passaria de `m` e o último slot não caberia no
+    teto. Quem garante a liquidação atrás do stop continua sendo o `_cap_geometrico`, que vem
+    por cima em `_alavancagem` -- e se ele baixar a alavancagem, a margem sobe, e o teto de
+    exposição do ciclo (`budget`) segue valendo.
+
+    O que esta conta NÃO faz, dito para não haver ilusão: não muda o P&L em reais. O R$ perdido
+    no stop e ganho no alvo é `risco_por_trade`; a alavancagem só decide margem e liquidação."""
+    import math
+    risco = float(cfg.get("risco_por_trade", 0.01))
+    m = float(cfg.get("auto_lev_margem_frac", 0) or 0)
+    if m <= 0:
+        expo = float(cfg.get("exposicao_max", 0.5) or 0)
+        n = float(cfg.get("auto_max_posicoes", 5) or 0)
+        m = expo / n if expo > 0 and n > 0 else 0.10
+    lev = math.ceil(risco / (stop_dist * m) - 1e-9)
+    return float(max(1, min(lev, float(cfg.get("auto_lev_max", 20)))))
+
+
 def _alavancagem(cfg, conviccao, stop_dist=None, ativo=None):
     """Alavancagem do trade. Modo 'conviccao': escala LINEAR da convicção mínima (lev_min) até
     100 (lev_max=teto), arredondada e limitada a [lev_min, lev_max]. Modo 'fixo': alavancagem_padrao.
@@ -122,6 +154,8 @@ def _alavancagem(cfg, conviccao, stop_dist=None, ativo=None):
     propósito — `lev_min` é o piso da escala de convicção, nunca foi garantia de risco.
 
     Sem `stop_dist` (chamada antiga, ou sinal sem stop) nada muda: sem geometria não há cap."""
+    if cfg.get("auto_lev_modo", "conviccao") == "risco" and stop_dist and stop_dist > 0:
+        return _cap_geometrico(_lev_por_risco(cfg, stop_dist), stop_dist, ativo)
     if cfg.get("auto_lev_modo", "conviccao") != "conviccao":
         return _cap_geometrico(float(cfg.get("alavancagem_padrao", 10)), stop_dist, ativo)
     lev_min = float(cfg.get("auto_lev_min", 2))

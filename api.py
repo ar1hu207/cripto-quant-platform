@@ -347,7 +347,8 @@ CONFIG_CATALOGO = {
     "auto_fechar_saida":    ("bool",),
     "auto_freshness_min":   ("float", 0.5, 1440.0),
     "auto_cooldown_min":    ("float", 0.0, 1440.0),
-    "auto_lev_modo":        ("enum", ("conviccao", "fixo")),
+    "auto_lev_modo":        ("enum", ("conviccao", "fixo", "risco")),
+    "auto_lev_margem_frac": ("float", 0.0, 1.0),      # [LEV-1] 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min":         ("float", 1.0, 50.0),
     "auto_lev_max":         ("float", 1.0, 50.0),
     "trailing_ativo":       ("bool",),
@@ -367,6 +368,15 @@ CONFIG_CATALOGO = {
     "trailing_arma_r":      ("float", 0.1, 10.0),
     "trailing_dist_r":      ("float", 0.1, 10.0),
     "trailing_dist":        ("float", 0.001, 0.5),
+    # [TP-1] take profit por estrutura (alvos.py). Pisos: alvo a menos de 0,3R não paga a
+    # taxa de ida e volta com folga; fração precisa somar algo > 0 (normalizada em alvos.fracoes).
+    "tp_ativo":             ("bool",),
+    "tp_n":                 ("int", 1, 5),
+    "tp_fracoes":           ("texto", 60),
+    "tp_min_r":             ("float", 0.3, 10.0),
+    "tp_max_r":             ("float", 1.0, 30.0),
+    "tp_forca_min":         ("float", 0.0, 20.0),
+    "tp_fallback_r":        ("texto", 60),
     # estado / integrações
     "trava_dia_em":         ("data",),
     "telegram_token":       ("texto", 200),

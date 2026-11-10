@@ -3,12 +3,14 @@ Sprint 2 - Motor de simulação. Transforma um sinal confirmado em posição sim
 no preço REAL ao vivo, com alavancagem, taxa, funding e LIQUIDAÇÃO. Persiste no banco.
 Dinheiro fictício; preço de verdade.
 """
+import json
 import threading
 
 import pandas as pd
 
 import db
 import alertas
+import alvos                        # [TP-1] take profit por estrutura (suporte/resistência + Fibo)
 import mercado                      # [F-11] `mercado.precos`: 1 request por LISTA de ativos
 from logbot import log
 
@@ -595,6 +597,7 @@ def atualizar():
     deixa o lucro correr e trava o ganho. Inverte a assimetria: ganha grande, perde pequeno."""
     cfg = db.get_config()
     trail = _trailing_cfg(cfg)
+    tp = alvos.cfg_tp(cfg)                                  # [TP-1] mesma política p/ o ciclo todo
     eventos = []
     with db.conectar() as con:
         abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
@@ -608,7 +611,7 @@ def atualizar():
         # try POR POSIÇÃO, não em volta do for: uma moeda que falha não pode tirar as OUTRAS
         # posições da vigilância de stop/trailing/liquidação, nem derrubar o resto do ciclo.
         try:
-            _marcar_uma(pos, trail, eventos, cfg, precos)
+            _marcar_uma(pos, trail, eventos, cfg, precos, tp)
             ultima_marcacao["ok"] += 1
         except Exception as e:
             ultima_marcacao["falhas"] += 1
@@ -687,7 +690,7 @@ def _trailing_novo_stop(pos, preco, d, trail):
     return None
 
 
-def _marcar_uma(pos, trail, eventos, cfg=None, precos=None):
+def _marcar_uma(pos, trail, eventos, cfg=None, precos=None, tp=None):
     """Marca UMA posição no preço ao vivo. Extraído do for de atualizar() para que o
     try/except tenha a granularidade de uma posição — os `continue` viram `return`.
 
@@ -717,10 +720,136 @@ def _marcar_uma(pos, trail, eventos, cfg=None, precos=None):
         fechar(pos["id"], "liquidacao", liq); eventos.append((pos["id"], "LIQUIDADO")); return
     if hit_stop:
         return _fecha_stop(pos, eventos, preco, liq)
+    # [TP-1] Take profit DEPOIS de stop e liquidação: se o mesmo poll vê os dois, a proteção
+    # decide primeiro. Try PRÓPRIO, pelo mesmo motivo do try por posição do [P1-1]: uma falha ao
+    # buscar velas para calcular os alvos não pode tirar ESTA posição da vigilância de stop --
+    # o UPDATE do stop trailado logo abaixo tem que acontecer de qualquer jeito.
+    if tp and tp["on"]:
+        try:
+            if _checar_tps(pos, preco, tp, cfg, eventos):
+                return                                      # o último TP fechou a posição
+        except Exception as e:
+            log(f"TP falhou {pos['ativo']} #{pos['id']}: {type(e).__name__}: {str(e)[:140]}", "error")
     pnl, _, _ = _pnl(pos, preco, cfg)
     with db.conectar() as con:                              # persiste o stop trailado (sobe entre ciclos)
         con.execute("UPDATE posicoes SET preco_atual=?, pnl=?, stop=? WHERE id=? AND status='aberta'",
                     (preco, pnl, pos["stop"], pos["id"]))
+
+
+def _plano_tps(pos, tp):
+    """[TP-1] O plano de TPs da posição: o gravado, ou calculado agora (uma vez na vida dela).
+
+    Devolve (plano, novo). `novo=True` quer dizer que os alvos não existiam até este ciclo --
+    e um alvo que o preço já passou ANTES de existir não "encheu" no preço do alvo: ninguém
+    tinha ordem lá. Quem chama usa isso para decidir o fill (ver `_checar_tps`)."""
+    plano = alvos.ler(pos)
+    if plano is not None:
+        return plano, False
+    raw1 = ex.fetch_ohlcv(pos["ativo"], timeframe="1h", limit=500)
+    raw4 = ex.fetch_ohlcv(pos["ativo"], timeframe="4h", limit=300)
+    plano = alvos.calcular(pos, raw1, raw4, tp)
+    txt = json.dumps(plano)
+    with db.conectar() as con:                              # só grava se ninguém gravou antes
+        con.execute("UPDATE posicoes SET tps=? WHERE id=? AND status='aberta' AND tps IS NULL",
+                    (txt, pos["id"]))
+    pos["tps"] = txt
+    resumo = " | ".join(f"TP{i + 1} {t['preco']:.6g} ({t['r']:.1f}R, {t['fonte']})"
+                        for i, t in enumerate(plano["niveis"]))
+    log(f"TPs #{pos['id']} {pos['direcao']} {pos['ativo']}: {resumo or 'nenhum'}")
+    return plano, True
+
+
+def _checar_tps(pos, preco, tp, cfg, eventos):
+    """[TP-1] Realiza nos alvos. True = a posição foi fechada inteira (o último TP).
+
+    **Fração do ORIGINAL, não do que sobrou**: TP1 de 34% são 34% do tamanho com que a posição
+    abriu. A conversão para "fração do que está aberto agora" é feita aqui, e o ÚLTIMO alvo leva
+    tudo o que restou -- sem isso o arredondamento deixaria uma posição de R$0,01 viva.
+
+    **Fill**: um TP que existia antes de o preço chegar é ordem limite descansando, e enche no
+    preço DELA, nunca melhor (um gap a favor não vira lucro extra no papel). Um TP que o preço
+    já tinha passado quando o plano nasceu -- as posições abertas antes desta regra -- realiza a
+    MERCADO, no preço de agora: é o que o operador faria ao ligar a regra.
+
+    **O stop não se mexe aqui.** O T17 mediu que a escada de stop (subir o stop a cada TP) é o
+    que matou a cauda; quem cuida do stop do que sobra continua sendo o trailing."""
+    plano, novo = _plano_tps(pos, tp)
+    niveis = plano.get("niveis", [])
+    while True:
+        i, t = alvos.proximo(plano)
+        if t is None or not alvos.bateu(pos["direcao"], preco, t["preco"]):
+            return False
+        ultimo = i == len(niveis) - 1
+        fill = preco if novo else t["preco"]
+        frac = 1.0 if ultimo else min(1.0, t["frac"] * plano["valor_inicial"] / pos["valor_reais"])
+        t["feito"] = True
+        t["fill"] = fill
+        t["em"] = str(pd.Timestamp.now())
+        motivo = f"tp{i + 1}"
+        if frac >= 0.999:
+            fechar(pos["id"], motivo, fill)
+            eventos.append((pos["id"], motivo))
+            return True
+        resto = fechar_parcial(pos, frac, motivo, fill, plano, cfg)
+        if resto is None:                                   # outra thread mexeu na posição
+            return False
+        eventos.append((pos["id"], motivo))
+        pos["valor_reais"] = resto
+        pos["tps"] = json.dumps(plano)
+
+
+def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
+    """[TP-1] Fecha a fração `frac` (do que está ABERTO) da posição e grava um trade dela.
+
+    O pedaço fechado vira uma linha em `trades` com o próprio `valor_reais` -- então P&L, taxa,
+    funding e retorno do pedaço saem das MESMAS funções do fechamento inteiro, sem fórmula
+    nova. A posição continua aberta com a margem e o risco de abertura reduzidos na mesma
+    proporção: quem lê o risco dela depois (tetos, `guarda_risco`) vê o que de fato está em jogo.
+
+    Concorrência: o UPDATE exige o `valor_reais` lido. Se o worker e a API fecharem pedaços ao
+    mesmo tempo, só um passa -- o mesmo padrão de rowcount do `fechar()`. Devolve a margem que
+    sobrou, ou None se não fechou nada."""
+    v_ant = float(pos["valor_reais"])
+    v_fecha = v_ant * frac
+    v_resto = v_ant - v_fecha
+    parte = dict(pos)
+    parte["valor_reais"] = v_fecha
+    pnl, taxa, move = _pnl(parte, preco_saida, cfg)
+    fechado_em = str(pd.Timestamp.now())
+    funding = _funding_custo(pos["ativo"], pos["aberto_em"], fechado_em, pos["direcao"],
+                             v_fecha * pos["alavancagem"])
+    if funding is not None:
+        pnl += funding
+        if pnl < -v_fecha:
+            pnl = -v_fecha
+    risco_ab = pos.get("risco_abertura")
+    risco_ini = _risco_posicao(v_fecha, pos["alavancagem"], pos["entrada"], pos["stop"])
+    ret_liq = (pnl / v_fecha * 100) if v_fecha else None
+    with db.conectar() as con:
+        cur = con.execute(
+            "UPDATE posicoes SET valor_reais=?, risco_abertura=?, tps=? "
+            "WHERE id=? AND status='aberta' AND valor_reais=?",
+            (v_resto, (risco_ab * (1 - frac)) if risco_ab is not None else None,
+             json.dumps(plano), pos["id"], v_ant))
+        if cur.rowcount != 1:
+            return None
+        con.execute("INSERT INTO trades(ativo,direcao,entrada,saida,valor_reais,alavancagem,"
+                    "ret_pct,ret_pct_liq,pnl_reais,taxa,motivo_saida,aberto_em,fechado_em,"
+                    "conviccao,sinal_id,stop,risco_inicial,funding,risco_abertura) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (pos["ativo"], pos["direcao"], pos["entrada"], preco_saida, v_fecha,
+                     pos["alavancagem"], move * pos["alavancagem"] * 100,
+                     round(ret_liq, 6) if ret_liq is not None else None,
+                     pnl, taxa, motivo, pos["aberto_em"], fechado_em, pos["conviccao"],
+                     pos["sinal_id"], pos["stop"], round(risco_ini, 4),
+                     round(funding, 4) if funding is not None else None,
+                     round(risco_ab * frac, 4) if risco_ab is not None else None))
+        banca = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
+        con.execute("UPDATE banca SET atual=? WHERE id=1", (banca + pnl,))
+    log(f"PARCIAL #{pos['id']} {pos['direcao']} {pos['ativo']} | {motivo} {frac:.0%} @ "
+        f"{preco_saida:.6g} | P&L R$ {pnl:+.2f}")
+    alertas.enviar(f"🎯 {motivo.upper()} {pos['direcao']} {pos['ativo']}\nP&L parcial: R$ {pnl:+.2f}")
+    return v_resto
 
 
 def _fill_stop(stop, preco_atual, liq, d):
