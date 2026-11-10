@@ -20,10 +20,11 @@ User=cripto
 WorkingDirectory=/home/cripto/cripto-bot
 EnvironmentFile=/home/cripto/cripto-bot/.env
 Environment=TZ=America/Sao_Paulo
-Environment=CONTA=B
-Environment=DB_PATH=/home/cripto/cripto-bot-b/trading.db
-Environment=LOG_PATH=/home/cripto/cripto-bot-b/plataforma.log
-ExecStart=/home/cripto/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001
+# CONTA, DB_PATH e LOG_PATH vão pelo `env` do ExecStart, e NÃO por `Environment=`: o `.env` da
+# A define DB_PATH, e no systemd o EnvironmentFile VENCE o Environment=. Foi assim que a B subiu
+# em cima do banco da A no primeiro deploy (10/11). O `api._guarda_conta` recusa subir se isso
+# voltar a acontecer.
+ExecStart=/usr/bin/env CONTA=B DB_PATH=/home/cripto/cripto-bot-b/trading.db LOG_PATH=/home/cripto/cripto-bot-b/plataforma.log /home/cripto/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001
 Restart=always
 RestartSec=5
 WatchdogSec=300

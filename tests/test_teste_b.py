@@ -104,3 +104,29 @@ def test_na_propria_B_a_rota_nao_existe(cliente, monkeypatch):
 
 def test_health_diz_a_conta(cliente):
     assert cliente.get("/health").json()["conta"] in ("A", "B")
+
+
+def test_conta_B_no_banco_da_A_nao_sobe(monkeypatch, tmp_path):
+    """O incidente de 10/11: o .env da A venceu o Environment= da unit e a B abriu o banco da A."""
+    import os
+    import api
+    import db
+    import logbot
+    raiz = os.path.dirname(os.path.realpath(api.__file__))
+    monkeypatch.setattr(api, "CONTA", "B")
+    monkeypatch.setattr(logbot, "LOG_FILE", str(tmp_path / "b.log"))
+    monkeypatch.setattr(db, "DB", os.path.join(raiz, "trading.db"))
+    with pytest.raises(RuntimeError, match="DB_PATH"):
+        api._guarda_conta()
+    monkeypatch.setattr(db, "DB", str(tmp_path / "b.db"))
+    monkeypatch.setattr(logbot, "LOG_FILE", os.path.join(raiz, "plataforma.log"))
+    with pytest.raises(RuntimeError, match="LOG_PATH"):
+        api._guarda_conta()
+    monkeypatch.setattr(logbot, "LOG_FILE", str(tmp_path / "b.log"))
+    api._guarda_conta()                                   # caminhos próprios: sobe
+
+
+def test_conta_A_no_proprio_diretorio_sobe(monkeypatch):
+    import api
+    monkeypatch.setattr(api, "CONTA", "A")
+    api._guarda_conta()

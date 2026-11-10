@@ -30,6 +30,7 @@ import signal_engine
 import mercado
 import dca
 import autotrader
+import logbot
 from logbot import log
 from versao import VERSAO
 
@@ -175,6 +176,7 @@ def worker():
 
 @asynccontextmanager
 async def lifespan(app):
+    _guarda_conta()                 # [AB-1] antes de abrir banco: conta B no banco da A não sobe
     db.init_db()
     threading.Thread(target=worker, daemon=True).start()
     yield
@@ -213,6 +215,26 @@ LOOPBACK = {"127.0.0.1", "::1"}
 # fica como está. Mesmo código, mesmo mercado, mesma hora -- a diferença é só a config.
 CONTA = (os.environ.get("CONTA") or "A").strip().upper()
 TESTEB_URL = (os.environ.get("TESTEB_URL") or "http://127.0.0.1:8001").rstrip("/")
+
+
+def _guarda_conta():
+    """[AB-1] A conta B NÃO sobe se o banco ou o log dela forem os da A.
+
+    Nasceu de um incidente, em 10/11, no primeiro deploy: o `.env` da A define `DB_PATH`, e no
+    systemd o `EnvironmentFile` vence o `Environment=` da unit. A B subiu em cima do banco da A
+    -- dois workers no mesmo banco -- e a configuração "da B" foi gravada na produção (49 s com
+    `auto_trade=0`; o `/reset` da B, que viria em seguida, teria apagado o histórico da A).
+
+    A unit agora força o caminho no `ExecStart`, mas a garantia não pode depender de a unit
+    estar certa: a A mora no diretório do código, e a B nunca. A versão-sintoma seria só
+    consertar a unit -- e o próximo `.env` ou a próxima unit copiada repetiriam o erro."""
+    if CONTA == "A":
+        return
+    raiz = os.path.dirname(os.path.realpath(__file__))
+    for nome, caminho in (("DB_PATH", db.DB), ("LOG_PATH", logbot.LOG_FILE)):
+        if os.path.dirname(os.path.realpath(caminho)) == raiz:
+            raise RuntimeError(f"conta {CONTA} recusada: {nome}={caminho} é o da conta A. "
+                               "Defina um caminho próprio (deploy/cripto-bot-b.service).")
 # A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
 # por construção, então o throttle serve para conter scanner barulhento, não como defesa
 # principal. Valores folgados porque o painel dispara ~5 requisições paralelas por ciclo
