@@ -177,6 +177,8 @@ CONFIG_PADRAO = {
     # FORA da usada para construi-lo), e no dia em que passar a escala volta com fundamento --
     # ligada por config, sem re-implementar nada.
     "auto_lev_modo": "fixo",      # "conviccao"=alavancagem ∝ convicção (até o teto) | "fixo"=alavancagem_padrao
+                                  # | "risco"=[LEV-1] risco_por_trade / (stop x margem por slot), ver autotrader._lev_por_risco
+    "auto_lev_margem_frac": "0",  # [LEV-1] margem por trade (fração da banca); 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min": "2",          # alavancagem na convicção mínima
     "auto_lev_max": "20",         # TETO de alavancagem (na convicção máxima)
                                   # [Q-3] DIVERGE da base, e encosta no ponto de virada da

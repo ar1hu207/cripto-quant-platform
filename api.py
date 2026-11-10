@@ -347,7 +347,8 @@ CONFIG_CATALOGO = {
     "auto_fechar_saida":    ("bool",),
     "auto_freshness_min":   ("float", 0.5, 1440.0),
     "auto_cooldown_min":    ("float", 0.0, 1440.0),
-    "auto_lev_modo":        ("enum", ("conviccao", "fixo")),
+    "auto_lev_modo":        ("enum", ("conviccao", "fixo", "risco")),
+    "auto_lev_margem_frac": ("float", 0.0, 1.0),      # [LEV-1] 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min":         ("float", 1.0, 50.0),
     "auto_lev_max":         ("float", 1.0, 50.0),
     "trailing_ativo":       ("bool",),
