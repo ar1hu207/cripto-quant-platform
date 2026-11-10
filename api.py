@@ -12,12 +12,15 @@ import secrets
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -200,6 +203,16 @@ app = FastAPI(title="Cripto Bot API", version=VERSAO, lifespan=lifespan,
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 LOOPBACK = {"127.0.0.1", "::1"}
+
+# [AB-1] Teste A/B. A conta B é uma SEGUNDA instância deste mesmo código, com banco, log e
+# banca próprios (`DB_PATH`, `LOG_PATH`), escutando só em loopback. Esta instância (A) a
+# expõe em `/testeB/...` repassando a requisição: o Funnel e o CORS continuam com uma porta
+# e uma origem só, e a autenticação continua sendo a desta porta (o middleware abaixo roda
+# antes do repasse) -- e a B confere a MESMA credencial de novo, porque lê o mesmo `.env`.
+# As descobertas dos backtests entram no código atrás de chaves de config: a B as liga, a A
+# fica como está. Mesmo código, mesmo mercado, mesma hora -- a diferença é só a config.
+CONTA = (os.environ.get("CONTA") or "A").strip().upper()
+TESTEB_URL = (os.environ.get("TESTEB_URL") or "http://127.0.0.1:8001").rstrip("/")
 # A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
 # por construção, então o throttle serve para conter scanner barulhento, não como defesa
 # principal. Valores folgados porque o painel dispara ~5 requisições paralelas por ciclo
@@ -242,7 +255,9 @@ async def auth_basica(request: Request, call_next):
     # OPTIONS = preflight do CORS: o navegador manda SEM Authorization, e exigir credencial
     # nele mataria todo fetch do front separado. Com o CORSMiddleware por fora, o preflight
     # do navegador já é respondido lá e nem chega aqui; isto cobre o OPTIONS avulso.
-    if request.url.path == "/health" or request.method == "OPTIONS":
+    # /testeB/health é o /health da conta B: público pelo mesmo motivo (o painel o lê antes do
+    # login para dizer se o backend está de pé), e não expõe nada além da idade do ciclo.
+    if request.url.path in ("/health", "/testeB/health") or request.method == "OPTIONS":
         return await call_next(request)
 
     if not DASH_PASS:
@@ -717,6 +732,37 @@ def _estado_vigia(agora=None):
     return (idade is not None and idade <= VIGIA_CICLO_S) or subindo, idade
 
 
+def _repassar_b(metodo, caminho, query, corpo, auth, ctype):
+    """[AB-1] A requisição vai para a instância B como veio, e a resposta volta como veio.
+    Erro HTTP da B (401, 422...) é devolvido com o status DELA: mascarar como 502 esconderia,
+    por exemplo, uma config recusada pelo catálogo."""
+    url = f"{TESTEB_URL}/{caminho}" + (f"?{query}" if query else "")
+    cab = {k: v for k, v in (("Authorization", auth), ("Content-Type", ctype)) if v}
+    req = urllib.request.Request(url, data=corpo if metodo == "POST" else None,
+                                 headers=cab, method=metodo)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.read(), r.headers.get("Content-Type", "application/json")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), e.headers.get("Content-Type", "text/plain")
+
+
+@app.api_route("/testeB/{caminho:path}", methods=["GET", "POST"])
+async def teste_b(caminho: str, request: Request):
+    # Só a A repassa. Na própria B a rota não existe, senão uma config errada de TESTEB_URL
+    # faria a B chamar a si mesma em laço.
+    if CONTA != "A":
+        raise HTTPException(404, "rota /testeB só existe na conta A")
+    corpo = await request.body()
+    try:
+        st, dados, ctype = await run_in_threadpool(
+            _repassar_b, request.method, caminho, request.url.query, corpo,
+            request.headers.get("Authorization"), request.headers.get("Content-Type"))
+    except (urllib.error.URLError, OSError) as e:
+        return PlainTextResponse(f"Teste B fora do ar: {e}", status_code=502)
+    return Response(content=dados, status_code=st, media_type=ctype)
+
+
 @app.get("/health")
 def health():
     # [vigia] Público de propósito: é o que a vigia externa (`.github/workflows/vigia.yml`) lê
@@ -725,7 +771,7 @@ def health():
     # idade do ciclo: nem posição, nem banca, nem config.
     vivo, idade = _estado_vigia()
     corpo = {"status": "ok" if vivo else "ciclo parado", "versao": VERSAO, "commit": COMMIT,
-             "ciclo_ha_s": idade}
+             "ciclo_ha_s": idade, "conta": CONTA}
     return corpo if vivo else JSONResponse(corpo, status_code=503)
 
 

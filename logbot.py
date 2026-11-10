@@ -3,7 +3,10 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plataforma.log")
+# [AB-1] `LOG_PATH` existe para a conta B: as duas instâncias rodam do MESMO diretório de
+# código, e duas RotatingFileHandler girando o mesmo arquivo perdem linhas uma da outra.
+LOG_FILE = os.environ.get("LOG_PATH") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                      "plataforma.log")
 
 _logger = logging.getLogger("plataforma")
 if not _logger.handlers:

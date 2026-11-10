@@ -1,0 +1,35 @@
+# [AB-1] Conta B do teste A/B, no dl380. Mesmo código e mesmo .env da conta A (então a MESMA
+# senha do painel), com banco, log e porta próprios. Escuta só em loopback: quem a expõe é a
+# conta A, na rota /testeB/... (api.teste_b) -- o Funnel continua apontando para uma porta só.
+#
+# Instalar (uma vez):
+#   sudo install -d -o cripto -g cripto /home/cripto/cripto-bot-b
+#   sudo cp deploy/cripto-bot-b.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-b
+#
+# O deploy da A (git pull no /home/cripto/cripto-bot) troca o código da B junto: depois dele,
+# reinicie OS DOIS serviços, senão a B fica rodando o commit anterior (o /testeB/health mostra).
+[Unit]
+Description=Cripto Bot - conta B (teste A/B, paper)
+After=network-online.target cripto-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cripto
+WorkingDirectory=/home/cripto/cripto-bot
+EnvironmentFile=/home/cripto/cripto-bot/.env
+Environment=TZ=America/Sao_Paulo
+Environment=CONTA=B
+Environment=DB_PATH=/home/cripto/cripto-bot-b/trading.db
+Environment=LOG_PATH=/home/cripto/cripto-bot-b/plataforma.log
+ExecStart=/home/cripto/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+WatchdogSec=300
+NotifyAccess=main
+MemoryHigh=620M
+MemoryMax=760M
+
+[Install]
+WantedBy=multi-user.target

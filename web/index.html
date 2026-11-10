@@ -200,6 +200,12 @@
   @media(hover:hover){.tab:hover{background:var(--surface);color:var(--txt);filter:none}}
   .tab.on{background:var(--surface);color:var(--txt);font-weight:600}
   .topacts{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+  /* [AB-1] seletor de conta. Classe propria (nao .tab): aba() varre querySelectorAll('.tab'). */
+  .conta-sel{display:flex;border:1px solid var(--line,#2a2f3a);border-radius:8px;overflow:hidden;margin-left:12px}
+  .conta-sel button{background:transparent;color:inherit;border:0;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer;opacity:.65}
+  .conta-sel button[aria-pressed="true"]{opacity:1;font-weight:600;background:rgba(255,255,255,.08)}
+  body.conta-b .conta-sel button[data-conta="B"][aria-pressed="true"]{background:#7c3aed;color:#fff}
+  body.conta-b .topbar{box-shadow:inset 0 -2px 0 #7c3aed}
 
   /* ---------- tab bar: navega entre blocos de dado ----------
      Ativo = --txt peso 600 + sublinhado de 2px em --accent. Sem fundo, sem pilula. */
@@ -680,6 +686,10 @@
 <header class="topbar">
   <div class="brand"><span class="logo" aria-hidden="true">🤖</span>
     <span><span class="bname">Cripto Bot</span> <span class="sub">Terminal</span></span></div>
+  <div class="conta-sel" role="group" aria-label="Conta">
+    <button type="button" data-conta="A" onclick="trocaConta('A')" title="Produção: as regras de hoje">A · Produção</button>
+    <button type="button" data-conta="B" onclick="trocaConta('B')" title="Teste B: as regras dos backtests, banca própria">B · Teste</button>
+  </div>
   <!-- Os dois botoes de vista mantem class="tab" e data-v: aba() mira
        document.querySelectorAll('.tab') e liga o .on por dataset.v. -->
   <nav class="topnav" aria-label="Vistas">
@@ -882,7 +892,12 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 // (Vercel): config.js define window.API_BASE = 'https://seu-backend' e as credenciais
 // do Basic Auth passam a ir no header explicitamente (o navegador não as anexa sozinho
 // em requisição cross-origin).
-const API=(window.API_BASE||'').replace(/\/+$/,'');
+// [AB-1] Conta A (produção) ou B (teste A/B). A B é outra instância do bot, com banca própria,
+// que o backend expõe em /testeB/...: trocar de conta é só trocar o prefixo de TODAS as rotas.
+// Fica no localStorage por ser preferência deste navegador; sem storage, cai na A.
+const CONTA=(()=>{try{return localStorage.getItem('cbConta')==='B'?'B':'A';}catch{return 'A';}})();
+const API=(window.API_BASE||'').replace(/\/+$/,'')+(CONTA==='B'?'/testeB':'');
+function trocaConta(c){ if(c===CONTA) return; try{localStorage.setItem('cbConta',c);}catch{} location.reload(); }
 let _cred=localStorage.getItem('cbAuth')||'';
 
 // ---------- gate de login ----------
@@ -1846,6 +1861,11 @@ else window.addEventListener('resize',folgaStatusBar);
 // App instalavel: o service worker guarda so a casca (ver web/sw.js). Ele so existe em https
 // ou localhost; no http da VM o navegador recusa e o painel segue igual, sem app.
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+// [AB-1] marca a conta ativa: botão pressionado, faixa roxa na B e o título da aba do navegador,
+// para não haver dúvida de qual banca está na tela antes de apertar Pânico ou Resetar.
+document.querySelectorAll('.conta-sel button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.conta===CONTA)));
+if(CONTA==='B'){ document.body.classList.add('conta-b'); document.title='[Teste B] '+document.title; }
 
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
