@@ -21,6 +21,7 @@ import pandas as pd
 
 import db
 import simulador
+import tendencia
 from logbot import log
 from signal_engine import MOTIVO_FLUXO_ND
 
@@ -287,12 +288,26 @@ def auto_executar(saidas=None):
              and not (exige_fluxo and not _fluxo_checado(s))]   # [P2-9] fluxo n/d: o bot nao opera
     cands.sort(key=lambda s: (-(s["conviccao"] or 0), -ts_val(s)))   # melhor convicção; empate -> mais fresco
 
+    modo_tend = str(cfg.get("tendencia_filtro", "off") or "off").strip().lower()
+    res["contra_tendencia"] = []
     vistos = set()
     for s in cands:
         if slots <= 0 or budget < min_valor:
             break
         if s["ativo"] in vistos:                          # 1 entrada por ativo por ciclo
             continue
+        # [TD-1] Só a favor da tendência do diário (T38). Dentro do laço, e não na lista de
+        # candidatos, para que o slot recusado vá para o próximo sinal -- foi assim que o
+        # backtest mediu: o motor enche as vagas com OUTROS candidatos, não com menos trades.
+        # Rede falhou: pula no ciclo (o sinal segue 'novo'), nunca abre sem saber o lado.
+        if modo_tend != "off":
+            try:
+                if not tendencia.permite(s["ativo"], s["direcao"], modo_tend):
+                    res["contra_tendencia"].append(s["ativo"])
+                    continue
+            except Exception as e:
+                res["rejeitados"].append({"ativo": s["ativo"], "erro": f"tendência n/d: {e}"})
+                continue
         # [P1-11] a lev sai da convicção e passa pelo cap geométrico ANTES de dimensionar: a
         # margem tem de ser calculada sobre a alavancagem que vai ser aberta de fato. O
         # `simulador.abrir` recompõe o stop mantendo a distância RELATIVA do sinal (`stop_rel`),

@@ -226,6 +226,9 @@ CONFIG_PADRAO = {
     "tp_max_r": "12",             # alvo mais longe considerado, em R
     "tp_forca_min": "2",          # força mínima da zona (pivô 4h=2, pivô 1h=1, Fibo=1) p/ ter prioridade
     "tp_fallback_r": "2,4,6",     # sem estrutura suficiente, alvos em múltiplos de R
+    # [TD-1] Só entra a favor da tendência do DIÁRIO do próprio ativo (T38). Nasce desligado;
+    # a conta B liga. d1 = EMA20 e close do lado certo da EMA50; d2 = só o cruzamento.
+    "tendencia_filtro": "off",    # off | d1 | d2 -- ver tendencia.py
     "telegram_token": "",
     "telegram_chat_id": "",
 }
