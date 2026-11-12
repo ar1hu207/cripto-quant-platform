@@ -31,6 +31,7 @@ import mercado
 import dca
 import autotrader
 import logbot
+import micro
 from logbot import log
 from versao import VERSAO
 
@@ -179,8 +180,10 @@ async def lifespan(app):
     _guarda_conta()                 # [AB-1] antes de abrir banco: conta B no banco da A não sobe
     db.init_db()
     threading.Thread(target=worker, daemon=True).start()
+    micro.retomar()                 # [MICRO-1] laboratório: só volta se estava ligado
     yield
     _worker_on["v"] = False
+    micro.desligar(persistir=False)
 
 
 # Login básico (HTTP Basic): ativo só quando DASH_PASS está setado (deploy público).
@@ -1266,6 +1269,41 @@ def dca_aportar(req: IdReq):
 def dca_remover(req: IdReq):
     dca.remover(req.id)
     return {"ok": True}
+
+
+# ---- [MICRO-1] laboratório de microtrades (terceira vista do painel) ------------------------
+# Banca, banco e motor próprios (micro.py). Rota separada do /estado de propósito: o laboratório
+# tem poll próprio, só enquanto a vista está aberta, e não engorda o payload do painel (§2).
+def _micro(fn, *a):
+    try:
+        return fn(*a)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/micro/estado")
+def micro_estado():
+    return micro.estado()
+
+
+@app.post("/micro/ligar")
+def micro_ligar():
+    return _micro(micro.ligar)
+
+
+@app.post("/micro/desligar")
+def micro_desligar():
+    return micro.desligar()
+
+
+@app.post("/micro/zerar")
+def micro_zerar():
+    return _micro(micro.zerar)
+
+
+@app.post("/micro/config")
+def micro_config(body: dict):
+    return _micro(micro.set_config, body)
 
 
 # ---------- provas de regressao do territorio T-API-DADOS ----------

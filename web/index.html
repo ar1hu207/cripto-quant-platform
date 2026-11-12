@@ -458,6 +458,38 @@
   .rg-banner{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:var(--r-sm);
     font-weight:600;background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
   .hidden{display:none}
+
+  /* ---------- [MICRO-1] laboratório de microtrades ----------
+     A peça central é a decomposição por trade (.mc-wf): sinal → spread e latência → taxa →
+     líquido. Barra proporcional ao maior valor absoluto, cor pelo sinal, e o número sempre
+     escrito ao lado, porque cor nunca é o único sinal (DESIGN.md > Accessibility). */
+  .mc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .mc-tit{font-size:18px;font-weight:700;color:var(--txt);margin:0}
+  .mc-status{font-size:var(--fs-75);color:var(--txt2);margin-top:6px}
+  .mc-status .vivo{color:var(--pos);font-weight:600}
+  .mc-acts{display:flex;gap:8px;flex-wrap:wrap}
+  /* DOM em ordem rotulo, valor, barra: com colunas explicitas e fluxo dense, o desktop poe a
+     barra no meio; no celular ela desce para a linha inteira embaixo do par rotulo/valor. */
+  .mc-wf{display:grid;grid-template-columns:minmax(140px,auto) 1fr 80px;grid-auto-flow:row dense;gap:10px 12px;align-items:center}
+  .mc-wf .r{grid-column:1}.mc-wf .v{grid-column:3}.mc-wf .bar{grid-column:2}
+  .mc-wf .r{font-size:var(--fs-75);color:var(--txt2)}
+  .mc-wf .tot{color:var(--txt);font-weight:700}
+  .mc-wf .bar{height:10px;background:var(--surface2);border-radius:var(--r-pill);position:relative;overflow:hidden}
+  .mc-wf .bar i{position:absolute;top:0;bottom:0}
+  .mc-wf .v{text-align:right;font-weight:600;font-size:var(--fs-100)}
+  .mc-nota{font-size:var(--fs-75);color:var(--txt2);line-height:1.6;margin-top:14px}
+  .mc-cfg{display:flex;gap:12px 16px;flex-wrap:wrap;align-items:flex-end}
+  .mc-cfg label{font-size:var(--fs-75);color:var(--txt3);display:flex;flex-direction:column;gap:5px}
+  .mc-cfg input{width:96px;padding:7px 9px;font-size:var(--fs-100)}
+  .mc-cfg .full{flex-basis:100%}
+  .mc-cfg .full input{width:100%;max-width:640px}
+  /* mesma regra das tabelas do painel: so vira rolador abaixo de 820px */
+  @media(max-width:820px){#mc-ativo,#mc-ult{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    #mc-ativo>table,#mc-ult>table{min-width:600px}}
+  details.mc-exp summary{cursor:pointer;color:var(--txt2);font-size:var(--fs-75);font-weight:600}
+  details.mc-exp div{font-size:var(--fs-75);color:var(--txt2);line-height:1.7;margin-top:10px;max-width:820px}
+  @media(max-width:600px){.mc-wf{grid-template-columns:1fr 64px;gap:4px 12px}.mc-wf .v{grid-column:2}
+    .mc-wf .bar{grid-column:1/-1;margin-bottom:8px}}
   .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
   @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
   .grafico-side{max-height:calc(100vh - var(--sb-h) - 185px);overflow:auto}
@@ -695,6 +727,7 @@
   <nav class="topnav" aria-label="Vistas">
     <button class="tab on" data-v="painel" aria-pressed="true" onclick="aba('painel')">Painel</button>
     <button class="tab" data-v="grafico" aria-pressed="false" onclick="aba('grafico')">Gráfico</button>
+    <button class="tab" data-v="micro" aria-pressed="false" onclick="aba('micro')" title="Laboratório de microtrades: centenas de trades por minuto, em papel">Micro</button>
   </nav>
   <div class="topacts">
     <button class="btn-sec" onclick="escanear()">Escanear</button>
@@ -825,6 +858,69 @@
         </div>
       </div>
       <div class="mut" style="font-size:11.5px;margin-top:10px">Linha cheia = entrada · tracejada = stop · seta = trade. Verde LONG, vermelho SHORT.</div>
+    </div>
+  </div>
+
+  <!-- [MICRO-1] Laboratório de microtrades. Banca e motor próprios (micro.py), poll próprio de
+       2s que só roda com esta vista aberta, e sempre na conta A: o laboratório é um só. -->
+  <div id="view-micro" class="hidden">
+    <section class="mc-head">
+      <div>
+        <h2 class="mc-tit">Microtrades <span class="met-nota">laboratório · papel · book real da Binance Futuros</span></h2>
+        <div class="mc-status mono" id="mc-status">carregando…</div>
+      </div>
+      <div class="mc-acts">
+        <button class="btn-auto" id="mc-btn" onclick="microLigar()">Ligar</button>
+        <button class="btn-sec" onclick="microZerar()" title="Apaga os trades e volta a banca do laboratório ao valor inicial">Zerar</button>
+      </div>
+    </section>
+
+    <section class="tiles">
+      <article class="tile"><div class="lbl">Trades por minuto</div><div class="val mono" id="mc-tpm">—</div>
+        <div class="tile-sub" id="mc-tpm-sub">últimos 60 s</div></article>
+      <article class="tile"><div class="lbl">Trades no total</div><div class="val mono" id="mc-n">—</div>
+        <div class="tile-sub" id="mc-n-sub">—</div></article>
+      <article class="tile"><div class="lbl">Banca do laboratório</div><div class="val mono" id="mc-banca">—</div>
+        <div class="delta mono" id="mc-pnl">—</div></article>
+      <article class="tile"><div class="lbl">Líquido por trade</div><div class="val mono" id="mc-liq">—</div>
+        <div class="tile-sub" id="mc-liq-sub">—</div></article>
+    </section>
+
+    <div class="panel"><h2>Para onde vai cada trade <span class="met-nota">média por trade, em bps do notional</span></h2>
+      <div class="card"><div class="mc-wf" id="mc-wf"></div><div class="mc-nota" id="mc-veredito"></div></div></div>
+
+    <div class="panel"><h2>Resultado acumulado <span class="met-nota">US$, últimas 3 h, por minuto</span></h2>
+      <div class="card" style="height:240px"><canvas id="mc-chart"></canvas></div></div>
+
+    <div class="panel"><h2>Por ativo</h2><div id="mc-ativo"></div></div>
+    <div class="panel"><h2>Últimos trades</h2><div id="mc-ult"></div></div>
+
+    <div class="panel"><h2>Parâmetros <span class="met-nota">salvar com o motor ligado reinicia o motor</span></h2>
+      <div class="card">
+        <div class="mc-cfg" id="mc-cfg">
+          <label class="full">Ativos (pares USDT-M, separados por vírgula)<input data-k="ativos" type="text" spellcheck="false"></label>
+          <label>z de entrada<input data-k="z_entrada" type="number" step="0.1" min="0.5" max="10"></label>
+          <label>Janela OFI (ms)<input data-k="janela_ofi_ms" type="number" step="100" min="100" max="10000"></label>
+          <label>Horizonte (ms)<input data-k="horizonte_ms" type="number" step="100" min="200" max="120000"></label>
+          <label>Máx. por ativo<input data-k="max_por_ativo" type="number" step="1" min="1" max="10"></label>
+          <label>Intervalo mín. (ms)<input data-k="intervalo_min_ms" type="number" step="50" min="0" max="60000"></label>
+          <label>Latência (ms)<input data-k="latencia_ms" type="number" step="10" min="0" max="2000"></label>
+          <label>Notional (US$)<input data-k="notional" type="number" step="10" min="10" max="100000"></label>
+          <label>Banca inicial (US$)<input data-k="banca_inicial" type="number" step="100" min="100"></label>
+          <button class="btn-sec" onclick="microSalvar()">Salvar</button>
+        </div>
+        <details class="mc-exp" style="margin-top:16px"><summary>Como a estratégia decide</summary><div>
+          <b>Order Flow Imbalance</b> (Cont, Kukanov &amp; Stoikov, 2014). A cada mudança no topo do livro, o motor mede quanto
+          a pressão de compra cresceu contra a de venda: lance subindo ou engordando soma, oferta descendo ou engordando
+          subtrai. Essa soma na janela, dividida pela profundidade média do ativo, vira um z-score contra o próprio histórico
+          do último minuto. Com z acima do limiar e o livro mais pesado do lado da compra (microprice acima do meio),
+          ele <b>compra no ask</b>. No simétrico, <b>vende no bid</b>. Sai depois do horizonte, ou antes se o fluxo virar, sempre pelo lado
+          oposto do livro. Entre decidir e executar passa a latência configurada, e o preço usado é o do livro depois dela.<br><br>
+          <b>As três camadas.</b> <i>Sinal</i>: o meio do livro na hora da entrada contra o meio na hora da saída, ou seja, quanto o fluxo previu, sem custo.
+          <i>Executado</i>: os preços reais de ask e bid, já com o spread e a latência. <i>Líquido</i>: o executado menos a taxa taker nas duas
+          pernas, a mesma <code>taxa_por_lado</code> que o bot paga.
+        </div></details>
+      </div>
     </div>
   </div>
   </main>
@@ -999,9 +1095,9 @@ async function sairLogin(){
   gateAbre();
 }
 
-async function apiFetch(path,opts={}){
+async function apiFetch(path,opts={},base=API){
   const mk=()=>({...opts,headers:{...(opts.headers||{}),...(_cred?{Authorization:_cred}:{})}});
-  let r=await fetch(API+path,mk());
+  let r=await fetch(base+path,mk());
 
   // Bloqueado pelo throttle: parar de bater, senão o poll renova o bloqueio pra sempre.
   if(r.status===429){ pararPolling(); toast(await r.clone().text()); return r; }
@@ -1013,7 +1109,7 @@ async function apiFetch(path,opts={}){
   if(r.status===401){
     pararPolling();
     localStorage.removeItem('cbAuth'); _cred='';
-    if(await gateAbre()) r=await fetch(API+path,mk());
+    if(await gateAbre()) r=await fetch(base+path,mk());
   }
   return r;
 }
@@ -1478,9 +1574,11 @@ function aba(v){
   _aba=v;
   document.getElementById('view-painel').classList.toggle('hidden',v!=='painel');
   document.getElementById('view-grafico').classList.toggle('hidden',v!=='grafico');
+  document.getElementById('view-micro').classList.toggle('hidden',v!=='micro');
   document.querySelectorAll('.tab').forEach(b=>{const sel=b.dataset.v===v;b.classList.toggle('on',sel);b.setAttribute('aria-pressed',sel);});
   // a marca vive na sidebar; o titulo da topbar diz onde voce esta, entao segue a vista
-  const vt=document.getElementById('view-titulo'); if(vt)vt.textContent=v==='painel'?'Painel':'Gráfico';
+  const vt=document.getElementById('view-titulo'); if(vt)vt.textContent={painel:'Painel',grafico:'Gráfico',micro:'Microtrades'}[v];
+  microPoll(v==='micro');           // [MICRO-1] poll do laboratório só com a vista aberta
   // A lib de velas entra sob demanda. Ela nunca desenhou nada na aba Painel, então esperar
   // o clique aqui é onde ela realmente faz falta. Devolve promessa porque quem chama pode
   // precisar do _tv já montado — ver analisarSinal().
@@ -1818,11 +1916,118 @@ async function salvarAuto(){
   catch(e){ toast('erro: '+e.message); }
   finally{ _busy=false; }
 }
+// ---------- [MICRO-1] laboratório de microtrades ----------
+// Sempre na conta A: o laboratório é um só, com banca própria, e não faz parte do teste A/B.
+const API_A=(window.API_BASE||'').replace(/\/+$/,'');
+async function microApi(path,body){
+  const o=body!==undefined?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};
+  const r=await apiFetch(path,o,API_A); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+let _microTimer=null,_microChart=null,_micro=null,_microSujo=false,_microBusy=false;
+function microPoll(on){ clearInterval(_microTimer); _microTimer=null;
+  if(on){ carregarMicro(); _microTimer=setInterval(carregarMicro,2000); } }
+const mcEsc=t=>String(t??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const mcBps=v=>v==null?'—':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(2);
+const mcUsd=v=>(v<0?'−':'')+'US$ '+Math.abs(v??0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const mcCls=v=>v>0?'pos':v<0?'neg':'mut';
+const mcPct=v=>((v??0)*100).toFixed(0)+'%';
+async function carregarMicro(){
+  if(_aba!=='micro')return;
+  try{ const e=await microApi('/micro/estado'); _micro=e; renderMicro(e); }
+  catch(err){ $g('mc-status').textContent='sem resposta do backend: '+err.message; }
+}
+function renderMicro(e){
+  const st=$g('mc-status');
+  if(e.ligado){
+    const con=e.conectado?'<span class="vivo">● ao vivo</span>':'<span class="neg">● reconectando</span>';
+    st.innerHTML=`${con} · ${e.eventos_s} atualizações de livro/s · fila ${e.fila_ms??'—'} ms · ligado desde ${mcEsc(e.desde)}`;
+  } else {
+    st.innerHTML='desligado'+(e.parado_por?` · <span class="neg">parou sozinho: ${mcEsc(e.parado_por)}</span>`:'')+(e.erro?` · último erro: ${mcEsc(e.erro)}`:'');
+  }
+  const b=$g('mc-btn'); b.textContent=e.ligado?'Desligar':'Ligar'; b.classList.toggle('on',e.ligado);
+  $g('mc-tpm').textContent=e.trades_min.toLocaleString('pt-BR');
+  $g('mc-tpm-sub').textContent=`últimos 60 s · ${e.abertas} abertas agora`;
+  $g('mc-n').textContent=e.n.toLocaleString('pt-BR');
+  $g('mc-n-sub').textContent=`o sinal acertou a direção em ${mcPct(e.acerto_sinal)} · lucro líquido em ${mcPct(e.acerto_liq)}`;
+  $g('mc-banca').textContent=mcUsd(e.banca);
+  const d=e.banca-e.banca_inicial, pl=$g('mc-pnl');
+  pl.textContent=`${d>=0?'+':'−'}${mcUsd(Math.abs(d))} desde ${mcUsd(e.banca_inicial)}`; pl.className='delta mono '+mcCls(d);
+  const m=e.media_bps, liq=$g('mc-liq'); liq.textContent=mcBps(m.liq)+' bps'; liq.className='val mono '+mcCls(m.liq);
+  $g('mc-liq-sub').textContent=`taxa: ${e.taxa_lado_bps} bps por perna · US$ ${Number(e.cfg.notional).toLocaleString('pt-BR')} por trade`;
+
+  // decomposição: sinal → spread/latência → taxa → líquido
+  const custoExec=m.exec-m.sinal, taxa=m.liq-m.exec;
+  const linhas=[['Sinal (meio → meio)',m.sinal,false],['Spread e latência',custoExec,false],['Taxa nas duas pernas',taxa,false],['Líquido',m.liq,true]];
+  const mx=Math.max(...linhas.map(l=>Math.abs(l[1])),0.01);
+  $g('mc-wf').innerHTML=e.n?linhas.map(([r,v,t])=>{const w=Math.abs(v)/mx*50;
+    const left=v>=0?50:50-w, cor=v>=0?'var(--pos)':'var(--neg)';
+    return `<div class="r ${t?'tot':''}">${r}</div><div class="v mono ${mcCls(v)}">${mcBps(v)}</div><div class="bar"><i style="left:${left}%;width:${w}%;background:${cor}"></i><i style="left:50%;width:1px;background:var(--txt3)"></i></div>`;}).join('')
+    :'<div class="r" style="grid-column:1/-1">Sem trades ainda. Ligue o motor: cada ativo precisa de ~30 s de histórico antes do primeiro trade.</div>';
+  const custo=m.sinal-m.liq;
+  $g('mc-veredito').innerHTML=e.n?`Cada trade custa em média <b>${custo.toFixed(2)} bps</b> entre spread, latência e taxa. O sinal prevê <b>${mcBps(m.sinal)} bps</b>`
+    +(m.sinal>0?`. Para empatar, ele precisaria prever <b>${(custo/m.sinal).toFixed(1)}×</b> o que prevê hoje. `:', ou seja, não está prevendo a direção. ')
+    +`A camada "sinal" diz se existe informação no fluxo; a camada "líquido" diz se ela paga a conta.`:'';
+
+  // curva acumulada
+  libChart().then(ok=>{ if(!ok)return;
+    const c=e.curva;
+    if(!_microChart){ const ctx=$g('mc-chart').getContext('2d');
+      _microChart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[
+        {label:'Sinal (sem custo)',data:[],borderColor:TEMA.txt2,borderDash:[4,4],borderWidth:1.5,pointRadius:0,tension:.2},
+        {label:'Executado (com spread)',data:[],borderColor:TEMA.accentTxt,borderWidth:1.5,pointRadius:0,tension:.2},
+        {label:'Líquido (com taxa)',data:[],borderColor:TEMA.neg,borderWidth:2,pointRadius:0,tension:.2}]},
+        options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},
+          plugins:{legend:{labels:{color:TEMA.txt2,boxWidth:14}},tooltip:{callbacks:{label:x=>x.dataset.label+': '+mcUsd(x.parsed.y)}}},
+          scales:{x:{ticks:{color:TEMA.txt3,maxTicksLimit:8},grid:{display:false}},
+                  y:{position:'right',grid:{color:TEMA.line},ticks:{color:TEMA.txt3,callback:v=>mcUsd(v)}}}}}); }
+    _microChart.data.labels=c.t; _microChart.data.datasets[0].data=c.sinal; _microChart.data.datasets[1].data=c.exec;
+    const l=c.liq.length?c.liq[c.liq.length-1]:0; _microChart.data.datasets[2].data=c.liq;
+    _microChart.data.datasets[2].borderColor=l>=0?TEMA.pos:TEMA.neg; _microChart.update('none');
+  });
+
+  // por ativo
+  $g('mc-ativo').innerHTML=e.por_ativo.length?`<table><thead><tr><th>Ativo</th><th class="num">Trades</th><th class="num">Acerto do sinal</th>
+    <th class="num">Sinal (bps)</th><th class="num">Executado (bps)</th><th class="num">Líquido (bps)</th><th class="num">Spread agora (bps)</th><th class="num">z agora</th></tr></thead><tbody>`
+    +e.por_ativo.map(a=>`<tr><td>${mcEsc(a.ativo.toUpperCase())}</td><td class="num">${a.n.toLocaleString('pt-BR')}</td><td class="num">${mcPct(a.acerto_sinal)}</td>
+      <td class="num ${mcCls(a.bps_sinal)}">${mcBps(a.bps_sinal)}</td><td class="num ${mcCls(a.bps_exec)}">${mcBps(a.bps_exec)}</td>
+      <td class="num ${mcCls(a.bps_liq)}">${mcBps(a.bps_liq)}</td><td class="num">${a.spread_bps==null?'—':a.spread_bps.toFixed(2)}</td>
+      <td class="num">${a.z==null?'—':a.z.toFixed(2)}</td></tr>`).join('')+'</tbody></table>'
+    :'<div class="empty">Nenhum trade ainda.</div>';
+
+  // últimos trades: [hora, ativo, lado, dur_ms, sinal, exec, liq, motivo]
+  $g('mc-ult').innerHTML=e.ultimos.length?`<table><thead><tr><th>Hora</th><th>Ativo</th><th>Lado</th><th class="num">Duração</th>
+    <th class="num">Sinal</th><th class="num">Executado</th><th class="num">Líquido</th><th>Saída</th></tr></thead><tbody>`
+    +e.ultimos.map(u=>`<tr><td class="mono">${mcEsc(u[0])}</td><td>${mcEsc(String(u[1]).toUpperCase())}</td>
+      <td>${u[2]===1?'COMPRA':'VENDA'}</td><td class="num">${(u[3]/1000).toFixed(1)} s</td>
+      <td class="num ${mcCls(u[4])}">${mcBps(u[4])}</td><td class="num ${mcCls(u[5])}">${mcBps(u[5])}</td>
+      <td class="num ${mcCls(u[6])}">${mcBps(u[6])}</td><td>${u[7]==='virada'?'fluxo virou':'tempo'}</td></tr>`).join('')+'</tbody></table>'
+    :'<div class="empty">Nenhum trade ainda.</div>';
+
+  // parâmetros: só preenche enquanto a pessoa não está editando
+  if(!_microSujo) document.querySelectorAll('#mc-cfg input').forEach(i=>{const v=e.cfg[i.dataset.k]; if(v!=null)i.value=v;});
+}
+document.addEventListener('input',ev=>{ if(ev.target.closest&&ev.target.closest('#mc-cfg'))_microSujo=true; });
+async function microLigar(){
+  if(_microBusy)return; _microBusy=true;
+  try{ const e=await microApi(_micro&&_micro.ligado?'/micro/desligar':'/micro/ligar',{}); _micro=e; renderMicro(e);
+    toast(e.ligado?'Laboratório ligado. Cada ativo aquece ~30 s antes de operar':'Laboratório desligado'); }
+  catch(err){ toast('erro: '+err.message); }
+  finally{ _microBusy=false; }
+}
+async function microZerar(){
+  if(!confirm('Zerar o laboratório? Apaga todos os microtrades e volta a banca ao valor inicial. O bot principal não é afetado.'))return;
+  try{ const e=await microApi('/micro/zerar',{}); _micro=e; if(_microChart){_microChart.destroy();_microChart=null;} renderMicro(e); toast('Laboratório zerado'); }
+  catch(err){ toast('erro: '+err.message); }
+}
+async function microSalvar(){
+  const body={}; document.querySelectorAll('#mc-cfg input').forEach(i=>{ if(i.value!=='')body[i.dataset.k]=i.dataset.k==='ativos'?i.value:Number(i.value); });
+  try{ const e=await microApi('/micro/config',body); _microSujo=false; _micro=e; renderMicro(e); toast('Parâmetros salvos'+(e.ligado?' · motor reiniciado':'')); }
+  catch(err){ toast('recusado: '+err.message); }
+}
 const _timers=[];
-function iniciarPolling(){ if(_timers.length)return;
+function iniciarPolling(){ if(_aba==='micro')microPoll(true); if(_timers.length)return;
   _timers.push(setInterval(carregar,3000), setInterval(carregarSentimento,60000),
     setInterval(carregarFunding,60000), setInterval(carregarSaidas,8000), setInterval(carregarPrecos,8000)); }
-function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
+function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; microPoll(false); }
 // carregarPrecos() precisa de _est.pendentes para saber que ativos pedir. Disparado em
 // paralelo com o carregar(), o primeiro pedido saia vazio e as colunas Agora/Delta/Tendencia
 // ficavam em "—" ate o poll de 8s. Encadear custa nada e enche a tabela de primeira.
