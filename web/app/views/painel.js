@@ -6,6 +6,7 @@
    banco só guarda a trava de HOJE em `trava_dia_em`). */
 (function () {
   'use strict';
+  function p1(v) { v = +v || 0; return (Math.round(v * 10) / 10).toLocaleString('pt-BR', { maximumFractionDigits: 1 }); }
   var A = window.APX, F = A.fmt;
   var NS = 'http://www.w3.org/2000/svg';
   function svgEl(t, a) { var e = document.createElementNS(NS, t); for (var k in a) e.setAttribute(k, a[k]); return e; }
@@ -191,7 +192,7 @@
       A.contar(mes, pm, function (v) { return cur(v, true) + '<span class="pct">' + F.pct(pm / ref * 100) + '</span>'; });
     } else mes.textContent = '—';
     var pico = h.reduce(function (a, x) { return Math.max(a, x.equity_total); }, eq), ddA = pico ? (eq / pico - 1) * 100 : 0;
-    $('pn-mes-s').innerHTML = (desde ? 'desde ' + desde + ' · ' : '') + 'DD atual <span class="' + (ddA < 0 ? 'neg' : '') + '">' + F.pct(ddA, 1) + '</span> · máx. ' + F.pct(-(m.max_dd_mtm_pct || 0), 1);
+    $('pn-mes-s').innerHTML = (desde ? 'desde ' + desde + ' · ' : '') + 'DD atual <span class="' + (ddA < 0 ? 'neg' : '') + '">' + F.pct(ddA, 1) + '</span> <span title="mês e DD atual saem da curva amostrada do /estado (~125 pontos): aproximados">≈</span> · máx. ' + F.pct(-(m.max_dd_mtm_pct || 0), 1);
     var wr = $('pn-wr');
     if (m.n_trades) {
       A.contar(wr, m.win_rate || 0, function (v) { return F.f0(v) + '<span class="pct txt2">%</span>'; });
@@ -330,9 +331,9 @@
     var kv = [['Modo', cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado'], ['Risco / trade', F.f2((parseFloat(cfg.risco_por_trade) || 0) * 100) + '%'], ['Alavancagem', lev], ['Conv. mínima', cfg.auto_conviccao_min], ['Última ação', ult]];
     $('pn-robo-kv').innerHTML = kv.map(function (k) { return '<dt>' + k[0] + '</dt><dd>' + A.esc(k[1]) + '</dd>'; }).join('');
     $('pn-guards').innerHTML =
-      '<span class="guard' + (rg.teto_aberto ? ' hot' : '') + '">teto de risco aberto ' + F.f0(rg.risco_aberto_pct) + '%</span>' +
-      '<span class="guard' + (rg.trava_dia ? ' hot' : '') + '">trava diária ' + F.f0(rg.limite_pct) + '%</span>' +
-      '<span class="guard">margem máx. ' + F.f0((parseFloat(cfg.exposicao_max) || 0) * 100) + '%</span>' +
+      '<span class="guard' + (rg.teto_aberto ? ' hot' : '') + '">teto de risco aberto ' + p1(rg.risco_aberto_pct) + '%</span>' +
+      '<span class="guard' + (rg.trava_dia ? ' hot' : '') + '">trava diária ' + p1(rg.limite_pct) + '%</span>' +
+      '<span class="guard">margem máx. ' + p1((parseFloat(cfg.exposicao_max) || 0) * 100) + '%</span>' +
       '<span class="guard' + (String(cfg.trailing_ativo) === '1' ? '' : ' off') + '">trailing ' + (String(cfg.trailing_ativo) === '1' ? (cfg.trailing_unidade === 'R' ? cfg.trailing_arma_r + 'R/' + cfg.trailing_dist_r + 'R' : '%') : 'desligado') + '</span>';
     var b = $('pn-auto'); b.textContent = on ? 'Pausar' : 'Ligar'; b.className = 'btn ' + (on ? 'ghost' : 'primary');
   }
@@ -355,7 +356,7 @@
     var base = e.equity_total - (rg.pnl_dia || 0);
     $('pn-trava').innerHTML = '<div class="kpi-lbl">consumido hoje</div><div class="trava-val ' + (perda > 0 ? 'neg' : '') + '">' + F.brl(perda) + ' <span class="txt2" style="font-size:13px;font-weight:400">de ' + F.brl(rg.limite_rs) + '</span></div>' +
       '<div class="prog neg" style="margin-top:10px" aria-hidden="true"><i style="--w:' + pct.toFixed(1) + '%"></i></div>' +
-      '<div class="trava-rows"><div><span>Limite</span><span>−' + F.f0(rg.limite_pct) + '% do equity do início do dia</span></div><div><span>Base do dia</span><span>' + F.brl(base) + '</span></div>' +
+      '<div class="trava-rows"><div><span>Limite</span><span>−' + p1(rg.limite_pct) + '% do equity do início do dia</span></div><div><span>Base do dia</span><span>' + F.brl(base) + '</span></div>' +
       '<div><span>Risco aberto</span><span>' + F.brl(rg.risco_aberto_rs) + ' de ' + F.brl(rg.risco_aberto_max_rs) + '</span></div><div><span>Solta</span><span>na virada do dia (só leitura)</span></div></div>';
   }
 
@@ -367,7 +368,7 @@
     var ttl = (parseFloat((e.config || {}).auto_freshness_min) || 12);
     el.innerHTML = '<ul class="sig-list">' + l.slice(0, 6).map(function (s) {
       var c = Math.round(s.conviccao || 0);
-      return '<li class="sig"><div class="sig-top"><span class="mono strong">' + A.esc(F.par(s.ativo)) + '</span><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + s.direcao + '</span><span class="chip neutro">' + A.esc(s.tf || '') + '</span>' +
+      return '<li class="sig"><div class="sig-top"><span class="mono strong">' + A.esc(F.par(s.ativo)) + '</span><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(s.direcao) + '</span><span class="chip neutro">' + A.esc(s.tf || '') + '</span>' +
         '<span class="sig-exp" title="o auto-trade só opera sinal com até ' + ttl + ' min">há ' + A.idade(s.ts) + '</span></div>' +
         '<div class="sig-conv"><span>convicção</span><span class="conv-num">' + c + '</span><div class="bar"><i style="--w:' + c + '%"></i></div></div>' +
         '<div class="sig-why">' + A.esc((s.motivos || '').split(', ').slice(0, 3).join(' · ') || s.tipo || '') + '</div>' +
@@ -388,7 +389,7 @@
       l.map(function (p) {
         var roe = p.valor_reais ? p.pnl / p.valor_reais * 100 : 0, sd = S.saidas[p.id];
         var mov = p.stop_abertura != null && Math.abs(p.stop - p.stop_abertura) > 1e-12;
-        return '<tr><td class="mono strong">' + A.esc(F.par(p.ativo)) + '</td><td><span class="chip ' + (p.direcao === 'LONG' ? 'long' : 'short') + '">' + p.direcao + '</span></td><td class="mono">' + p.alavancagem + 'x</td>' +
+        return '<tr><td class="mono strong">' + A.esc(F.par(p.ativo)) + '</td><td><span class="chip ' + (p.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(p.direcao) + '</span></td><td class="mono">' + A.esc(p.alavancagem) + 'x</td>' +
           '<td class="mono num">' + F.px(p.entrada) + '</td><td class="mono num">' + F.px(p.preco_atual) + '</td>' +
           '<td class="mono num ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + ' · ' + F.pct(roe, 1) + '</td>' +
           '<td class="mono num">' + F.px(p.stop) + (mov ? '<span class="sub">movido pelo trailing</span>' : '') + '</td><td class="mono">' + A.idade(p.aberto_em) + '</td>' +
@@ -402,8 +403,8 @@
     if (!l.length) { el.innerHTML = '<div class="empty">Nenhuma ordem descansando.' + ((e.config || {}).exec_modo === 'post_only' ? '' : ' Execução atual: a mercado.') + '</div>'; return; }
     el.innerHTML = '<div class="ord">' + l.map(function (o) {
       var c = A.ts(o.criada_em), x = A.ts(o.expira_em), tot = c && x ? x - c : 0, pas = c ? Date.now() - c : 0, falta = x ? Math.max(0, Math.round((x - Date.now()) / 60000)) : null;
-      return '<div class="ord-item"><div class="ord-top"><span class="mono strong">' + A.esc(F.par(o.ativo)) + '</span><span class="chip ' + (o.direcao === 'LONG' ? 'long' : 'short') + '">' + o.direcao + '</span><span class="px">' + F.px(o.preco_limite) + '</span></div>' +
-        '<div class="ord-meta">descansa há ' + A.idade(o.criada_em) + (falta != null ? ' · expira em ' + falta + ' min' : '') + ' · R$ ' + F.f0(o.valor_reais) + ' · ' + o.alavancagem + 'x</div>' +
+      return '<div class="ord-item"><div class="ord-top"><span class="mono strong">' + A.esc(F.par(o.ativo)) + '</span><span class="chip ' + (o.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(o.direcao) + '</span><span class="px">' + F.px(o.preco_limite) + '</span></div>' +
+        '<div class="ord-meta">descansa há ' + A.idade(o.criada_em) + (falta != null ? ' · expira em ' + falta + ' min' : '') + ' · R$ ' + F.f0(o.valor_reais) + ' · ' + A.esc(o.alavancagem) + 'x</div>' +
         '<div class="prog" aria-hidden="true"><i style="--w:' + (tot ? Math.min(100, pas / tot * 100) : 0).toFixed(1) + '%"></i></div></div>';
     }).join('') + '<div class="ord-note">ordem que expira não devolve o sinal · maker só na entrada · já conta nos tetos</div></div>';
   }
@@ -411,7 +412,7 @@
     var l = (e.trades || []).slice(0, 5), el = $('pn-jr');
     if (!l.length) { el.innerHTML = '<li><span class="mute">Nenhum trade fechado ainda.</span></li>'; return; }
     el.innerHTML = l.map(function (t) {
-      return '<li><span class="when">' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</span><span class="what"><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span><span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + t.direcao + '</span><span class="how">' + A.esc(t.motivo_saida || '') + '</span></span><span class="amt ' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '</span></li>';
+      return '<li><span class="when">' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</span><span class="what"><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span><span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(t.direcao) + '</span><span class="how">' + A.esc(t.motivo_saida || '') + '</span></span><span class="amt ' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '</span></li>';
     }).join('');
   }
 
@@ -440,7 +441,15 @@
   var LIM = 500, WD = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'], MN = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   function chaveD(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
   function dataDe(k) { return new Date(+k.slice(0, 4), +k.slice(5, 7) - 1, +k.slice(8, 10)); }
+  /* /trades?limite=500 é a resposta mais pesada da tela: só relê quando um trade fechou (o /estado
+     já traz o último id e a contagem) ou o dia virou. Antes era a cada 60 s, mudando ou não. */
+  function diaADiaSeMudou() {
+    var e = S && (S.estado || A.estado); if (!e) return;
+    var sig = ((e.metricas || {}).n_trades || 0) + '|' + (((e.trades || [])[0] || {}).id || '') + '|' + A.hoje();
+    if (sig === S.sigTr) return; S.sigTr = sig; diaADia();
+  }
   async function diaADia() {
+    if (S && !S.sigTr) { var e0 = S.estado || A.estado || {}; S.sigTr = ((e0.metricas || {}).n_trades || 0) + '|' + (((e0.trades || [])[0] || {}).id || '') + '|' + A.hoje(); }
     var tr;
     try { tr = await A.api('/trades?limite=' + LIM); } catch (err) { if (S) $('pn-dd-body').innerHTML = '<div class="empty">Não consegui ler o /trades agora (' + A.esc(A.erroTxt(err)) + ').</div>'; return; }
     if (!S) return;
@@ -553,7 +562,7 @@
         else if (t.id === 'pn-auto') toggleAuto();
         else if (t.id === 'pn-panico') A.panico();
       });
-      S.timers.push(setInterval(function () { if (!document.hidden) mercado(); }, 60000), setInterval(function () { if (!document.hidden) diaADia(); }, 60000), setInterval(function () { if (!document.hidden) saidas(); }, 8000));
+      S.timers.push(setInterval(function () { if (!document.hidden) mercado(); }, 60000), setInterval(function () { if (!document.hidden) diaADiaSeMudou(); }, 60000), setInterval(function () { if (!document.hidden) saidas(); }, 8000));
       mercado();
       if (A.estado) render(A.estado);
     },

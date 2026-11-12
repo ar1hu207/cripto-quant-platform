@@ -15,6 +15,7 @@
    /config/auditoria (ao abrir a aba e depois de gravar). */
 (function () {
   'use strict';
+  function p1(v) { v = +v || 0; return (Math.round(v * 10) / 10).toLocaleString('pt-BR', { maximumFractionDigits: 1 }); }
   var A = window.APX, F = A.fmt;
   /* grupos do editor; chave do catálogo fora daqui cai em "Outros" (catálogo novo não some da tela) */
   var GRUPOS = [
@@ -243,7 +244,7 @@
   }
   function trava(e) {
     var rg = e.risco || {}, cfg = e.config || {};
-    $('ap-trava').innerHTML = '<span>Trava diária <span class="mute">· ' + F.f0(rg.limite_pct) + '% do equity do início do dia · ' + (rg.trava_dia ? 'disparada em ' + A.esc(cfg.trava_dia_em || 'hoje') : 'livre') + '</span></span><b class="' + (rg.trava_dia ? 'neg' : '') + '">NÃO DESLIGA</b>';
+    $('ap-trava').innerHTML = '<span>Trava diária <span class="mute">· ' + p1(rg.limite_pct) + '% do equity do início do dia · ' + (rg.trava_dia ? 'disparada em ' + A.esc(cfg.trava_dia_em || 'hoje') : 'livre') + '</span></span><b class="' + (rg.trava_dia ? 'neg' : '') + '">NÃO DESLIGA</b>';
   }
   function pendentes() {
     var n = Object.keys(S.mudancas).length;
@@ -301,8 +302,8 @@
     $('ap-jr-n').innerHTML = l.length + ' de ' + (S.trades || []).length + (l.length ? ' · <span class="' + F.cls(soma) + '">' + F.money(soma) + '</span>' : '');
     $('ap-jr').innerHTML = l.length ? l.slice(0, 80).map(function (t) {
       var ret = t.ret_pct != null ? F.pct(t.ret_pct) : '';
-      return '<li><time>' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</time><div><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span> <span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + t.direcao + '</span> <span class="chip neutro">' + A.esc(t.motivo_saida || '—') + '</span>' +
-        '<div class="d">' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' · ' + t.alavancagem + 'x · margem ' + F.brl(t.valor_reais) + (t.conviccao != null ? ' · conv. ' + Math.round(t.conviccao) : '') + ' · taxa ' + F.brl(t.taxa) + '</div></div>' +
+      return '<li><time>' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</time><div><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span> <span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(t.direcao) + '</span> <span class="chip neutro">' + A.esc(t.motivo_saida || '—') + '</span>' +
+        '<div class="d">' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' · ' + A.esc(t.alavancagem) + 'x · margem ' + F.brl(t.valor_reais) + (t.conviccao != null ? ' · conv. ' + Math.round(t.conviccao) : '') + ' · taxa ' + F.brl(t.taxa) + '</div></div>' +
         '<span class="amt ' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '<div class="d" style="text-align:right">' + ret + '</div></span></li>';
     }).join('') : '<li class="mute" style="display:block">Nenhum trade nesse filtro.</li>';
   }

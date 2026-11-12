@@ -232,7 +232,7 @@
   }
   function pe(e) {
     var ps = (e.posicoes || []).filter(function (p) { return p.ativo === S.ativo; }), h = [];
-    ps.forEach(function (p) { h.push('<span>' + p.direcao + ' entrada <b>' + F.px(p.entrada) + '</b></span><span>stop <b class="neg">' + F.px(p.stop) + '</b>' + (p.stop_abertura != null && Math.abs(p.stop - p.stop_abertura) > 1e-12 ? ' · movido pelo trailing' : '') + '</span><span>P&amp;L <b class="' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</b></span>'); });
+    ps.forEach(function (p) { h.push('<span>' + A.esc(p.direcao) + ' entrada <b>' + F.px(p.entrada) + '</b></span><span>stop <b class="neg">' + F.px(p.stop) + '</b>' + (p.stop_abertura != null && Math.abs(p.stop - p.stop_abertura) > 1e-12 ? ' · movido pelo trailing' : '') + '</span><span>P&amp;L <b class="' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</b></span>'); });
     if (S.ind.liq && S.smart && S.smart.ativo === S.ativo && S.smart.j.funding_pct != null) h.push('<span>funding <b class="' + F.cls(S.smart.j.funding_pct) + '">' + F.pct(S.smart.j.funding_pct, 4) + '</b></span>');
     $('op-foot').innerHTML = h.join('') || '<span class="mute">sem posição neste par · linhas pontilhadas âmbar = zonas de liquidez do /smartmoney</span>';
   }
@@ -250,7 +250,7 @@
     var el = $('op-anal'), e = S.estado || {}, s = S.sinalSel && (e.pendentes || []).find(function (x) { return x.id === S.sinalSel; });
     if (!s || s.ativo !== S.ativo || !S.anal) { el.innerHTML = ''; return; }
     var a = S.anal, sn = a.snapshot || {}, st = A.statusEntrada(s, S.precos[s.ativo] || sn.preco);
-    el.innerHTML = '<div class="anal"><div class="sg-top"><b>Análise do sinal</b><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + s.direcao + '</span><span class="chip neutro">' + A.esc(s.tf) + ' · ' + A.esc(s.tipo || '') + '</span><span class="chip ' + st.cls + '">' + st.txt + '</span><button type="button" class="btn ghost sm" data-fecha-anal style="margin-left:auto">fechar</button></div>' +
+    el.innerHTML = '<div class="anal"><div class="sg-top"><b>Análise do sinal</b><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(s.direcao) + '</span><span class="chip neutro">' + A.esc(s.tf) + ' · ' + A.esc(s.tipo || '') + '</span><span class="chip ' + st.cls + '">' + st.txt + '</span><button type="button" class="btn ghost sm" data-fecha-anal style="margin-left:auto">fechar</button></div>' +
       '<p>' + A.esc(a.leitura || '') + '</p><div class="g"><div><span>RSI</span>' + A.esc(sn.rsi) + '</div><div><span>ADX</span>' + A.esc(sn.adx) + '</div><div><span>EMA 20</span>' + F.px(sn.ema20) + '</div><div><span>EMA 50</span>' + F.px(sn.ema50) + '</div><div><span>Bollinger</span>' + F.px(sn.bb_lo) + '–' + F.px(sn.bb_up) + '</div></div>' +
       '<div class="sg-act" style="margin-top:10px"><button type="button" class="btn primary sm" data-conf="' + s.id + '">Confirmar com prévia de risco</button><button type="button" class="btn ghost sm" data-pular="' + s.id + '">Pular</button></div>' +
       (S.tf !== s.tf ? '<div class="mute" style="font-size:11px;margin-top:8px">O sinal nasceu no ' + A.esc(s.tf) + '; a leitura acima é do ' + S.tf + '.</div>' : '') + '</div>';
@@ -290,7 +290,7 @@
     $('op-sg-n').textContent = l.length;
     $('op-sg').innerHTML = l.length ? l.map(function (s) {
       var st = A.statusEntrada(s, S.precos[s.ativo]), sd = s.preco ? Math.abs(s.preco - s.stop_sugerido) / s.preco * 100 : 0;
-      return '<div class="sg-item' + (s.id === S.sinalSel ? ' is-on' : '') + '"><div class="sg-top"><span class="mono strong">' + A.esc(F.par(s.ativo)) + '</span><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + s.direcao + '</span><span class="chip neutro">' + A.esc(s.tf) + '</span><span class="t">há ' + A.idade(s.ts) + '</span></div>' +
+      return '<div class="sg-item' + (s.id === S.sinalSel ? ' is-on' : '') + '"><div class="sg-top"><span class="mono strong">' + A.esc(F.par(s.ativo)) + '</span><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(s.direcao) + '</span><span class="chip neutro">' + A.esc(s.tf) + '</span><span class="t">há ' + A.idade(s.ts) + '</span></div>' +
         '<div class="sg-kv"><div><span>convicção</span>' + Math.round(s.conviccao) + '</div><div><span>entrada</span>' + F.px(s.preco) + '</div><div><span>stop</span><span class="neg" style="font-size:11.5px;letter-spacing:0;text-transform:none">' + F.px(s.stop_sugerido) + ' · ' + F.f2(sd) + '%</span></div></div>' +
         '<div><span class="chip ' + st.cls + '">' + st.txt + '</span></div>' +
         '<div class="sg-act"><button type="button" class="btn primary sm" data-conf="' + s.id + '">Confirmar</button><button type="button" class="btn ghost sm" data-pular="' + s.id + '">Pular</button><button type="button" class="btn ghost sm" data-ver="' + s.id + '">Ver no gráfico</button></div></div>';
@@ -302,8 +302,8 @@
     $('op-ps-n').innerHTML = l.length + (l.length ? ' · <span class="' + F.cls(tot) + '">' + F.money(tot) + '</span>' : '');
     $('op-ps').innerHTML = l.length ? l.map(function (p) {
       var roe = p.valor_reais ? p.pnl / p.valor_reais * 100 : 0, sd = S.saidas[p.id];
-      return '<div class="ps-item' + (p.ativo === S.ativo ? ' is-on' : '') + '"><div class="ps-top"><button type="button" class="mono strong" data-par="' + A.esc(p.ativo) + '" style="background:none;border:0;color:inherit;padding:0;cursor:pointer;font:inherit">' + A.esc(F.par(p.ativo)) + '</button><span class="chip ' + (p.direcao === 'LONG' ? 'long' : 'short') + '">' + p.direcao + '</span><span class="amt ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</span></div>' +
-        '<div class="ps-meta"><span>' + p.alavancagem + 'x · ' + A.idade(p.aberto_em) + '</span><span class="' + F.cls(roe) + '">' + F.pct(roe) + ' ROE</span><span>entrada ' + F.px(p.entrada) + '</span><span>stop <span class="neg">' + F.px(p.stop) + '</span></span><span>margem ' + F.brl(p.valor_reais) + '</span></div>' +
+      return '<div class="ps-item' + (p.ativo === S.ativo ? ' is-on' : '') + '"><div class="ps-top"><button type="button" class="mono strong" data-par="' + A.esc(p.ativo) + '" style="background:none;border:0;color:inherit;padding:0;cursor:pointer;font:inherit">' + A.esc(F.par(p.ativo)) + '</button><span class="chip ' + (p.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(p.direcao) + '</span><span class="amt ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</span></div>' +
+        '<div class="ps-meta"><span>' + A.esc(p.alavancagem) + 'x · ' + A.idade(p.aberto_em) + '</span><span class="' + F.cls(roe) + '">' + F.pct(roe) + ' ROE</span><span>entrada ' + F.px(p.entrada) + '</span><span>stop <span class="neg">' + F.px(p.stop) + '</span></span><span>margem ' + F.brl(p.valor_reais) + '</span></div>' +
         (sd && sd.acao ? '<div class="ps-saida">' + A.esc(sd.acao) + '</div>' : '') +
         '<div class="sg-act"><button type="button" class="btn danger sm" data-fechar="' + p.id + '">Fechar a mercado</button></div></div>';
     }).join('') : '<div class="empty">Nenhuma posição aberta.</div>';
@@ -313,9 +313,9 @@
     $('op-od-n').textContent = l.length + ' · post-only';
     $('op-od').innerHTML = l.length ? l.map(function (o) {
       var c = A.ts(o.criada_em), x = A.ts(o.expira_em), tot = c && x ? x - c : 0, pas = c ? Date.now() - c : 0, falta = x ? Math.max(0, Math.round((x - Date.now()) / 60000)) : null;
-      return '<div class="ps-item"><div class="ps-top"><span class="mono strong">' + A.esc(F.par(o.ativo)) + '</span><span class="chip ' + (o.direcao === 'LONG' ? 'long' : 'short') + '">' + o.direcao + '</span><span class="amt">' + F.px(o.preco_limite) + '</span></div>' +
+      return '<div class="ps-item"><div class="ps-top"><span class="mono strong">' + A.esc(F.par(o.ativo)) + '</span><span class="chip ' + (o.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(o.direcao) + '</span><span class="amt">' + F.px(o.preco_limite) + '</span></div>' +
         '<div class="prog" aria-hidden="true"><i style="--w:' + (tot ? Math.min(100, pas / tot * 100) : 0).toFixed(1) + '%"></i></div>' +
-        '<div class="ps-meta"><span>descansa há ' + A.idade(o.criada_em) + '</span>' + (falta != null ? '<span>expira em ' + falta + ' min</span>' : '') + '<span>' + F.brl(o.valor_reais) + ' · ' + o.alavancagem + 'x</span></div>' +
+        '<div class="ps-meta"><span>descansa há ' + A.idade(o.criada_em) + '</span>' + (falta != null ? '<span>expira em ' + falta + ' min</span>' : '') + '<span>' + F.brl(o.valor_reais) + ' · ' + A.esc(o.alavancagem) + 'x</span></div>' +
         '<div class="ps-meta"><span class="mute">cancelar: em breve (o backend não tem rota para isso)</span></div></div>';
     }).join('') : '<div class="empty">Nenhuma ordem descansando.' + ((e.config || {}).exec_modo === 'post_only' ? '' : ' Execução atual: a mercado.') + '</div>';
   }
@@ -323,7 +323,7 @@
     var l = (e.trades || []).filter(function (t) { return t.ativo === S.ativo; });
     $('op-jr-n').textContent = l.length + ' dos últimos ' + (e.trades || []).length;
     $('op-jr').innerHTML = l.length ? l.slice(0, 10).map(function (t) {
-      return '<li><span class="w">' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</span><span><span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + t.direcao + '</span> ' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' <span class="mute">' + A.esc(t.motivo_saida || '') + '</span></span><span class="' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '</span></li>';
+      return '<li><span class="w">' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</span><span><span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(t.direcao) + '</span> ' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' <span class="mute">' + A.esc(t.motivo_saida || '') + '</span></span><span class="' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '</span></li>';
     }).join('') : '<li><span class="mute" style="font-family:var(--f-ui)">Nenhum trade fechado neste par entre os 30 mais recentes.</span></li>';
   }
 
@@ -342,7 +342,8 @@
     if (!S) return; var primeira = !S.estado; S.estado = e;
     if (primeira) {
       var l = pares(e), guard = A.store.get('pulse.operar.par'), hashPar = (location.hash.match(/[?&]par=([^&]+)/) || [])[1];
-      var ini = (hashPar && decodeURIComponent(hashPar)) || ((e.pendentes || [])[0] || {}).ativo || ((e.posicoes || [])[0] || {}).ativo || (l.indexOf(guard) >= 0 ? guard : l[0]);
+      try { hashPar = hashPar && decodeURIComponent(hashPar); } catch (err) { hashPar = null; }
+      var ini = hashPar || ((e.pendentes || [])[0] || {}).ativo || ((e.posicoes || [])[0] || {}).ativo || (l.indexOf(guard) >= 0 ? guard : l[0]);
       lista(); precos(); trocaPar(ini || 'BTC/USDT');
       return;
     }

@@ -175,29 +175,35 @@
         '<div class="r"><span>R efetivo (min stop/liq.)</span><span class="' + (liqAntes ? 'warn' : '') + '">' + F.f2(sdEf * 100) + '%</span></div>' +
         '<div class="r"><span>Nocional</span><span>' + F.brl(v * l) + '</span></div>' +
         '<div class="r"><span>Perda no pior caso (c/ taxa)</span><span class="neg">' + F.brl(perda) + ' · ' + F.f2(perdaPct) + '% da banca' + (perdaBruta >= v ? ' · margem inteira' : '') + '</span></div>';
-      if (rg.risco_aberto_max_rs) { var nt = rg.risco_aberto_rs + perda, tt = rg.risco_aberto_max_rs; h += '<div class="r"><span>Exposição após este trade</span><span class="' + (nt > tt ? 'neg' : '') + '">' + F.brl(nt) + ' / ' + F.brl(tt) + (nt > tt ? ' · estoura o teto' : '') + '</span></div>'; }
+      var nOrd = ((A.estado || {}).ordens || []).length;
+      if (rg.risco_aberto_max_rs) { var nt = rg.risco_aberto_rs + perda, tt = rg.risco_aberto_max_rs; h += '<div class="r"><span>Exposição após este trade</span><span class="' + (nt > tt ? 'neg' : '') + '">' + F.brl(nt) + ' / ' + F.brl(tt) + (nt > tt ? ' · estoura o teto' : '') + '</span></div>' + (nOrd ? '<div class="mute" style="font-size:11.5px">Sem contar ' + nOrd + (nOrd === 1 ? ' ordem descansando' : ' ordens descansando') + ': o backend conta, então pode recusar mesmo abaixo do teto.</div>' : ''); }
       h += '<div class="r"><span>Tamanho p/ arriscar ' + F.f2(c.risco * 100) + '%</span><span><b>' + F.brl(c.valor) + '</b> <button type="button" class="btn ghost sm" id="tk-usar">usar</button></span></div>';
-      if (liqAntes) h += '<div class="aviso neg">Alavancagem alta para esse stop: você LIQUIDA antes do stop agir. Baixe para ≤ ' + Math.floor(0.9 / c.sd) + 'x para o stop valer.</div>';
+      if (liqAntes) h += '<div class="aviso neg">Alavancagem alta para esse stop: a liquidação vem antes do stop e o backend recusa o trade. Baixe para ≤ ' + Math.floor(0.9 / c.sd) + 'x.</div>';
       if (wr) h += '<div class="mute" style="font-size:11.5px">Win rate histórico nesta faixa de convicção: <b>' + wr.win_rate + '%</b> (' + wr.n + ' trades). Referência, não garantia.</div>';
       if (rg.trava_dia) h += '<div class="aviso neg">Trava diária ativa: o backend vai recusar.</div>';
       box.querySelector('#tk-prev').innerHTML = h;
       box.querySelector('#tk-usar').addEventListener('click', function () { box.querySelector('#tk-valor').value = c.valor; previa(box); });
     }
     var ok = await dialogo({
-      titulo: 'Confirmar ' + s.direcao + ' ' + F.par(s.ativo), corpo: corpo, ok: 'Confirmar trade',
+      titulo: 'Confirmar ' + A.esc(s.direcao) + ' ' + F.par(s.ativo), corpo: corpo, ok: 'Confirmar trade',
       aoAbrir: function (box) {
         var c = calc(s, lev0, risco0); box.querySelector('#tk-valor').value = c.valor;
         ['tk-valor', 'tk-lev', 'tk-risco'].forEach(function (id) { box.querySelector('#' + id).addEventListener('input', function () { previa(box); }); });
         previa(box); setTimeout(function () { var v = box.querySelector('#tk-valor'); v.focus(); v.select(); }, 40);
       },
-      antes: function (box) { valorFinal = +box.querySelector('#tk-valor').value; levFinal = +box.querySelector('#tk-lev').value; if (!(valorFinal > 0) || !(levFinal >= 1)) { A.toast('Valor e alavancagem precisam ser positivos', 'warn'); return false; } }
+      antes: function (box) {
+        valorFinal = +box.querySelector('#tk-valor').value; levFinal = +box.querySelector('#tk-lev').value;
+        if (!(valorFinal > 0) || !(levFinal >= 1)) { A.toast('Valor e alavancagem precisam ser positivos', 'warn'); return false; }
+        /* mesma regra do simulador.abrir (geometria degenerada): mandar seria só colher a recusa */
+        if (0.9 / levFinal < calc(s, levFinal, +box.querySelector('#tk-risco').value).sd) { A.toast('A essa alavancagem a liquidação vem antes do stop: baixe para ≤ ' + Math.floor(0.9 / calc(s, levFinal, 1).sd) + 'x', 'warn'); return false; }
+      }
     });
     if (!ok || busy) return null;
     busy = true;
     try {
       var r = await A.api('/confirmar', { sinal_id: s.id, valor_reais: valorFinal, alavancagem: levFinal });
       if (r && r.ok === false) { A.toast(r.erro, 'neg'); return r; }
-      A.toast(r.tipo === 'ordem' ? 'Ordem post-only colocada: ' + F.par(s.ativo) + ' ' + s.direcao + ' · R$ ' + valorFinal + ' @ ' + levFinal + 'x' : s.direcao + ' ' + F.par(s.ativo) + ' aberto · R$ ' + valorFinal + ' @ ' + levFinal + 'x');
+      A.toast(r.tipo === 'ordem' ? 'Ordem post-only colocada: ' + F.par(s.ativo) + ' ' + A.esc(s.direcao) + ' · R$ ' + valorFinal + ' @ ' + levFinal + 'x' : s.direcao + ' ' + F.par(s.ativo) + ' aberto · R$ ' + valorFinal + ' @ ' + levFinal + 'x');
       A.carregar(); return r;
     } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); return null; }
     finally { busy = false; }
@@ -207,7 +213,7 @@
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
   async function fecharPosicao(p) {
-    var ok = await dialogo({ titulo: 'Fechar ' + F.par(p.ativo), corpo: '<p>Fecha a posição ' + A.esc(p.direcao) + ' ' + p.alavancagem + 'x a mercado. P&L agora: <b class="' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</b> (marcado no último ciclo).</p>', ok: 'Fechar a mercado', perigo: true });
+    var ok = await dialogo({ titulo: 'Fechar ' + F.par(p.ativo), corpo: '<p>Fecha a posição ' + A.esc(p.direcao) + ' ' + A.esc(p.alavancagem) + 'x a mercado. P&L agora: <b class="' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</b> (marcado no último ciclo).</p>', ok: 'Fechar a mercado', perigo: true });
     if (!ok) return;
     try { var r = await A.api('/fechar', { id: p.id }); if (r.ok === false) { A.toast(r.erro, 'neg'); return; } A.toast(r.pnl == null ? 'Posição já estava fechada' : 'Posição fechada · P&L ' + F.money(r.pnl)); A.carregar(); }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
@@ -317,11 +323,18 @@
       return;
     }
     curView = v;
-    viewRoot.innerHTML = head(route) + v.html;
-    try { v.init(viewRoot); } catch (e) { console.error('view ' + route + ' init', e); }
+    /* Cada montagem ganha um nó NOVO: as views delegam clique no root que recebem, e o #view-root é
+       permanente. Passando o #view-root, cada visita somava um listener e um clique virava N POSTs
+       (Pausar, Pular, Aportar). O nó novo morre no próximo innerHTML, e os listeners com ele. */
+    viewRoot.innerHTML = head(route) + '<div class="view-mount"></div>';
+    var mount = viewRoot.lastElementChild; mount.innerHTML = v.html;
+    try { v.init(mount); } catch (e) { console.error('view ' + route + ' init', e); }
     entrada();
   }
-  function entrada() { if (hasGsap() && !A.RM) gsap.from(viewRoot.children, { y: 14, opacity: 0, duration: .5, stagger: .06, ease: 'power2.out', clearProps: 'transform,opacity' }); }
+  function entrada() {
+    if (!hasGsap() || A.RM) return;
+    var alvos = []; Array.prototype.forEach.call(viewRoot.children, function (c) { if (c.classList.contains('view-mount')) alvos.push.apply(alvos, c.children); else alvos.push(c); });
+    gsap.from(alvos, { y: 14, opacity: 0, duration: .5, stagger: .06, ease: 'power2.out', clearProps: 'transform,opacity' }); }
   window.addEventListener('hashchange', function () { go(rota()); });
 
   /* ================= badges da nav, side-foot e conexão (alimentados pelo /estado) ================= */

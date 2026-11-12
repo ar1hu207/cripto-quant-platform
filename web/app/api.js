@@ -54,7 +54,9 @@
 
   /* Timestamps do backend são naive em hora de São Paulo (CLAUDE.md §1). Nunca toISOString(): o dia
      muda de lado depois das 21h. Agrupamento por dia usa o PREFIXO da string. */
-  function ts(s) { if (!s) return null; var d = new Date(String(s).slice(0, 19).replace(' ', 'T')); return isNaN(d) ? null : d; }
+  /* O instante é ancorado em -03:00 (São Paulo, sem horário de verão desde 2019), não no fuso do
+     navegador: num aparelho fora de SP, "há 2 min" virava "há 3h 2m" e o "hoje" mudava de dia. */
+  function ts(s) { if (!s) return null; var d = new Date(String(s).slice(0, 19).replace(' ', 'T') + '-03:00'); return isNaN(d) ? null : d; }
   function dia(s) { return String(s || '').slice(0, 10); }
   function ddmm(s) { s = String(s || ''); return s.slice(8, 10) + '/' + s.slice(5, 7); }
   function hhmm(s) { return String(s || '').slice(11, 16); }
@@ -65,7 +67,10 @@
     var h = Math.floor(m / 60); if (h < 24) return h + 'h ' + ('0' + (m % 60)).slice(-2) + 'm';
     return Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
   }
-  function hoje() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function hoje() {
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
+    catch (e) { var d = new Date(Date.now() - 3 * 3600000); return d.toISOString().slice(0, 10); }
+  }
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
   /* ---- barramento de eventos (views assinam no init e saem no destroy) ---- */
@@ -166,7 +171,15 @@
     opts = opts || {};
     var mk = function () { var h = Object.assign({}, opts.headers || {}); if (cred) h.Authorization = cred; return Object.assign({}, opts, { headers: h }); };
     var r = await fetch(API + path, mk());
-    if (r.status === 429) { parar(); toast(await r.clone().text(), 'warn'); return r; }
+    if (r.status === 429) {
+      /* o poll para (senão ele renova o próprio bloqueio), mas volta sozinho: antes ele só voltava
+         com troca de aba, e a tela congelava dizendo "ao vivo" (o LED lê o /health, que é público) */
+      parar(); var t429 = await r.clone().text(); toast(t429, 'warn');
+      var seg = parseInt(r.headers.get('Retry-After'), 10) || +((t429.match(/(\d+)\s*s/) || [])[1]) || 60;
+      setOnline(false, 'muitas tentativas: o backend pediu para esperar ' + seg + ' s');
+      clearTimeout(apiFetch.t429); apiFetch.t429 = setTimeout(function () { iniciar(); carregar(); }, seg * 1000);
+      return r;
+    }
     if (r.status === 401) {
       parar(); store.del('cbAuth'); cred = '';
       if (await gateAbre()) r = await fetch(API + path, mk());

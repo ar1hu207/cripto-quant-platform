@@ -30,7 +30,9 @@ self.addEventListener('fetch', e => {
 
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then(r => {
-      const c = r.clone(); caches.open(CASCA).then(k => k.put(req, c)); return r;
+      // só guarda resposta boa: um 404/5xx do Vercel não pode substituir a casca que abre offline
+      if (r.ok) { const c = r.clone(); caches.open(CASCA).then(k => k.put(req, c)); }
+      return r;
     }).catch(() => caches.match(req).then(r => r || caches.match('./'))));
     return;
   }

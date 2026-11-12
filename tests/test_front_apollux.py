@@ -234,3 +234,12 @@ def test_contraste_AA_em_todos_os_pares_de_texto(pid):
     baixos = {f"{a}/{b}": round(_contraste(t[a], t[b]), 2) for a, b in PARES
               if _contraste(t[a], t[b]) < 4.5}
     assert baixos == {}
+
+
+def test_cada_montagem_de_view_recebe_um_no_novo():
+    """As views delegam clique no `root` que recebem. Se a casca passar o `#view-root` (permanente),
+    cada visita soma um listener e um clique vira N POSTs: Painel -> Operar -> Painel e o "Pausar"
+    mandava dois `POST /auto`; duas visitas a Carteira e o "Aportar" comprava duas vezes."""
+    js = _ler(WEB, "app", "casca.js")
+    assert "v.init(mount)" in js and "v.init(viewRoot)" not in js
+    assert re.search(r"viewRoot\.innerHTML = head\(route\) \+ '<div class=\"view-mount\"></div>'", js)

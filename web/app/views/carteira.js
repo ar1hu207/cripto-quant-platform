@@ -95,7 +95,7 @@
 
   /* ---------- bolhas: empacotamento por relaxação, arrastáveis ---------- */
   function itens(e) {
-    var l = (e.posicoes || []).map(function (p) { return { id: 'p' + p.id, nome: F.base(p.ativo), v: p.valor_reais || 0, pnl: p.pnl || 0, sub: p.direcao + ' ' + p.alavancagem + 'x', tipo: 'pos' }; });
+    var l = (e.posicoes || []).map(function (p) { return { id: 'p' + p.id, nome: F.base(p.ativo), v: p.valor_reais || 0, pnl: p.pnl || 0, sub: p.direcao + ' ' + A.esc(p.alavancagem) + 'x', tipo: 'pos' }; });
     (e.dca || []).forEach(function (d) { if (d.status && d.status !== 'ativo') return; l.push({ id: 'd' + d.id, nome: F.base(d.ativo), v: d.valor_atual || d.total_investido || 0, pnl: d.pnl || 0, sub: 'DCA', tipo: 'dca' }); });
     var livre = Math.max(0, (e.banca ? e.banca.atual : 0) - ((e.risco || {}).margem_aberta || 0));
     l.push({ id: 'livre', nome: 'Livre', v: livre, pnl: 0, sub: 'sem margem', tipo: 'livre' });
@@ -158,7 +158,7 @@
   function alocacao(e) {
     var pos = e.posicoes || [], rg = e.risco || {}, eq = e.equity_total || 0;
     var livre = Math.max(0, (e.banca ? e.banca.atual : 0) - (rg.margem_aberta || 0));
-    var l = pos.map(function (p, i) { return { n: F.par(p.ativo), v: p.valor_reais || 0, c: CORES[i % CORES.length], d: p.direcao + ' ' + p.alavancagem + 'x' }; });
+    var l = pos.map(function (p, i) { return { n: F.par(p.ativo), v: p.valor_reais || 0, c: CORES[i % CORES.length], d: p.direcao + ' ' + A.esc(p.alavancagem) + 'x' }; });
     var tot = l.reduce(function (a, x) { return a + x.v; }, 0) + livre || 1;
     $('ct-al-n').textContent = pos.length + (pos.length === 1 ? ' posição' : ' posições') + ' · ' + F.f0((tot - livre) / tot * 100) + '% em margem';
     var C = 2 * Math.PI * 58, acc = 0, segs = l.map(function (x) { var f = x.v / tot, s = '<circle cx="75" cy="75" r="58" fill="none" stroke="var(--' + x.c + ')" stroke-width="16" stroke-dasharray="' + (f * C).toFixed(2) + ' ' + C.toFixed(2) + '" stroke-dashoffset="' + (-acc * C).toFixed(2) + '"/>'; acc += f; return s; }).join('');
@@ -249,9 +249,16 @@
     try { await A.api('/dca', { ativo: a, valor_aporte: v, freq_dias: d }); A.toast('Plano DCA criado: ' + F.par(a) + ' ' + F.brl(v) + ' / ' + d + ' d'); A.carregar(); }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
+  var aportando = false;
   async function aportar(d) {
+    /* aporte é compra (de papel) e não é idempotente: diálogo como toda ação de dinheiro, e um em voo por vez */
+    if (aportando) return;
+    var ok = await A.dialogo({ titulo: 'Aportar agora', ok: 'Aportar', corpo: '<p>Compra <b>' + F.brl(d.valor_aporte) + '</b> de <b>' + A.esc(F.par(d.ativo)) + '</b> a mercado, fora do calendário do plano (a cada ' + A.esc(String(d.freq_dias)) + ' dias).</p>' });
+    if (!ok || aportando) return;
+    aportando = true;
     try { var r = await A.api('/dca/aportar', { id: d.id }); A.toast(r.ok ? 'Aporte feito em ' + F.par(d.ativo) + ' @ ' + F.px(r.preco) : 'Aporte recusado: ' + (r.erro || 'sem detalhe'), r.ok ? '' : 'neg'); A.carregar(); }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
+    finally { aportando = false; }
   }
   async function remover(d) {
     var ok = await A.dialogo({ titulo: 'Remover plano de DCA', ok: 'Remover', perigo: true, corpo: '<p>Remove o plano de <b>' + A.esc(F.par(d.ativo)) + '</b> (' + d.n_aportes + ' aportes, ' + F.brl(d.total_investido) + ' investidos, hoje ' + F.brl(d.valor_atual) + ').</p>' });
