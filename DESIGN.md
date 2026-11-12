@@ -1,498 +1,199 @@
-# DESIGN.md - Cripto Bot Terminal
+# DESIGN.md — Apollux · direção Pulse (v2)
 
-Fonte da verdade do sistema visual do painel (`web/index.html`). O CSS e os `style` inline dos
-renders JS sao projecoes deste arquivo. Se divergirem, este arquivo vence.
+Fonte da verdade do sistema visual do front (`web/index.html` + `web/app/`). O CSS da casca e o CSS
+escopado de cada view são projeções deste arquivo. Se divergirem, este arquivo vence.
 
-**Direcao atual: transposicao do design system do CoinMarketCap, tema escuro.**
-Decidido em 2026-08-22 pelo dono do projeto, substituindo a direcao navy/glassmorphism da secao 4
-do `PLANO-FRONTEND-REDESIGN.md`. Aquela secao esta obsoleta; o que vale e este arquivo.
+**Direção atual: Apollux, direção Pulse, paleta padrão Osso.** Decidido pelo dono em
+2026-11-12 ("do jeito que está no mock, está perfeito"; no mesmo dia o padrão passou do Elétrico
+para o Osso): marca Apollux, agente Apollo, seletor de
+12 paletas lembrado no `localStorage`. Fonte do desenho: os mockups em `DS/mockups/d4-pulse.html` e
+`DS/mockups/pulse-views/` (fora do git, do dono) e o brand book `DS/BRAND-BOOK-2026-11-12.md`.
 
-Este documento nao descreve o CMC de memoria. Os valores abaixo foram **medidos** carregando
-coinmarketcap.com em navegador real e lendo o `:root` deles (rampas completas, os dois temas),
-mais a medicao do que estava renderizado (frequencia de cor, fonte, raio, peso, e o componente
-de tabela). O que nao veio deles esta marcado como **desvio declarado**, com o motivo.
+Os valores abaixo foram **medidos** no front em produção local (Chromium, 1366 px, `getComputedStyle`
+e o próprio `web/app/paletas.js`), não copiados de memória do mock. Contraste calculado pela fórmula
+WCAG 2.1 sobre os hex das 12 paletas.
 
----
-
-## Context
-
-- Artifact type: dashboard / data tool. Terminal de paper trading, alta densidade numerica.
-- Positioning: technical, utilitario. Instrumento de operacao.
-- Audience: o dono do projeto, sessao longa, numero mudando a cada 3s.
-  Primary action: decidir sobre um sinal (confirmar ou pular) sem ler errado.
-- Adjectives: denso, plano, direto, familiar, noturno.
-- Aesthetic essence: **planilha viva**.
-- Single-minded proposition: parece um terminal de mercado que voce ja sabe usar.
-- Mode: **dark only**. Density: dense.
-- Constraints: arquivo unico `web/index.html`, sem build, sem framework, sem script de terceiro
-  (libs vendoradas em `web/vendor/`), IDs e handlers globais preservados, funciona em monolito
-  (`API_BASE` vazio) e split (Vercel + backend separado).
-
-## Aesthetic
-
-- Direction: **CoinMarketCap night**. Plano, hairline, raio pequeno, zero vidro, zero aura,
-  zero sombra decorativa. A hierarquia vem de **peso e tamanho de fonte**, nao de superficie.
-- Defining trait: **a tabela e a protagonista**. Ela nao mora dentro de um card; ela ocupa a
-  largura e o resto da pagina se organiza em volta. Card so existe para o que nao e tabela.
-- Signature move: **a linha da tabela termina em sparkline**. Toda linha que representa algo que
-  se move no tempo (posicao, plano DCA, faixa de conviccao) fecha com a mini-curva daquilo, do
-  mesmo jeito que o CMC fecha cada moeda com o 7d. E o que faz uma grade de numeros virar leitura.
+Histórico: de 2026-08-22 a 2026-11-12 a direção foi a transposição do CoinMarketCap night (tabela
+protagonista, hairline, raio pequeno); ela vive intacta em `web/classico.html` e no histórico do git
+deste arquivo.
 
 ---
 
-## Color
+## Contexto
 
-Paleta escura do CMC, com **quatro correcoes de contraste**. O sistema deles reprova WCAG AA em
-quatro tokens, e o nosso plano trata contraste como portao, nao enfeite. Cada correcao clareia o
-token **dentro da propria rampa**, preservando matiz e saturacao (a maior mexe +0.17 de
-luminancia).
+- Tipo: terminal de operação + ferramenta de análise. Um operador (o dono), sessão longa, número
+  mudando a cada 3 s.
+- Ação principal: decidir sobre um sinal ou uma posição sem ler errado, e saber em um olhar se o
+  Apollo está ligado, se a trava disparou e quanto o dia já custou.
+- Adjetivos: vivo, noturno, preciso, elétrico, honesto.
+- Essência: **um instrumento com presença**. O Apollo é uma esfera de partículas que respira;
+  os números são o chão firme em volta dela.
+- Modo: **escuro apenas**. Densidade: média (cards com respiro, tabelas densas dentro).
+- Restrições: estático, sem build, sem framework (`web/` + `web/app/`), libs vendoradas em
+  `web/vendor/`, nenhum script de terceiro (CLAUDE.md §2), funciona em monolito (`API_BASE` vazio,
+  `uvicorn api:app`) e separado (Vercel + backend no dl380).
 
-### Superficies e linha
+## Regras que não se negociam
 
-| token | valor | origem CMC |
+1. **Tudo por token.** Nenhuma cor literal nas views: elas usam `var(--x)` e `rgba(var(--x-rgb),a)`.
+   O canvas e o Lightweight-Charts, que só aceitam string, leem os tokens do `:root` na hora
+   (`APX.cor`, `APX.rgba`) e repintam no evento `paleta`.
+2. **O acento nunca vai em P&L.** Lucro é `--pos`, prejuízo é `--neg`, sempre, nas 12 paletas.
+   O acento é marca, foco, estado do Apollo e ação primária.
+3. **Número de mock não entra.** Ou é dado real de uma rota, ou é estado vazio dito em palavras.
+   O que o mock mostrava sem rota que o sustente vira "em breve" com a fase.
+4. **Movimento respeita `prefers-reduced-motion`**: sem contagem, sem traçado, sem entrada; canvas
+   desenha um frame só.
+
+---
+
+## Cor
+
+### Os tokens
+
+Cada paleta define 15 valores (`web/app/paletas.js`, `window.APOLLUX_PALETAS`); a casca
+(`app/casca.js · aplicaPaleta`) os escreve no `:root` e deriva os canais RGB e os níveis de brilho.
+
+| token CSS | campo da paleta | papel |
 |---|---|---|
-| `--bg` | `#0D1421` | `--c-color-background-2` |
-| `--bg-el` | `#171924` | `--c-color-background-1`. Fundo *raised* do chrome (topbar, status bar). Nao se chama `--bg2`: esse nome era o alias morto do tema navy e reaproveita-lo apagaria a fronteira entre token e alias. |
-| `--surface` | `#222531` | `--c-color-surface-1` (= gray-100 dark) |
-| `--surface2` | `#2B2E3D` | `--c-color-surface-2` |
-| `--line` | `#323546` | gray-200 dark. **A borda de 1px e o separador universal deste tema.** |
-| `--line2` | `#53596A` | gray-300 dark, para borda que precisa aparecer (input, chip ativo) |
+| `--bg` | `bg` | fundo da página |
+| `--panel` | `panel` | superfície de card |
+| `--panel2` | `panel2` | superfície dentro de card (item de lista, input, caixa) |
+| `--line` · `--line2` | `line` · `line2` | hairline padrão · borda que precisa aparecer (input, botão ghost) |
+| `--txt` · `--txt2` · `--mute` | `text` · `text2` · `mute` | texto principal · secundário · rótulo e legenda |
+| `--accent` | `accent` | marca, foco, Apollo, ação primária. **Nunca P&L** |
+| `--accent-ink` | `on` | texto sobre o acento (botão primário) |
+| `--pos` · `--neg` | `pos` · `neg` | alta/lucro/LONG · baixa/prejuízo/SHORT |
+| `--warn` · `--info` | `warn` · `info` | aviso, guarda perto do teto · informação neutra, Donchian |
+| `--glow` | `glow` | intensidade do brilho da paleta (0,20 Osso → 0,50 Neon) |
+| `--glow-hi` · `--glow-lo` · `--glow-xlo` | derivados | `glow × 1,6` (teto 1) · `× 0,5` · `× 0,25` |
+| `--{bg,panel,txt,line,accent,pos,neg,warn}-rgb` | derivados | o mesmo hex como `r,g,b`, para alfa |
 
-### Texto
+Precedência na abertura: `?paleta=` na URL (ou no hash) > `localStorage['pulse.paleta']` > `osso`.
+O `<head>` já nasce com os valores do Osso (e o `theme-color` e o manifesto com o `bg` dele), então a primeira pintura não pisca.
 
-| token | valor | contraste (page / surface / surface2) | nota |
-|---|---|---|---|
-| `--txt` | `#FFFFFF` | 18.44 / 15.25 / 13.45 | `--c-color-text-primary` |
-| `--txt2` | `#A1A7BB` | 7.69 / 6.36 / 5.61 | `--c-color-text-secondary` |
-| `--txt3` | `#9197A9` | 6.32 / 5.23 / 4.61 | **corrigido**. O `--c-color-text-caption` deles e `#646B80` e da 2.87:1 no card |
+### As 12 paletas, medidas
 
-### Acento e semanticos
+Contraste WCAG 2.1 de cada par que a interface usa para texto. Alvo: 4,5:1 (AA, texto normal).
+**Nenhum par fica abaixo de 4,5 em nenhuma paleta** (o menor é `mute` sobre `panel2` na Violeta,
+4,59). Fonte: `web/app/paletas.js`, calculado em 2026-11-12.
 
-| token | valor | papel | nota |
-|---|---|---|---|
-| `--accent` | `#3861FB` | **preenche**: botao primario, barra, marca | blue-500. Branco por cima da 4.92:1 |
-| `--accent-txt` | `#6B90FF` | **escreve**: link, aba ativa, chip azul | **corrigido**. O `#6188FF` deles da 4.15:1 no elevado |
-| `--pos` | `#16C784` | alta, lucro, LONG | green-500, passa em tudo. **Ja era a cor do projeto** |
-| `--neg` | `#EF6C73` | baixa, prejuizo, SHORT | **corrigido**. O `#EA3943` deles da 3.75:1 no card |
-| `--warn` | `#F5B97F` | aviso, atencao | `--c-color-reminder` (beige-500) |
+| paleta | família | bg | panel | accent | pos | neg | warn | text/panel | text2/panel | mute/panel | mute/panel2 | accent/panel | on/accent | pos/panel | neg/panel | warn/panel |
+|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Neon (neon) | verde | `#030705` | `#0A1410` | `#00FF88` | `#34D399` | `#FF4D6D` | `#FFD166` | 17,88 | 8,16 | 4,94 | 4,62 | 13,98 | 14,13 | 9,75 | 5,83 | 13,00 |
+| Elétrico (eletrico) | azul | `#03060C` | `#0A1220` | `#4DA3FF` | `#34D399` | `#FF5C6A` | `#FFC24D` | 16,64 | 7,81 | 5,16 | 4,80 | 7,14 | 7,28 | 9,75 | 6,24 | 11,67 |
+| Solar (solar) | âmbar | `#0A0704` | `#15100A` | `#FFB020` | `#3FD98C` | `#FF5A5F` | `#FF7A1A` | 17,65 | 9,21 | 5,74 | 5,44 | 10,34 | 10,27 | 10,37 | 6,20 | 7,25 |
+| Ouro (ouro) | dourado | `#0B0A08` | `#141210` | `#E2C275` | `#3FD98C` | `#FF5A5F` | `#FF8A3D` | 16,58 | 8,51 | 5,23 | 4,91 | 10,86 | 10,65 | 10,25 | 6,12 | 7,97 |
+| Holo (holo) | ciano | `#04080A` | `#0A1418` | `#19E6FF` | `#2BE39A` | `#FF5C6A` | `#FFB020` | 17,41 | 8,72 | 5,68 | 5,29 | 12,26 | 11,97 | 11,15 | 6,21 | 10,20 |
+| Magenta (magenta) | rosa | `#0A040A` | `#150A14` | `#FF3DA6` | `#34D399` | `#FF6B4D` | `#FFD166` | 17,59 | 8,09 | 4,90 | 4,62 | 5,96 | 6,01 | 10,06 | 6,88 | 13,42 |
+| Violeta (violeta) | roxo | `#06050C` | `#0E0C1A` | `#8B6CFF` | `#34D399` | `#FF5C6A` | `#FFC24D` | 16,57 | 7,79 | 4,84 | 4,59 | 5,24 | 5,29 | 10,06 | 6,44 | 12,04 |
+| Osso (osso) | mono | `#0B0B0C` | `#121214` | `#E8E4D9` | `#3FD98C` | `#FF5A5F` | `#E3B341` | 16,00 | 6,70 | 5,46 | 5,17 | 14,73 | 14,75 | 10,26 | 6,13 | 9,61 |
+| Aço (aco) | azul-cinza | `#0A0C10` | `#111419` | `#9FB3C8` | `#3FD98C` | `#FF5A5F` | `#E3B341` | 15,71 | 7,59 | 4,93 | 4,61 | 8,57 | 8,72 | 10,12 | 6,05 | 9,48 |
+| Lima (lima) | verde-amarelo | `#0A0A06` | `#131408` | `#D4FF3F` | `#3FD98C` | `#FB7185` | `#FF8A3D` | 17,32 | 9,38 | 5,77 | 5,41 | 16,07 | 15,66 | 10,18 | 6,90 | 7,92 |
+| Menta (menta) | verde-água | `#040908` | `#0A1513` | `#5CF0C8` | `#4ADE80` | `#FF5C6A` | `#FFD166` | 17,84 | 9,00 | 5,70 | 5,36 | 13,06 | 12,04 | 10,67 | 6,19 | 12,89 |
+| Coral (coral) | laranja | `#0B0605` | `#160C0A` | `#FF6A3D` | `#3FD98C` | `#FF2D6F` | `#FFD166` | 17,46 | 8,53 | 5,42 | 5,15 | 6,76 | 6,71 | 10,55 | 5,37 | 13,35 |
 
-### Tintas (fundo de chip, banner, celula destacada)
+Os demais valores de cada paleta:
 
-Sao os tons `-800` da rampa do CMC, feitos exatamente para isto no tema escuro:
-
-| tinta | valor | texto por cima | contraste |
-|---|---|---|---|
-| `--pos-bg` | `#173C37` | `--pos` | 5.49:1 |
-| `--neg-bg` | `#411F2A` | `--neg` | 4.86:1 |
-| `--accent-bg` | `#1E274F` | `--accent-txt` | 4.84:1 |
-| `--warn-bg` | `#433936` | `--warn` | 6.46:1 |
-
-**Variacao de alpha declarada.** Chip e banner semantico precisam de uma borda que diga a mesma
-coisa que a tinta sem gritar. Em vez de inventar um terceiro hex por familia, a borda e o proprio
-token a **34%** - o valor que a secao Components ja fixa para o botao destrutivo, estendido aos
-irmaos: `--pos-b`, `--neg-b`, `--warn-b`. E a unica excecao a regra "nenhuma cor fora de token".
-
-### Regra de par (vale em todo lugar)
-
-Texto colorido sobre a **propria tinta** e onde tema escuro reprova sem avisar: a tinta levanta a
-luminancia do fundo e come o contraste. Por isso azul tem dois papeis: `--accent` **preenche**,
-`--accent-txt` **escreve**. Verde, vermelho corrigido e warn nao precisam do par: passam sobre a
-propria tinta.
-
-### Distribuicao
-
-Neutro domina (~70%). Azul aparece so em acao, link e estado ativo (~20%). Verde e vermelho
-somam ~10% e **so falam de dinheiro e direcao**: P&L, LONG/SHORT, vela, entrada/stop, status de
-entrada. Nunca em nav ativa, foco, botao primario ou estado de interface.
-
----
-
-## Typography
-
-**Inter, e so Inter.** E o que o CMC usa, medido: 647 de 647 elementos com texto. Sem face de
-display, sem mono. A hierarquia sai de peso e tamanho.
-
-- Family: `Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
-- Line-height: **130%** em titulo, **150%** em corpo (os dois tokens deles)
-
-Escala medida no `:root` do CMC, e a frequencia real de uso na home deles:
-
-| token | px | uso | frequencia medida no CMC |
-|---|---|---|---|
-| `--fs-50` | 11 | rotulo minusculo, legenda de eixo | 4 |
-| `--fs-75` | 12 | cabecalho de tabela, meta, chip | 60 |
-| `--fs-100` | 14 | **corpo e celula de tabela** | 568 (dominante) |
-| `--fs-200` | 16 | subtitulo | 3 |
-| `--fs-300` | 18 | titulo de secao | - |
-| `--fs-600` | 20 | valor de tile | 10 |
-| `--fs-800` | 25 | numero grande | - |
-| `--fs-1000` | 32 | equity no topo | - |
-
-Pesos: 400 (corpo raro), **500 (padrao - 507 de 647 no CMC)**, 600 (enfase), 700 (cabecalho de
-tabela, titulo). O peso 500 como base e uma marca do CMC e a gente adota.
-
-**Desvio declarado: `font-variant-numeric: tabular-nums` em todo numero.** O CMC usa `normal`
-(medido). Aqui os numeros sao repintados a cada 3 segundos pelo poll; sem tabular eles mudam de
-largura e a coluna dança. Legibilidade em movimento ganha de fidelidade.
-
-**Desvio declarado: Inter como face unica** contraria a regra "sempre um par display + corpo".
-E deliberado: o CMC nao tem par, e a densidade do produto pede uma familia so, com hierarquia por
-peso. Trocar isso descaracterizaria a transposicao.
+| paleta | panel2 | line | line2 | text | text2 | mute | on | info | glow |
+|---|---|---|---|---|---|---|---|---|---:|
+| Neon | `#0F1C16` | `#123D2A` | `#1C5A3E` | `#E8FFF3` | `#8FB3A3` | `#6B8A78` | `#03140A` | `#4DA3FF` | 0,5 |
+| Elétrico | `#0F1A2C` | `#16304F` | `#1F4573` | `#EAF2FF` | `#93A9C8` | `#7088A8` | `#04101F` | `#7DD3FC` | 0,45 |
+| Solar | `#1C1610` | `#3D2E14` | `#5A431C` | `#FFF6E8` | `#C4B394` | `#9A8C72` | `#1A1000` | `#7DD3FC` | 0,35 |
+| Ouro | `#1B1915` | `#3A3220` | `#55492E` | `#F5F1E8` | `#B8AE9A` | `#8F8772` | `#1A1405` | `#7DD3FC` | 0,3 |
+| Holo | `#0F1C22` | `#143A44` | `#1D5563` | `#E6FBFF` | `#8FB8C4` | `#6E949F` | `#04181D` | `#7DD3FC` | 0,45 |
+| Magenta | `#1E1020` | `#3F1A3D` | `#5C2659` | `#FFF0FA` | `#C49BBE` | `#977691` | `#1C0414` | `#7DD3FC` | 0,45 |
+| Violeta | `#151226` | `#2B2550` | `#3E3670` | `#EFEBFF` | `#A79FCB` | `#817AA5` | `#0F0820` | `#7DD3FC` | 0,4 |
+| Osso | `#18181B` | `#2A2A2F` | `#3A3A41` | `#EDEDEF` | `#9A9AA3` | `#8A8A92` | `#121212` | `#9FB3C8` | 0,2 |
+| Aço | `#171B22` | `#2A313D` | `#3B4553` | `#E9EDF3` | `#9CA7B8` | `#7A8594` | `#0E1218` | `#7DD3FC` | 0,25 |
+| Lima | `#1A1B0C` | `#35381A` | `#4C5026` | `#F7F8EC` | `#B8BB9A` | `#8F9272` | `#141800` | `#7DD3FC` | 0,35 |
+| Menta | `#0F1C1A` | `#164038` | `#215C50` | `#E9FFFA` | `#93BDB3` | `#71968C` | `#03201A` | `#7DD3FC` | 0,4 |
+| Coral | `#1E120F` | `#3F2119` | `#5C3024` | `#FFF1EC` | `#C8A59A` | `#9E8277` | `#1E0A03` | `#7DD3FC` | 0,35 |
 
 ---
 
-## Spacing, radius, shadow, border
+## Tipografia
 
-Escala de espaco do CMC, adotada inteira: **4, 8, 12, 16, 20, 24, 32, 40, 48, 64**.
+Três famílias, todas pelo Google Fonts (a única exceção de terceiro do `web/`, stylesheet sem JS,
+carregada sem bloquear: `preload` + `onload`, como no P2-37).
 
-Raio do CMC: 2, 4, 8, 12, 16, 20, 50%. Medido no que eles renderizam, o uso real e concentrado:
-**4px (211 elementos) e 8px (143)**. Adotamos:
-
-| token | valor | uso |
+| papel | família | medido |
 |---|---|---|
-| `--r-sm` | 4px | chip, badge, botao pequeno, input |
-| `--r` | 8px | tile, card, painel, modal |
-| `--r-pill` | 999px | chip de filtro, pilula de status |
+| display (título da view, nome do Apollo, par no gráfico) | **Syne** 600-800 | h1 24 px / 800 / `-0.01em`; h2 de card 16 px / 700 / `-0.01em`; par 22 px / 800; nome do Apollo 34 px / 800 com brilho do acento |
+| interface (texto, botão, nav) | **DM Sans** 400-600 | corpo 14 px / 1.45; nav 14 px / 600; botão 12,5 px / 600; botão `sm` 12 px |
+| números e rótulos | **Fira Code** 400-600 | valor de KPI 27 px / 600 / `-0.02em`; rótulo de KPI e `eyebrow` 10,5 px / caixa alta / `0.12em`; chip 10,5 px / 600; contador 11 px; célula de tabela 12 px com `tabular-nums` |
 
-**Sombra: praticamente nao existe.** No CMC medido, so 4 elementos tem sombra na home inteira.
-A separacao e feita por **borda de 1px `--line`**. Sombra fica reservada a camada que flutua de
-verdade (modal, dropdown), usando o `--c-shadow-overlay` deles:
-`0 8px 32px rgba(13,20,33,.5), 0 1px 2px rgba(13,20,33,.4)`.
+Regra: **todo número é Fira Code**, com algarismos tabulares, para que o poll de 3 s não faça a
+coluna dançar. Rótulo em caixa alta só em mono e só até 11 px.
 
-Isto substitui a regra antiga "aresta OU sombra": aqui e **sempre aresta**, e sombra so quando o
-elemento esta por cima de outro conteudo.
+## Forma e espaço
 
-**Foco e selecao** usam o padrao medido no CMC: anel interno de 1.5px em `--accent`
-(`box-shadow: inset 0 0 0 1.5px var(--accent)`), que nao empurra layout. Para foco de teclado
-mantemos `outline` visivel de 2px com offset, porque anel interno sozinho e fraco demais como
-indicador de foco.
-
----
-
-## Layout grammar
-
-O que faz o CMC parecer o CMC nao e a cor, e o arranjo. Sai a sidebar, sai o bento, sai o hero
-gigante de equity.
-
-```
-+----------------------------------------------------------------+
-| (o) Cripto Bot   Painel  Grafico       Escanear Panico  Sair    |  topbar 64px, borda embaixo
-+----------------------------------------------------------------+
-| Sinais   Posicoes   Journal   Metricas   DCA                    |  tab bar, ativo sublinhado
-+----------------------------------------------------------------+
-| [Equity     ][Banca      ][Posicoes   ][Risco dia ][Exposicao ] |  fileira de tiles
-| [R$ 1.309,30][R$ 1.228,71][    1      ][ ##__ 33% ][ ### 67%  ] |  cada um com sparkline
-| [+30.93% ~~~][           ][           ][          ][          ] |  ou barra
-+----------------------------------------------------------------+
-| (Todos) (LONG) (SHORT) (conv >= 60)                             |  barra de chips
-+----------------------------------------------------------------+
-|  #  Ativo    Lado   Conv  Entrada   Agora     D      P&L    7d  |  cabecalho grudado
-|  1  ARB      LONG    61   0,09660   0,09710  +0,5%  +R$80  ~~~  |  tabela protagonista,
-|  2  APT      SHORT   74   4,12000   4,09000  +0,7%  +R$ 1  ~~~  |  sem card em volta
-+----------------------------------------------------------------+
-| AO VIVO . banca R$1.228 . exp 67% . risco dia -R$22 . 22:41     |  status bar fixa embaixo
-+----------------------------------------------------------------+
-```
-
-- **Topbar** (56px min): marca a esquerda, nav principal (Painel / Grafico) ao lado, acoes a
-  direita. Borda de 1px embaixo, fundo `--bg-el`. Substitui a sidebar.
-  **Nao gruda no topo** (decisao do P2-28): com a tab bar o conteudo virou uma tela por bloco e a
-  rolagem ficou curta, enquanto um topo grudado obrigaria o `th` sticky da tabela a conhecer a
-  altura da topbar - numero magico que quebra assim que ela quebra de linha em 390px.
-- **Tab bar**: fica logo abaixo da topbar e acima da fileira de tiles, como no diagrama.
-  Navega entre blocos de dado. Item ativo = `--txt` peso 600 + sublinhado de 2px em
-  `--accent`; inativo = `--txt2` peso 500. Sem fundo, sem pilula.
-- **Fileira de tiles**: caixas de borda hairline, raio 8, sem sombra. Rotulo 12px `--txt3`,
-  valor 20-25px peso 700, delta com triangulo colorido, e um sparkline ou barra na base.
-- **Barra de chips**: pilulas de raio total, borda `--line`, ativo com fundo `--accent-bg`,
-  texto `--accent-txt` e borda `--accent`.
-- **Tabela**: largura cheia, sem card. `th` 12px/700 em `--txt3`, borda embaixo `--line`,
-  **grudado no topo ao rolar** (`position: sticky`). `td` 14px/500, altura de linha ~48px,
-  padding 12px 10px, borda embaixo `--line`. Texto a esquerda, numero a direita, tabular.
-  Hover de linha: fundo `--surface`.
-  **Desvio declarado: prioridade de coluna no lugar de rolagem horizontal.** Rolar a tabela
-  dentro de um wrapper e incompativel com cabecalho grudado - o wrapper com `overflow` vira o
-  contexto de rolagem e o `sticky` deixa de mirar a viewport. Em vez disso as colunas somem por
-  prioridade (`.col-2` em 1100px, `.col-3` em 820px, `.col-4` em 620px) e o que sumiu continua
-  legivel na sub-linha expansivel. A pagina nunca rola na horizontal, e o cabecalho gruda em
-  qualquer largura.
-  Nas tabelas **sem** sub-linha (posicoes, journal, DCA, metricas) a saida e outra: elas cabem
-  inteiras acima de 820px, e so abaixo disso o container vira rolador horizontal. Ali o
-  cabecalho deixa de grudar - troca deliberada, porque a alternativa era esconder coluna sem
-  ter onde por o que sumiu.
-- **Status bar** fixa no rodape: 12px, `--txt2`, borda em cima, fundo `--bg-el`. Carrega o que
-  precisa estar sempre visivel (banca, exposicao, risco do dia, AO VIVO, hora do ultimo poll).
-  **Substitui os banners de risco** que hoje empurram o conteudo para baixo.
-
-### Onde a curva de capital foi parar
-
-O diagrama nao tem lugar para o grafico de equity, e ele nao pode simplesmente sumir: `#chart` e
-um dos IDs que o `carregar()` escreve. Ele mora na aba **Metricas** - e a versao detalhada do que
-o tile de equity resume, e Metricas e o bloco que fala de desempenho. Fora de uma aba ele
-devolveria a pagina de 8000px que a tab bar existe para acabar.
-
-Consequencia tecnica: o Chart.js mede o container na criacao, e dentro de uma aba escondida essa
-medida e zero. O `subaba()` chama `chart.resize()` ao entrar em Metricas.
-
-### O que isso custa
-
-A fila de sinais hoje e uma lista de cards (`.sig`) com "por que" em chips, status de entrada e
-tres botoes. Virando linha de tabela, os chips de motivo nao cabem na linha. Solucao especificada:
-**linha expansivel** - a linha mostra o essencial e um clique abre uma sub-linha com motivos,
-stop e os botoes. E o mesmo padrao que o CMC usa para expandir detalhe de moeda.
-
----
-
-## Components
-
-- **Botao primario**: fundo `--accent`, texto **branco** (4.92:1), raio 4, peso 600, 14px.
-  Estados: hover `--accent-hover` `#2444D4`; active idem com `translateY(1px)`;
-  disabled opacity .45.
-- **Botao secundario**: fundo transparente, borda `--line2`, texto `--txt2`. Hover: fundo
-  `--surface2`.
-- **Botao destrutivo** (Panico): fundo `--neg-bg`, texto `--neg`, borda `--neg` a 34%.
-  Unica excecao a regra "nunca colorir botao por significado": aqui a cor **e** o significado.
-- **Chip / badge**: raio total ou 4px, 12px/600, padding 2px 8px. Direcao usa `--pos-bg`/`--neg-bg`.
-- **Input**: fundo `--surface2`, borda `--line2`, raio 4, 14px, foco troca borda para `--accent`
-  e adiciona `box-shadow: 0 0 0 3px rgba(56,97,251,.3)` (o `--input-shadow-color-focus` deles).
-- **Tabela**: especificada acima. Sem zebra - o separador de 1px basta e zebra em tema escuro
-  briga com as tintas de linha.
-- **Modal**: `--surface`, raio 8, sombra de overlay, backdrop `rgba(23,25,36,.6)`
-  (o `--c-color-overlay-bg` deles). Foco no primeiro campo, Esc fecha, foco volta ao gatilho.
-- **Estados vazio / carregando / erro**: skeleton com shimmer no primeiro carregamento, `.empty`
-  centrado em `--txt3`, `.empty.off` em `--neg` quando o backend caiu.
-
-## Motion
-
-- `--dur` 150ms (estado de controle), `--dur2` 280ms (camada), `--ease` `cubic-bezier(.2,.8,.25,1)`.
-- So `transform` e `opacity`. Transicao sempre **nomeada**, nunca `transition:.15s` solto, que
-  vira `all` e poe o browser para vigiar propriedade que causa layout.
-- `prefers-reduced-motion` zera animacao e shimmer.
-- Este tema e mais parado que o anterior de proposito: o unico movimento continuo e o ponto do
-  AO VIVO, que significa "o poll esta vivo".
-
-## Graficos
-
-Chart.js e Lightweight-Charts recebem **string de cor**: nao entendem `var()`. O objeto `TEMA` le
-os tokens do `:root` em tempo de carga, entao trocar um token troca a vela junto.
-
-| elemento | cor |
+| medida | valor |
 |---|---|
-| vela | `--pos` / `--neg` |
-| curva de capital, sparkline dos tiles e sparkline de linha | `--accent-txt`, area em `rgba(56,97,251,.28)` |
-| EMA20 / EMA50 | `--accent-txt` / `--warn` |
-| Bollinger | `rgba(161,167,187,.5)` (`--txt2` translucido; a mediana em `.25`) |
-| entrada / stop | `--pos` / `--neg` |
-| liquidez, posicao aberta | `--warn` |
-| grade | `--line` |
+| raio de card (`--r`) | 14 px |
+| raio de botão · input | 9 px · 9 px (`sm`: 8 px) |
+| raio de chip · contador/"em breve" | 5 px · pílula (999 px) |
+| padding de card · de KPI | 18 px · 18 × 20 px |
+| gap entre cards (todas as views) | 18 px |
+| grade da casca | sidebar 240 px + conteúdo; ≤ 1024 px a sidebar vira faixa de navegação; ≤ 640 px a nav rola na horizontal |
+| gutter lateral no celular | 16 px (com `env(safe-area-inset-*)`) |
+| borda | 1 px `--line` em tudo; `--line2` onde a borda precisa aparecer |
 
-## Accessibility
+## Movimento
 
-- Contraste: portao de 4.5:1 em **todo** no de texto, verificado por varredura automatizada na
-  pagina renderizada, nao por amostra. As quatro correcoes da secao Color existem por causa disso.
-- Foco visivel e gerenciado em todo elemento interativo; alvos >= 24px.
-- Significado nunca so por cor: direcao tem texto (LONG/SHORT), P&L tem triangulo, risco tem
-  rotulo alem da barra.
-- `prefers-reduced-motion` respeitado.
+| o quê | como | quando |
+|---|---|---|
+| contador de KPI | GSAP 1,4 s `power3.out` de 0 ao valor | **só na primeira carga**; nos polls seguintes troca o texto e dá um `flash` de 0,6 s |
+| entrada da view | GSAP `y 14 → 0`, opacidade, 0,5 s, `stagger` 0,06 | a cada troca de rota |
+| curva de equity | traçado 2 s `power2.inOut`, área entra em 1,2 s | só na primeira carga da view |
+| gauge (win rate, convicção) | 1,5 s `power3.out` | só na primeira carga |
+| calendário do Dia a dia | células de `scale .5` a 1, `stagger` 6 ms | só na primeira leitura |
+| LED de estado | pulsa 1,6 s | contínuo, CSS |
+| faixas de luz do fundo | deriva 18 s e 22 s `sine.inOut` | contínuo, GSAP |
+| hover de card e botão | 0,18-0,2 s em borda e sombra | CSS |
 
-## Tokens
+Com `prefers-reduced-motion` (ou `?static=1`): nada disso anima, o valor final aparece direto.
 
-```css
-:root{
-  /* superficie e linha */
-  --bg:#0D1421; --bg-el:#171924; --surface:#222531; --surface2:#2B2E3D;
-  --line:#323546; --line2:#53596A;
-  /* texto */
-  --txt:#FFFFFF; --txt2:#A1A7BB; --txt3:#9197A9;
-  /* acento: --accent preenche, --accent-txt escreve */
-  --accent:#3861FB; --accent-hover:#2444D4; --accent-txt:#6B90FF; --accent-bg:#1E274F;
-  /* semanticos: SO dinheiro e direcao */
-  --pos:#16C784; --pos-bg:#173C37;
-  --neg:#EF6C73; --neg-bg:#411F2A;
-  --warn:#F5B97F; --warn-bg:#433936;
-  /* borda de chip/banner: o proprio token a 34% (variacao de alpha declarada) */
-  --pos-b:rgba(22,199,132,.34); --neg-b:rgba(239,108,115,.34); --warn-b:rgba(245,185,127,.34);
-  /* forma */
-  --r-sm:4px; --r:8px; --r-pill:999px;
-  --shadow-overlay:0 8px 32px rgba(13,20,33,.5),0 1px 2px rgba(13,20,33,.4);
-  --overlay-bg:rgba(23,25,36,.6);
-  /* tipografia */
-  --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  --fs-50:11px; --fs-75:12px; --fs-100:14px; --fs-200:16px; --fs-300:18px;
-  --fs-600:20px; --fs-800:25px; --fs-1000:32px;
-  --lh-head:1.3; --lh-body:1.5;
-  /* motion */
-  --ease:cubic-bezier(.2,.8,.25,1); --dur:.15s; --dur2:.28s;
-}
-```
+## Componentes e estados
 
-- Adapter: plain CSS custom properties no bloco `<style>` de `web/index.html`.
+- **Card**: `--panel`, borda `--line`, raio 14, `card-head` com `h2` à esquerda e um `count` (pílula
+  mono) à direita. Estados: normal, hover (borda clareia), vazio (`.empty`, borda tracejada e uma
+  frase do que falta), carregando (`.skel`, barra com brilho correndo), erro (frase com a rota que
+  falhou), "em breve" (`.soon`, pílula mono tracejada com a fase).
+- **KPI**: faixa de 4 colunas com divisória de brilho; rótulo mono, valor mono 27 px, linha de
+  contexto mono 11,5 px. P&L com sinal explícito (`+`/`−` tipográfico) e cor `--pos`/`--neg`.
+- **Chip**: `long`/`short` (pos/neg), `info`, `neutro`, `warn`. Direção do trade e estado, nunca
+  enfeite.
+- **Botão**: `primary` (acento cheio, tinta `--accent-ink`), `ghost` (borda `--line2`), `danger`
+  (borda e texto `--neg`), `danger solid` (só no confirmar de diálogo destrutivo), `sm`.
+- **Guarda**: pílula com LED; `hot` quando a guarda está agindo, `off` quando desligada.
+- **Diálogo**: toda ação que mexe em dinheiro ou config passa por ele, na página (nunca `confirm()`):
+  diff `antes → depois`, aviso de `toca-risco` quando cabe; reset exige digitar `RESET`.
+- **Barra de estado offline**: faixa `--warn` acima do conteúdo quando o `/estado` falha; os números
+  ficam, com o aviso de que são o último retrato. 401 volta ao portão de login.
+- **Gate (login)**: card central, prova de vida do backend (`/health`, versão e commit), olho para
+  mostrar a senha, aviso de Caps Lock, contagem regressiva no 429.
 
-## Auditoria do marco (P2-35, 2026-08-22)
+## As três peças vivas
 
-Rodada em Chromium headless contra um **backend falso local** que devolve o formato real do
-`/estado` (shapes lidos de `api.py`, `db.py`, `simulador.guarda_risco` e `dca.listar`): 30 sinais
-pendentes, 4 posicoes com sugestao de saida nos quatro niveis, 18 trades, 3 planos DCA, metricas
-com faixa de conviccao, e o `risco` nos dois estados. **Producao nao foi tocada** - ha posicao
-aberta la.
+1. **Esfera do Apollo** (`app/apollo-mesh.js`). Esfera de Fibonacci de **pontos, sem linhas**, que
+   respira e se deforma quando ele fala. Duas instâncias: `mini` no widget fixo (700 pontos; 360
+   em ≤ 640 px) e `full` no topo da #apollo (3.200; 1.400 em ≤ 640 px). API do contrato:
+   `setLevel` (mais acesa ligado, apagada desligado), `speak(ms)` (o resumo do "Chamar Apollo"),
+   `pulse()` (evento real: posição aberta/fechada, sinal novo, ordem, trava), `pause/resume`.
+   Para com a aba escondida **e fora da tela** (IntersectionObserver), e no `destroy`.
+2. **Bolhas da carteira** (#carteira). Uma bolha por posição aberta e por plano de DCA, mais a
+   bolha tracejada do saldo livre; área proporcional à margem (ou ao valor do DCA), aro `--pos` ou
+   `--neg` pelo P&L. Empacotamento por relaxação, arrastáveis com pointer events. DOM, não canvas.
+3. **Terreno de partículas** (fundo da curva no #painel). Grade de pontos 50 × 30 (30 × 18 em
+   ≤ 640 px) com um pico que respira e segue o mouse; decorativo, declarado como tal na legenda.
+   Para fora da tela, com a aba escondida e no `destroy`.
 
-### 1. Contraste - varredura, nao amostra
+## Gráficos
 
-Todo no de texto **visivel** da pagina renderizada, com o fundo compositado subindo a arvore
-(alpha incluso), como o navegador faz. Alvo 4.5:1, ou 3:1 para texto grande (>=24px, ou >=18.66px
-em peso 700).
-
-| cena | o que entra |
-|---|---|
-| 7 abas de conteudo | Sinais, Posicoes, Journal, Metricas, DCA, Mercado, Auto-trade |
-| vista Grafico | com indicadores ligados |
-| modal aberto | sobre a fila de sinais |
-| gate | limpo, com erro, com aviso, com info, e com o backend caido |
-
-**42 cenas x 3 larguras (1440 / 1000 / 390) = 9.216 nos de texto visiveis, zero reprovacao.**
-Repetido com trava diaria e teto de exposicao ativos: 5.138 nos, zero. Repetido em modo split:
-9.216 nos, zero.
-
-### 2. Contrato
-
-Medido no DOM vivo, nao no texto do arquivo: os **62 IDs de elemento** do M5 presentes (o 63o do
-grep cru era o id do gradiente da sparkline, que mora dentro de string de JS), **22 handlers
-globais** definidos, `.tab` sao exatamente as duas vistas com `data-v`, os **6 `data-tf`**
-intactos, `.modal` / `.tv-ind` / `.tv-expand` / `#tv-tfs button` ainda casando, e as 7 abas de
-conteudo em `.subtab` - classe diferente de proposito, para nao caírem no `querySelectorAll('.tab')`
-do `aba()`.
-
-### 3. Sem regressao funcional
-
-Bateria dirigida por **clique** (nao por chamada direta), 40 checagens: as 7 abas abrem uma por
-vez e **sem disparar requisicao**; Painel<->Grafico; timeframe, indicadores e expandir; a fila de
-sinais como tabela de 30 linhas; expansao de linha sobrevivendo a dois polls; Analisar levando ao
-grafico; cabecalho grudado medido no topo da viewport depois de rolar 700px; modal com foco no
-primeiro campo, Esc, e foco de volta ao gatilho **com o poll reescrevendo a lista**; o poll nao
-roubando foco nem sobrescrevendo input de config; escanear, panico, reset, fechar posicao, criar,
-aportar e remover plano DCA. Mais 19 checagens so do gate (as quatro mensagens distintas, o
-`/health` ao vivo, Caps Lock, olho, login que passa) e 15 de contrato e acabamento.
-
-### 4. Responsivo
-
-Nenhuma das 42 cenas rola a pagina na horizontal em 1440, 1000 ou 390. A vista Grafico cabe em
-1440x900 e em 1000x800 sem rolagem vertical (`scrollHeight == innerHeight`).
-
-### 5. Cor
-
-Fora do `:root` **nao existe cor literal**: o que resta no arquivo e `var(--token)`,
-`rgba(var(--pos-rgb), a)` no keyframe do pulso, e duas strings montadas a partir do proprio token
-para as libs de grafico, que so aceitam string (`rgbDe(TEMA.accent)`, `rgbDe(TEMA.txt2)`). As
-variacoes de alpha declaradas moram todas no `:root`: `--pos-b/--neg-b/--warn-b` (34%),
-`--shimmer`, `--sobre-azul`, `--focus-ring`, `--overlay-bg`, `--shadow-overlay`.
-Conferido tambem na pagina renderizada: nenhuma cor de texto computada cai fora da paleta.
-
-### 6. Anti-slop
-
-O risco aqui nao e o generico de IA, e clonar o CMC sem pensar. Os desvios continuam declarados e
-continuam valendo: `tabular-nums` em todo numero, Inter como face unica, as quatro correcoes de
-contraste, sparkline fechando a linha, prioridade de coluna no lugar de rolagem horizontal onde ha
-sub-linha, sparkline de linha em azul e nao verde/vermelho, topbar que nao gruda, curva de capital
-morando em Metricas, `max-width` nas tabelas de duas e quatro colunas, e funding **sem** sparkline
-porque nao existe serie. Cada um com o motivo escrito.
-
-### O que ficou medido, e nao arredondado
-
-- altura da pagina na aba Sinais com 30 pendentes: **8.087px -> 1.987px** (1440x900)
-- altura de linha da tabela de sinais: 52px (o alvo do documento e ~48px; a diferenca vem das
-  pilulas de lado e de status dentro da celula)
-- `prefers-reduced-motion`: zera animacao **e** shimmer (o `*` sozinho nao alcanca
-  pseudo-elemento, e o shimmer mora num `::after`)
-- os dois modos: monolito (`API_BASE` vazio) e split (front numa origem, backend noutra, com
-  preflight de CORS) - as quatro baterias passam nos dois
-
----
-
-## Slop audit
-
-- Date: 2026-08-22 | Escopo: o sistema, ainda nao a implementacao.
-- O maior risco de slop aqui **nao** e o generico de IA: e clonar o CMC sem pensar. A defesa e a
-  lista de desvios declarados (tabular-nums, Inter unica, quatro correcoes de contraste,
-  sparkline como fechamento de linha) - cada um com o motivo escrito.
-- Tells que a direcao nova elimina de vez: vidro decorativo, aura radial, gradiente em botao,
-  sombra difusa empilhada com borda, raio de 16px em elemento pequeno.
-- Achado que vale registrar: **o design system do CoinMarketCap reprova WCAG AA em quatro tokens
-  do tema escuro** (caption 2.87:1, negative 3.75:1, link no elevado 4.15:1, e negative sobre a
-  propria tinta 3.55:1). No tema claro e pior - o verde deles da **2.20:1** sobre branco. Adotar
-  a paleta literal seria regredir a acessibilidade que hoje passa em 100% dos nos de texto.
-
-## Changelog
-
-- 2026-08-22 (P2-35): acabamento e auditoria, e o marco fecha. Modal com backdrop `--overlay-bg` (o
-  `rgba(6,10,22,.72)` era navy morto) e `--shadow-overlay` no lugar de um preto inventado; toast em
-  `--surface2` com raio 8, so `transform` e `opacity` animando. As ultimas cores literais foram
-  amarradas ao token: o keyframe do pulso passou a montar a cor de `--pos-rgb`, e as strings das
-  libs de grafico passam a ser DERIVADAS do proprio token, entao trocar `--accent` ou `--txt2` no
-  `:root` troca a area da curva e as bandas de Bollinger junto. `prefers-reduced-motion` ganhou os
-  pseudo-elementos no seletor, senao o shimmer do skeleton continuava girando. Auditoria completa
-  na secao acima.
-- 2026-08-22 (P2-34): gate de login plano. Sairam 52 regras de atmosfera do tema navy: malha
-  tecnica mascarada em radial, varredura animada descendo a tela, entrada em cascata item por
-  item, anel pulsante na marca, dois gradientes radiais de fundo, fio de luz no topo do card e a
-  sombra de 90px. Ficaram **duas** animacoes, e as duas sao informacao: o ponto do indicador de
-  saude ("o backend esta vivo") e o giro do botao enquanto verifica. O shake de senha errada
-  tambem fica - e feedback transitorio de erro, nao movimento continuo.
-  Nada do que custou uma madrugada saiu: as quatro mensagens distintas (401, 429, sem rede, sem
-  `DASH_PASS`), o `/health` ao vivo antes de digitar, o Caps Lock, o olho de mostrar senha e o
-  `minmax(0,1fr)` que impedia o card de vazar 34px em 390px.
-- 2026-08-22 (P2-33): mapa de cor dos graficos aplicado. As bandas de Bollinger eram
-  `rgba(148,161,189,...)`, um cinza que nao correspondia a token nenhum; viraram `--txt2`
-  (#A1A7BB) a 50%, variacao de alpha declarada. Area da curva de capital ajustada de `.34` para
-  o `.28` que este arquivo fixa. A altura de `#tvchart` deixou de ser numero fixo calibrado na
-  topbar do M5 e passou a `calc(100vh - var(--sb-h) - 185px)`, usando a folga MEDIDA da status
-  bar - com um numero fixo a vista Grafico nasce rolada assim que a barra quebra de linha.
-- 2026-08-22 (P2-32): Sentimento e Funding ganharam a aba **Mercado**, o painel do bot ganhou a
-  aba **Auto-trade**. O gauge de Fear & Greed mantem o gradiente vermelho-gold-verde: e o unico
-  gradiente do sistema e esta la porque e **escala de medida** - diz o que cada ponta significa -
-  e nao decoracao. Os dez `style` inline do `carregarSentimento()` viraram classes; o
-  `rgba(10,16,32,.75)` do contorno da agulha (navy morto) virou `--bg`. Funding virou tabela de
-  verdade; **nao ganhou sparkline**, e de proposito: o `/funding` devolve o instante, nao serie, e
-  inventar curva a partir de um ponto seria desenho, nao dado.
-  Nota de largura: `.tbl-met` e a tabela de funding tem `max-width`. "Largura cheia" e regra para
-  a tabela larga, que e a protagonista; com duas ou quatro colunas, esticar ate 1392px so afasta
-  o rotulo do valor.
-- 2026-08-22 (P2-31): Posicoes, Journal, DCA e Metricas na tabela do sistema - largura cheia, sem
-  card em volta, cabecalho grudado, numero a direita, hover de linha em `--surface`, sem zebra.
-  Posicoes ganhou a coluna de evolucao do P&L. Metricas deixou de ser grade de tiles: os `.mstat`
-  davam a 14 numeros de importancia muito diferente o mesmo peso visual, e viraram tabela de duas
-  colunas. `#risco-guard` parou de renderizar banner e virou item da status bar (banca, risco do
-  dia, exposicao); o banner sobrou so para os dois estados que travam operacao. Registrado acima
-  o segundo caso de rolagem de tabela.
-- 2026-08-22 (P2-30): a fila de sinais deixou de ser lista de cards e virou tabela com linha
-  expansivel. Nota de cor: o sparkline da coluna Tendencia fica **azul**, como todo sparkline
-  deste sistema, e nao verde/vermelho como o 7d do CMC. Com LONG e SHORT na mesma tabela, curva
-  subindo em verde ao lado de um SHORT diria "bom" quando e "contra"; a leitura de dinheiro fica
-  na coluna Delta, que tem o simbolo alem da cor. Novo desvio de tabela registrado acima
-  (prioridade de coluna em vez de rolagem horizontal).
-- 2026-08-22 (P2-29): cinco tiles planos no lugar do hero de vidro e dos tres stat cards. Risco do
-  dia e Exposicao aberta sairam dos banners e viraram tile, com barra E o numero escrito ao lado -
-  cor nunca e o unico sinal. `sparkline()` virou generico (serie + alvo) porque agora dois tiles a
-  usam. `#npend` continua existindo e sendo escrito, mas mora no rotulo da aba Sinais: o quinto
-  tile foi para risco/exposicao, e um contador de fila pertence a aba onde se age sobre ela.
-- 2026-08-22 (P2-28): casca nova. Sai a sidebar de 232px, sai o bento de duas colunas, saem os
-  banners de risco de largura cheia; entram topbar, tab bar de sete blocos e status bar fixa.
-  Os dois botoes de vista continuam `class="tab"` + `data-v` porque `aba()` mira aquele seletor;
-  as abas de conteudo usam `.subtab`/`data-sub`, classe diferente de proposito. A folga do rodape
-  e **medida em JS**, nao fixa: a status bar quebra de linha em tela estreita e um valor chutado
-  cobriria a ultima linha da tabela.
-- 2026-08-22 (P2-27): tokens, tipografia e base implantados em `web/index.html`. O `:root` do tema
-  navy saiu inteiro, junto com os aliases de transicao (`--card`, `--card2`, `--bg2`, `--mono`) e
-  com Space Grotesk e JetBrains Mono. `.mono` sobrevive como classe - o JS escreve `class="mono"`
-  em dezenas de lugares - mas deixou de ser familia e passou a significar so `tabular-nums`.
-  Dois ajustes que a medicao obrigou: (1) o botao primario trocou texto escuro por **branco**,
-  porque escuro sobre o `#3861FB` do CMC da 3.75:1 e reprovava (sobre o `#3b82f6` do tema navy
-  dava 5.15:1); (2) as tintas de `.saida-*` eram rgba do verde/gold/vermelho mortos, e o vermelho
-  velho a 16% dava 4.23:1 sob o `--neg` novo - viraram `--pos-bg`/`--warn-bg`/`--neg-bg`.
-  Nomes de token do `TEMA` dos graficos renomeados junto, senao o objeto passaria a ler
-  `undefined` e a vela ficaria sem cor entre este commit e o P2-33.
-- 2026-08-22: **reescrito**. Direcao trocada de navy/glassmorphism para transposicao do
-  CoinMarketCap tema escuro, por decisao do dono. Valores medidos do site deles, com quatro
-  correcoes de contraste dentro da rampa. Sai sidebar/bento/hero-vidro, entra topbar + tab bar +
-  fileira de tiles + tabela protagonista + status bar. Historico anterior no git.
-- 2026-08-21 (2): P2-22 a P2-25 (direcao navy, obsoleta).
-- 2026-08-21: criado no P2-20 (direcao navy, obsoleta).
+- Lightweight-Charts (vendorado) para velas: vela `--pos`/`--neg`, EMA 20 `--accent`, EMA 50
+  `--warn`, Bollinger `--txt2`, Donchian `--info` tracejado, liquidez `--warn` pontilhada, entrada e
+  stop como linhas de preço. Precisão do eixo pela grandeza do preço.
+- SVG próprio para curva de equity, gauges, sparklines e calendário: traço do acento com brilho
+  (filtro `feGaussianBlur`), área com gradiente do acento a 0,32 → 0.
+- Mapa de calor e calendário de P&L: intensidade em 3 degraus de alfa sobre `--pos`/`--neg`.

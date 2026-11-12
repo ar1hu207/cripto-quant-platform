@@ -705,6 +705,12 @@ else:
     # StaticFiles levanta RuntimeError em diretório ausente e derrubaria o processo inteiro.
     # Sem as libs o gráfico não renderiza, mas API, worker e risco seguem de pé.
     log(f"AVISO: {_VENDOR} não existe — /vendor não montado (gráficos não vão carregar)", "error")
+# Front Apollux: casca e views em web/app/ (index.html carrega app/*.js por caminho relativo).
+_APP = os.path.join(WEB, "app")
+if os.path.isdir(_APP):
+    app.mount("/app", StaticFiles(directory=_APP), name="app")
+else:
+    log(f"AVISO: {_APP} não existe — /app não montado (o painel não vai carregar)", "error")
 
 
 @app.get("/config.js")

@@ -1,5 +1,5 @@
-// Service worker do app instalado (PWA). Guarda SO a casca: o HTML, as libs de web/vendor e os
-// icones. Nunca a API.
+// Service worker do app instalado (PWA). Guarda SO a casca: o HTML, o codigo do front em web/app,
+// as libs de web/vendor e os icones. Nunca a API.
 //
 // A API mora em outra origem (a VM) e responde com a credencial do painel no header: cachear
 // isso seria guardar banca e posicao velhas num disco que o usuario nao sabe que existe, e
@@ -12,7 +12,8 @@
 // O HTML vai rede-primeiro: merge na main publica no Vercel, e cache-primeiro prenderia o
 // celular na versao de ontem ate a pessoa reinstalar. O cache so responde sem rede, para o
 // app abrir e mostrar o proprio estado de "sem conexao" em vez da tela do sistema.
-const CASCA = 'casca-v1';
+// casca-v2 = front Apollux: o activate apaga o cache v1, que guardava o painel antigo como index.
+const CASCA = 'casca-v2';
 
 self.addEventListener('install', () => self.skipWaiting());
 
@@ -29,8 +30,20 @@ self.addEventListener('fetch', e => {
 
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then(r => {
-      const c = r.clone(); caches.open(CASCA).then(k => k.put(req, c)); return r;
+      // só guarda resposta boa: um 404/5xx do Vercel não pode substituir a casca que abre offline
+      if (r.ok) { const c = r.clone(); caches.open(CASCA).then(k => k.put(req, c)); }
+      return r;
     }).catch(() => caches.match(req).then(r => r || caches.match('./'))));
+    return;
+  }
+  // web/app (casca.js, api.js, views): rede-primeiro, como o HTML, e pelo mesmo motivo. O HTML e
+  // o JS da casca andam juntos (ids, contrato das views); se o HTML viesse novo da rede e o JS
+  // velho do cache, a tela quebraria justamente no dia do deploy. O cache so responde sem rede.
+  if (u.pathname.includes('/app/')) {
+    e.respondWith(fetch(req).then(r => {
+      if (r.ok) { const c = r.clone(); caches.open(CASCA).then(k => k.put(req, c)); }
+      return r;
+    }).catch(() => caches.match(req).then(r => r || Response.error())));
     return;
   }
   // libs e icones: responde do cache e renova em segundo plano. Os nomes em web/vendor NAO
