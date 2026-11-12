@@ -117,3 +117,13 @@ verdade e continua verdade**.
   vista. É o segundo papel da ferramenta.
 
 A ordem entre eles é decisão do dono e **ainda não foi tomada**. Não invente uma.
+
+## Nome do produto — decidido pelo dono em 2026-11-12
+
+**Apollux** é a plataforma; **Apollo** é o agente que opera, vigia e fala com o dono pelo nome, por chat e por voz (decidido em 12/11; antes chamado Lux). *Pítia*
+é o nome proposto para o oráculo de análise com LLM (não decidido). O caminho até aqui: o dono
+propôs "Apex Cripto Vision", a varredura (RDAP oficial + colisão no ramo) reprovou "cripto" (o
+destino é todo o mercado), "Apex Crypto" (Bakkt) e "Apollo Invest" (Apollo Investimentos do
+Safra, Apolo Investimentos na CVM, Apollo Global); Apollux ficou com `apollux.com.br`, `.app` e
+`.io` livres e nenhuma marca igual encontrada. Pendente: consulta ao INPI (APOLLO/APOLLUX, classes
+36, 42 e 9) antes de registrar. Material: `DS/` (não versionado) e `PLANO-PRODUTO-UI-2026-11-12.md`.
