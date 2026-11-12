@@ -354,7 +354,7 @@ select.inp{font-family:var(--f-ui)}
   .nav-item{padding:7px 10px}
   .badge,.soon{margin-left:4px}
   .side-foot{margin-top:4px}
-  .main{padding-left:max(16px,env(safe-area-inset-left,0px))}
+  .main{padding-left:max(16px,env(safe-area-inset-left,0px));padding-bottom:120px}
 }
 @media (max-width:640px){
   .side{padding-block:14px 10px}
@@ -364,8 +364,10 @@ select.inp{font-family:var(--f-ui)}
   .nav-item{flex:none}
   .side-foot .sub{display:none}
   .top-acts{margin-left:0;width:100%;justify-content:space-between}
-  .apw{width:124px;bottom:max(12px,env(safe-area-inset-bottom,0px));right:max(12px,env(safe-area-inset-right,0px))}
-  .apw-mesh{height:44px} .apw-foot{height:26px;padding:0 3px 0 8px} .apw-name span{display:none} .apw-ib{width:22px;height:22px}
+  /* no celular o widget vira só a esfera (o painel que ela abre tem voz e chat): 124 px eram 39% de uma tela de 320 */
+  .apw{width:60px;bottom:max(12px,env(safe-area-inset-bottom,0px));right:max(12px,env(safe-area-inset-right,0px))}
+  .apw-card{border-radius:50%}
+  .apw-mesh{height:58px} .apw-foot{display:none}
   .apw-pop{position:fixed;left:0;right:0;bottom:0;width:auto;max-width:none;border-radius:16px 16px 0 0;padding:14px 16px max(14px,env(safe-area-inset-bottom,0px));border-left:0;border-right:0;border-bottom:0}
   .main{padding-bottom:96px}
 }

@@ -41,6 +41,8 @@
   '.v-pesquisa .lg .vd{padding:0 2px 12px 62px;font-size:12.5px;color:var(--txt2);line-height:1.6}' +
   '.v-pesquisa .lg .vd b{color:var(--txt)}' +
   '.v-pesquisa table.m4 td,.v-pesquisa table.m4 th{white-space:nowrap}' +
+  '.v-pesquisa .card-head{flex-wrap:wrap;row-gap:6px}' +
+  '.v-pesquisa .card-head .count{white-space:normal;overflow-wrap:anywhere}' +
   '@media (max-width:1100px){.v-pesquisa .big{grid-template-columns:repeat(2,minmax(0,1fr))}.v-pesquisa .ok{grid-template-columns:1fr}}' +
   '@media (max-width:640px){.v-pesquisa .big{grid-template-columns:1fr}.v-pesquisa .lg details summary{grid-template-columns:44px minmax(0,1fr);}.v-pesquisa .lg .dt,.v-pesquisa .lg summary .chip{grid-column:2;justify-self:start}.v-pesquisa .lg .vd{padding-left:0}}' +
   '</style>';
