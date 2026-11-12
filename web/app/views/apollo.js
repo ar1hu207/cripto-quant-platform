@@ -5,7 +5,7 @@
    - config só pelo /catalogo + POST /config, com o valor ATUAL ao lado e um diálogo de diff antes de
      gravar; chave que mexe em risco ganha aviso de `toca-risco`. Perfil (/perfil) só com o diff completo
      do que muda na tela. Nada é gravado "de brinde" junto com outra ação;
-   - a trava diária é indicador: o catálogo aceita `trava_dia_em` (tipo data), mas limpar à mão é relaxar
+   - a trava diária é indicador: o `POST /config` recusa `trava_dia_em` desde 12/11: limpar à mão é relaxar
      invariante, então ela NÃO entra no editor;
    - `telegram_token`/`telegram_chat_id` não são exibidos (só "configurado ou não"): segredo não vai para
      a tela;

@@ -11,7 +11,7 @@ sem dizer em voz alta e numero que ninguem audita.
 import pytest
 
 import db
-from conftest import semear_posicao, semear_sinal
+from conftest import semear_equity, semear_posicao, semear_sinal
 
 
 @pytest.fixture
@@ -465,7 +465,10 @@ def test_f15_a_trava_diaria_do_simulador_aparece_identificada_pelo_frame(banco, 
     territorio de outro agente. O fallback pelo frame do chamador e o que faz um escritor que
     nao se declarou aparecer identificavel em vez de virar um "?" na tabela."""
     import simulador
+    import pandas as pd
     db.set_config("limite_perda_dia", "0.0")     # trava no primeiro centavo de perda
+    # equity do inicio do dia: sem ela `pnl_dia` e 0, e com limite 0 o dia so trava com PERDA
+    semear_equity(str(pd.Timestamp.now().date()) + " 00:00:01", db.get_banca()["atual"])
     semear_posicao(entrada=100.0, valor_reais=100.0, alavancagem=10, preco_atual=99.0, pnl=-100.0)
     assert simulador.guarda_risco()["trava_dia"] is True
     a = ultima_auditoria("trava_dia_em")
