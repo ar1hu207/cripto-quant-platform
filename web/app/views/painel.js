@@ -125,6 +125,8 @@
   '@media (max-width:760px){.v-painel .build{grid-template-columns:1fr}.v-painel .hero{min-height:400px}.v-painel .gauge-card{grid-template-columns:1fr;justify-items:center}}' +
   '@media (max-width:640px){.v-painel .dd-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.v-painel .dd-bars{grid-template-columns:repeat(7,minmax(0,1fr))}.v-painel .dd-b{grid-template-rows:auto 44px auto}.v-painel .dd-b .t{height:44px}.v-painel .dd-b .v{font-size:9px}.v-painel .dd-cal{--cell:26px}}' +
   '@media (prefers-reduced-motion:reduce){.v-painel .chart .end-halo{animation:none}}' +
+  /* o Fechar fica preso na borda direita: a tabela rola por baixo dele, mas o botão nunca some */
+  '.v-painel #pn-pos tr:not(.saida)>td:last-child,.v-painel #pn-pos th:last-child{position:sticky;right:0;background:var(--panel);box-shadow:-10px 0 10px -6px rgba(var(--bg-rgb),.9)}' +
   '</style>';
 
   var html = css + '<div class="v-painel">' +
@@ -186,13 +188,22 @@
     var h = e.equity_hist || [], ini = A.hoje().slice(0, 8) + '01', ref = null, desde = null;
     for (var i = h.length - 1; i >= 0; i--) if (A.dia(h[i].ts) < ini) { ref = h[i].equity_total; break; }
     if (ref == null && h.length) { ref = h[0].equity_total; desde = A.ddmm(h[0].ts); }
-    var mes = $('pn-mes');
-    if (ref != null) {
-      var pm = eq - ref; mes.className = 'kpi-val ' + F.cls(pm);
-      A.contar(mes, pm, function (v) { return cur(v, true) + '<span class="pct">' + F.pct(pm / ref * 100) + '</span>'; });
+    /* [mês] Com o /trades lido (Dia a dia), o mês é EXATO: soma do P&L fechado no mês — o mesmo número
+       da Carteira — e o P&L em aberto vai à parte. Pela curva amostrada (~1 ponto a cada 10 h) o ponto
+       "antes do dia 1" pode ser de horas antes, e o Painel chegou a dizer R$ 1.535 onde eram R$ 1.455,
+       com a Carteira dizendo R$ 1.385 para o mesmo mês. A curva só vale enquanto o /trades não chegou. */
+    var mes = $('pn-mes'), unreal = eq - ((e.banca || {}).atual || 0), aberto = ' · em aberto agora <span class="' + F.cls(unreal) + '">' + F.money(unreal) + '</span>';
+    var pm = null, baseM = null, sub = '';
+    if (S.mesReal != null) {
+      pm = S.mesReal; baseM = ((e.banca || {}).atual || 0) - pm;
+      sub = 'fechado no mês' + (S.mesCompleto ? '' : ' (desde ' + S.mesDesde + ', limite de 500 trades)') + aberto;
+    } else if (ref != null) { pm = eq - ref; baseM = ref; sub = (desde ? 'desde ' + desde + ', ' : '') + 'pela curva amostrada ≈'; }
+    if (pm != null) {
+      mes.className = 'kpi-val ' + F.cls(pm);
+      A.contar(mes, pm, function (v) { return cur(v, true) + '<span class="pct">' + (baseM > 0 ? F.pct(pm / baseM * 100) : '') + '</span>'; });
     } else mes.textContent = '—';
     var pico = h.reduce(function (a, x) { return Math.max(a, x.equity_total); }, eq), ddA = pico ? (eq / pico - 1) * 100 : 0;
-    $('pn-mes-s').innerHTML = (desde ? 'desde ' + desde + ' · ' : '') + 'DD atual <span class="' + (ddA < 0 ? 'neg' : '') + '">' + F.pct(ddA, 1) + '</span> <span title="mês e DD atual saem da curva amostrada do /estado (~125 pontos): aproximados">≈</span> · máx. ' + F.pct(-(m.max_dd_mtm_pct || 0), 1);
+    $('pn-mes-s').innerHTML = sub + '<br>DD atual <span class="' + (ddA < 0 ? 'neg' : '') + '">' + F.pct(ddA, 1) + '</span> <span title="o DD atual sai da curva amostrada do /estado (~125 pontos): aproximado">≈</span> · máx. ' + F.pct(-(m.max_dd_mtm_pct || 0), 1);
     var wr = $('pn-wr');
     if (m.n_trades) {
       A.contar(wr, m.win_rate || 0, function (v) { return F.f0(v) + '<span class="pct txt2">%</span>'; });
@@ -458,6 +469,10 @@
     /* pior sequência de perdas consecutivas, sobre os trades lidos */
     var run = 0, pior = 0; tr.forEach(function (t) { if (t.pnl_reais < 0) { run++; if (run > pior) pior = run; } else run = 0; });
     S.piorSeq = pior; S.piorSeqN = tr.length; if (S.estado) gauge(S.estado);
+    var mk = A.hoje().slice(0, 7);
+    S.mesReal = tr.reduce(function (a, t) { return t.fechado_em.slice(0, 7) === mk ? a + (t.pnl_reais || 0) : a; }, 0);
+    S.mesCompleto = tr.length < LIM || tr[0].fechado_em.slice(0, 7) < mk; S.mesDesde = tr.length ? A.ddmm(tr[0].fechado_em) : '';
+    if (S.estado) kpis(S.estado);
     var por = {};
     tr.forEach(function (t) { var k = A.dia(t.fechado_em); var d = por[k] || (por[k] = { pnl: 0, n: 0 }); d.pnl += t.pnl_reais || 0; d.n++; });
     var hojeK = A.hoje(), hojeD = dataDe(hojeK);
