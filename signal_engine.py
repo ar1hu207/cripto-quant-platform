@@ -21,6 +21,7 @@ import pandas as pd
 import db
 from logbot import log
 import mercado
+import alvos
 from scoring import preparar, pontuar, pontuar_reversao
 
 ex = mercado.ex_spot                # [memoria] o cliente do processo, nao uma copia (~110 MB cada)
@@ -198,6 +199,60 @@ def tf_da_posicao(pos, cfg):
     return _tf_por_sinal[sid] or padrao
 
 
+def _verdade_cfg(v):
+    return str(v).strip().lower() in ("1", "true", "sim", "on")
+
+
+def _plano_do_bot(pos, cfg):
+    """[RJ-1] O que o bot VAI fazer com esta posição, em R: (r_agora, texto, stop_em_R).
+
+    Por que existe: o painel gritava "🟢 REALIZAR JÁ" a +5% de ROE (~0,33R na A) com qualquer
+    cruzamento de EMA20 e o bot não realizava -- com o trailing ligado, quem fecha o vencedor é
+    o trailing/TP, não o gestor de saída (`autotrader.auto_executar`, passo 1). O T39 mediu a
+    ordem literal em 45 meses: R$10k → R$40, e 49% dos trades que ela fecha chegariam a +3R. O
+    rótulo passa a dizer o que acontece de verdade, na unidade do stop.
+
+    R = distância entrada→`stop_abertura` (imutável, a mesma do trailing em R). Sem ela (posição
+    antiga, ou aberta à mão), r_agora é None e quem chama volta ao ROE."""
+    d = 1 if pos.get("direcao") == "LONG" else -1
+    e, sa = pos.get("entrada"), pos.get("stop_abertura")
+    px = pos.get("preco_atual") or e
+    r1 = abs(float(e) - float(sa)) if (e and sa) else 0.0
+    if not r1 or not px:
+        r_agora = stop_r = None
+    else:
+        r_agora = d * (float(px) - float(e)) / r1
+        st = pos.get("stop")
+        stop_r = d * (float(st) - float(e)) / r1 if st else None
+
+    trail_on = _verdade_cfg(cfg.get("trailing_ativo", "1"))
+    if (_verdade_cfg(cfg.get("auto_trade", "0")) and not trail_on
+            and _verdade_cfg(cfg.get("auto_fechar_saida", "1"))):
+        return r_agora, "o bot realiza neste ciclo", stop_r      # a única config em que ele fecha
+
+    partes = []
+    tp = alvos.cfg_tp(cfg)
+    plano = alvos.ler(pos) if tp["on"] else None
+    if plano:
+        i, t = alvos.proximo(plano)
+        niveis = plano.get("niveis", [])
+        if t is not None:
+            partes.append(f"TP{i + 1} em {t['r']:.1f}R")
+            if i < len(niveis) - 1:
+                partes.append(f"meta final {niveis[-1]['r']:.1f}R")
+    if trail_on and str(cfg.get("trailing_unidade", "R")).strip() == "R" and r_agora is not None:
+        arma = float(cfg.get("trailing_arma_r", 3) or 3)
+        if stop_r is not None and stop_r >= 0:
+            partes.append(f"stop travado em {stop_r:+.1f}R")
+        else:
+            partes.append(f"trailing arma em {arma:g}R")
+    elif trail_on:
+        partes.append("trailing por preço")
+    if not partes:
+        partes.append("stop vigente")
+    return r_agora, "o bot segura: " + " · ".join(partes), stop_r
+
+
 def avaliar_saida(pos, cfg=None):
     """Gestor de saída ativa: olha cada posição ABERTA e sugere fechar quando
     (a) já tem lucro razoável E (b) a tendência está revertendo / o fluxo virou.
@@ -244,17 +299,23 @@ def avaliar_saida(pos, cfg=None):
             sinais.append(f"fluxo virou comprador ({fc:.0f}%)")
 
     motivos = ", ".join(sinais)
+    # [RJ-1] O NÍVEL não muda (o auto-fechar do autotrader e o botão do painel leem dele); muda
+    # só o TEXTO, que antes mandava realizar a +5% de ROE e o bot não realizava. Ver _rotulo_saida.
+    r_agora, plano, stop_r = _plano_do_bot(pos, cfg)
+    ganho = f"{r_agora:+.1f}R" if r_agora is not None else f"{roe:+.1f}%"
     if roe >= alvo and sinais:
-        nivel, acao = "forte", f"🟢 REALIZAR JÁ: +{roe:.1f}% e reversão — {motivos}"
+        nivel, acao = "forte", f"🔎 {ganho} e reversão no {tf} — {motivos} · {plano}"
     elif roe > 1 and sinais:
-        nivel, acao = "lucro", f"💰 Considere fechar: +{roe:.1f}%, reversão começando — {motivos}"
+        nivel, acao = "lucro", f"💰 {ganho}, reversão começando no {tf} — {motivos} · {plano}"
     elif roe >= alvo:
-        nivel, acao = "alvo", f"🎯 Bom lucro (+{roe:.1f}%) — preço esticado, fique atento"
+        nivel, acao = "alvo", f"🎯 {ganho} · {plano}"
     elif sinais and roe < 0:
-        nivel, acao = "risco", f"⚠️ Reversão contra a posição ({roe:+.1f}%) — {motivos}"
+        stop = f" · stop em {stop_r:+.1f}R" if stop_r is not None else ""
+        nivel, acao = "risco", f"⚠️ Reversão contra a posição ({ganho}) — {motivos}{stop}"
     else:
         nivel, acao = "ok", None
     return {"posicao_id": pos["id"], "ativo": ativo, "roe": round(roe, 2),
+            "r": round(r_agora, 2) if r_agora is not None else None,
             "nivel": nivel, "acao": acao}
 
 
