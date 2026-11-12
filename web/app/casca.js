@@ -79,7 +79,7 @@
     var box = $('dlg-box');
     box.className = 'dlg-box' + (o.perigo ? ' perigo' : '');
     box.innerHTML = '<h3 id="dlg-h">' + A.esc(o.titulo) + '</h3><div class="dlg-body">' + (o.corpo || '') +
-      (o.digitar ? '<label class="fld">Digite <b class="mono">' + A.esc(o.digitar) + '</b> para confirmar<input class="inp" id="dlg-in" autocomplete="off" spellcheck="false"></label>' : '') +
+      (o.digitar ? '<label class="fld"><span>Digite <b class="mono">' + A.esc(o.digitar) + '</b> para confirmar</span><input class="inp" id="dlg-in" autocomplete="off" spellcheck="false"></label>' : '') +
       '</div><div class="dlg-acts"><button type="button" class="btn ghost" data-r="0">Cancelar</button><button type="button" class="btn ' + (o.perigo ? 'danger solid' : 'primary') + '" data-r="1"' + (o.digitar ? ' disabled' : '') + '>' + A.esc(o.ok || 'Confirmar') + '</button></div>';
     $('dlg').hidden = false;
     var okBtn = box.querySelector('[data-r="1"]'), inp = $('dlg-in');
