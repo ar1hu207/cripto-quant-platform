@@ -1,1875 +1,484 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Cripto Bot — Terminal</title>
-<!-- App instalavel (PWA): o mesmo painel, aberto da tela inicial em tela cheia. viewport-fit=cover
-     + black-translucent deixam o app ocupar a area do notch; quem devolve a folga e o
-     env(safe-area-inset-*) da topbar e da statusbar (ver "app instalado" no CSS). -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Apollux</title>
+<!-- Apollux · direção Pulse (DESIGN.md v2). Casca: tokens, sidebar, topbar, roteador por hash, gate de
+     login, widget global do Apollo e o diálogo de confirmação. As views moram em app/views/<id>.js, no
+     contrato window.PULSE_VIEWS (ver app/casca.js). O painel antigo continua em classico.html até o dono
+     assinar a paridade. -->
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#171924">
+<meta name="theme-color" content="#03060C">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Cripto Bot">
+<meta name="apple-mobile-web-app-title" content="Apollux">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<!-- Inter, e so Inter: e o que o CMC usa em 647 de 647 elementos com texto (medido). Sem face de
-     display e sem mono -- a hierarquia sai de peso e tamanho. Stylesheet de fonte e a unica
-     excecao a regra "nada de terceiro": ela nao executa JS, entao nao e vetor para roubar a
-     credencial do localStorage, que e o motivo da regra. Ver DESIGN.md > Typography. -->
-<!-- A folha entra como preload e vira stylesheet no onload: é a MESMA folha, na mesma URL, com
-     a mesma prioridade de rede — só deixa de BLOQUEAR a primeira pintura. Ela custava 294 ms de
-     render-blocking, e o que ela bloqueava não era a fonte (o &display=swap já manda pintar na
-     face de fallback e trocar depois): era a página inteira esperando um round-trip a
-     fonts.googleapis.com para mostrar o fallback que ela já ia mostrar de qualquer jeito.
-     Sem <noscript>: este painel é 100% JS e sem script não há tela nenhuma para envergonhar. -->
-<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" onload="this.rel='stylesheet'">
-<!-- libs servidas por nós (chart.js 4.4.1, lightweight-charts 4.1.3): sem CDN de terceiro,
-     que seria um vetor de XSS capaz de roubar a credencial guardada no localStorage.
-     Elas SAÍRAM daqui e entram sob demanda (ver carregarLib(), no fim do <body>) -- continuam
-     vindo de web/vendor/, servidas por nós; sob demanda não é CDN de terceiro. O motivo é que
-     nenhuma das duas desenha a PRIMEIRA tela e as duas eram <script src> síncronos antes de
-     existir uma linha de markup: 124 KB bloqueando a renderização, dos quais o Lighthouse
-     mediu 92,3% e 88,9% nunca executados no carregamento. -->
+<!-- Syne (display), DM Sans (UI), Fira Code (números). A folha do Google Fonts é a única exceção à regra
+     "nada de terceiro" (CLAUDE.md §2): não executa JS, então não lê a credencial do localStorage. Entra
+     como preload e vira stylesheet no onload (P2-37): mesma folha, sem bloquear a primeira pintura. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&family=Fira+Code:wght@400;500;600&display=swap" onload="this.rel='stylesheet'">
 <script src="config.js"></script>
-<!-- Preconnect ao backend. A primeira tela deste painel NAO é markup: é a resposta do
-     backend que abre o gate de login, e o Lighthouse mede o gate como elemento de LCP. Sem
-     esta linha o browser só descobre o host quando o primeiro fetch sai, e paga DNS + TCP +
-     TLS ali, dentro do caminho crítico — a VM fica na África do Sul, então esse round-trip
-     não é barato. É o mesmo recurso já usado para as fontes (linhas 7-8), com uma diferença
-     que importa: a origem vem do window.API_BASE em vez de literal, porque a URL do backend
-     tem um dono só e é o config.js. Repetir a URL aqui criaria a segunda cópia que
-     dessincroniza no próximo deploy. anonymous porque o fetch é CORS sem credencial de
-     navegador (a senha vai no header Authorization, não em cookie). -->
-<script>if(window.API_BASE){var _pc=document.createElement('link');
-  _pc.rel='preconnect';_pc.href=window.API_BASE;_pc.crossOrigin='';document.head.appendChild(_pc);}</script>
+<script>if(window.API_BASE){var _pc=document.createElement('link');_pc.rel='preconnect';_pc.href=window.API_BASE;_pc.crossOrigin='';document.head.appendChild(_pc);}</script>
 <style>
-  /* Tokens medidos do CoinMarketCap, tema escuro, com as quatro correcoes de contraste.
-     Fonte da verdade: DESIGN.md na raiz do repositorio -- se este bloco e o DESIGN.md
-     divergirem, o DESIGN.md vence.
-     Nao ha mais alias de transicao aqui: o nome que o CSS usa e o nome que o DESIGN.md
-     declara, e nao existe um segundo nome para a mesma cor. */
-  :root{
-    /* Superficie e linha. A borda de 1px em --line e o separador universal deste tema:
-       quem separa e a aresta, nao a sombra.
-       --bg-el e o --c-color-background-1 deles (#171924), o fundo RAISED do chrome --
-       topbar e status bar. O nome nao reaproveita o do alias morto do tema navy de
-       proposito: alias e token compartilhando nome foi o que confundiu o M5. */
-    --bg:#0D1421;--bg-el:#171924;--surface:#222531;--surface2:#2B2E3D;
-    --line:#323546;--line2:#53596A;
-    /* Texto. --txt3 e o caption CORRIGIDO: o #646B80 deles da 2.87:1 sobre --surface. */
-    --txt:#FFFFFF;--txt2:#A1A7BB;--txt3:#9197A9;
-    /* Azul tem dois papeis porque texto colorido sobre a propria tinta e onde tema escuro
-       reprova sem avisar: --accent PREENCHE (botao, barra, marca, borda de chip ativo),
-       --accent-txt ESCREVE (link, aba ativa, numero azul). O #6188FF deles da 4.15:1 no
-       elevado; o --accent como texto da 3.4:1 e reprovaria em qualquer superficie. */
-    --accent:#3861FB;--accent-hover:#2444D4;--accent-txt:#6B90FF;--accent-bg:#1E274F;
-    /* Semanticos: SO dinheiro e direcao. --neg e o #EA3943 deles CORRIGIDO (dava 3.75:1 no
-       card e 3.55:1 sobre a propria tinta); este da 4.86:1 sobre --neg-bg. */
-    /* --pos-rgb existe para o @keyframes do pulso: box-shadow animado precisa da cor em
-       componentes, e repetir o hex ali criaria uma segunda copia do verde fora deste bloco. */
-    --pos:#16C784;--pos-rgb:22,199,132;--pos-bg:#173C37;
-    --neg:#EF6C73;--neg-bg:#411F2A;
-    --warn:#F5B97F;--warn-bg:#433936;
-    /* Variacao de alpha DECLARADA (a unica excecao a "nenhuma cor fora de token"): borda de
-       chip/banner semantico, o proprio token a 34% -- o valor que o DESIGN.md fixa para o
-       botao destrutivo, estendido aos irmaos para nao inventar um segundo numero. */
-    --pos-b:rgba(22,199,132,.34);--neg-b:rgba(239,108,115,.34);--warn-b:rgba(245,185,127,.34);
-    /* Forma. Raio concentrado em 4 e 8, que e o uso real medido no CMC (211 e 143 elementos).
-       Sombra so na camada que flutua de verdade; o resto separa com aresta. */
-    --r-sm:4px;--r:8px;--r-pill:999px;
-    --shadow-overlay:0 8px 32px rgba(13,20,33,.5),0 1px 2px rgba(13,20,33,.4);
-    --overlay-bg:rgba(23,25,36,.6);
-    /* Tipografia: Inter e so Inter, escala medida no :root deles. */
-    --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-    --fs-50:11px;--fs-75:12px;--fs-100:14px;--fs-200:16px;--fs-300:18px;
-    --fs-600:20px;--fs-800:25px;--fs-1000:32px;
-    --lh-head:1.3;--lh-body:1.5;
-    /* motion */
-    --ease:cubic-bezier(.2,.8,.25,1);--dur:.15s;--dur2:.28s;
-    /* altura da status bar, MEDIDA em JS (ela quebra de linha em tela estreita). Declarada
-       aqui para nao existir var() sem declaracao antes do primeiro layout. */
-    --sb-h:0px;
-    /* Variacoes de alpha DECLARADAS do branco, para o que e brilho e nao cor: o shimmer do
-       skeleton e o anel do spinner do gate sobre o azul do botao. */
-    --shimmer:rgba(255,255,255,.07);--sobre-azul:rgba(255,255,255,.35);
-    /* anel de foco do input, o --input-shadow-color-focus deles (--accent a 30%) */
-    --focus-ring:0 0 0 3px rgba(56,97,251,.3);
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  /* Peso 500 como base e marca do CMC (507 de 647 elementos deles), e e o que segura a
-     hierarquia sem uma segunda familia.
-     tabular-nums no body e DESVIO DECLARADO: o CMC usa `normal` (medido). Aqui todo numero
-     e repintado a cada 3s pelo poll e, sem tabular, a coluna muda de largura entre dois
-     polls. Legibilidade em movimento ganha de fidelidade. */
-  body{font-family:var(--font);background:var(--bg);color:var(--txt);min-height:100vh;
-    font-size:var(--fs-100);font-weight:500;line-height:var(--lh-body);
-    font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;overflow-x:hidden}
-  /* minmax(0,1fr) nas grades de conteudo continua obrigatorio: sem ele a coluna e
-     dimensionada por max-content e qualquer tabela larga empurra a pagina para o scroll
-     horizontal. A casca em si nao e mais grade -- topbar, conteudo e status bar empilham. */
-  .main{min-width:0;padding:20px 24px 24px;max-width:1600px;margin:0 auto}
-  /* .mono continua existindo porque o JS escreve class="mono" em dezenas de lugares e nao
-     pode ser tocado. O que mudou e o que a classe FAZ: nao ha mais familia monoespacada,
-     so a garantia de numero tabular sobre a Inter. */
-  .mono{font-variant-numeric:tabular-nums}
-  .pos{color:var(--pos)}.neg{color:var(--neg)}.mut{color:var(--txt3)}
-  /* transicao nomeada em vez de `transition:.15s`: `all` faz o browser observar toda
-     propriedade, inclusive as que causam layout. Aqui so muda cor e brilho. */
-  button{font-family:inherit;cursor:pointer;border:none;border-radius:var(--r-sm);font-weight:600;
-    font-size:var(--fs-100);
-    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease),
-               color var(--dur) var(--ease),filter var(--dur) var(--ease)}
-  @media (hover:hover){button:hover{filter:brightness(1.12)}}
-  button:active{filter:brightness(.92);transform:translateY(1px)}
-  button:disabled{opacity:.5;cursor:not-allowed;filter:none;transform:none}
-  button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  /* Rolagem horizontal SO onde ela nao custa o cabecalho grudado. Um container com overflow
-     vira o contexto de rolagem e o `position:sticky` do th deixa de mirar a viewport - por
-     isso o wrapper nasce transparente e so vira rolador abaixo de 820px, largura em que
-     cabecalho grudado nao e o que se perde. Acima disso a tabela cabe e o th gruda. */
-  @media(max-width:820px){
-    #pendentes,#posicoes,#trades,#dca,#metricas{overflow-x:auto;-webkit-overflow-scrolling:touch}
-    #posicoes>table,#trades>table,#dca>table{min-width:600px}
-  }
-  /* auto-trader */
-  /* borda so, sem o anel extra: uma coisa por elemento. Azul e nao verde porque "bot ligado" e
-     estado de interface, e verde aqui e vocabulario de dinheiro. */
-  /* borda so, sem o anel extra: uma coisa por elemento. Azul e nao verde porque "bot ligado"
-     e estado de interface, e verde aqui e vocabulario de dinheiro. */
-  #auto-panel.on{border-color:var(--accent)}
-  /* Ativar e a acao primaria da aba: azul solido com texto branco (4.92:1). Desativar e a acao
-     de parar, e ai o vermelho E o significado -- mesma logica do botao Panico. */
-  .btn-auto{background:var(--accent);color:var(--txt);border:1px solid transparent;font-weight:600;padding:9px 16px;font-size:var(--fs-100)}
-  @media(hover:hover){.btn-auto:hover{background:var(--accent-hover);filter:none}}
-  .btn-auto.on{background:var(--neg-bg);color:var(--neg);border-color:var(--neg-b)}
-  @media(hover:hover){.btn-auto.on:hover{background:var(--neg-bg);filter:brightness(1.15)}}
-  .auto-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-    padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid var(--line)}
-  .auto-status{font-size:var(--fs-75);color:var(--txt2)}
-  .auto-cfg{display:flex;gap:12px 16px;flex-wrap:wrap;align-items:flex-end}
-  .auto-cfg label{font-size:var(--fs-75);color:var(--txt3);display:flex;flex-direction:column;gap:5px}
-  .auto-cfg input{width:88px;padding:7px 9px;font-size:var(--fs-100)}
-  .auto-log{font-size:var(--fs-75);line-height:1.9;margin-top:14px}
-  .auto-log:empty{display:none}
-  .auto-warn{font-size:var(--fs-75);color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-b);
-    border-radius:var(--r-sm);padding:10px 12px;margin-top:16px;line-height:1.5}
-  .auto-badge{position:relative;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--txt2);vertical-align:middle}
-  /* mesmo anel do .dot, mesmo motivo (ver o bloco do .dot): quem pulsa e o ::after, com
-     opacity+transform, e nao o box-shadow do proprio circulo. Fora do .on o ::after existe
-     mas fica em opacity 0, exatamente como o box-shadow ausente de antes. */
-  .auto-badge.on{background:var(--pos)}
-  .auto-badge.on::after{animation:pulse 2s infinite}
-  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-  /* prefers-reduced-motion zera animacao E shimmer. O ::after/::before precisa estar no
-     seletor: o `*` sozinho nao alcanca pseudo-elemento, e o shimmer do skeleton mora num. */
-  @media (prefers-reduced-motion:reduce){
-    *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
-      transition-duration:.001ms!important;scroll-behavior:auto!important}
-    .skel::after{animation:none!important;background:none!important}
-  }
-  /* input do DESIGN.md: fundo --surface2, borda --line2, raio 4. O foco troca a borda para
-     --accent e poe o anel de 3px do --input-shadow-color-focus deles. */
-  input{font-family:inherit;background:var(--surface2);border:1px solid var(--line2);color:var(--txt);
-    border-radius:var(--r-sm);padding:11px 13px;font-size:var(--fs-100);width:100%}
-  input:focus{outline:none;border-color:var(--accent);box-shadow:var(--focus-ring)}
+/* Tokens: valores padrão = paleta Elétrico (DESIGN.md v2). O seletor de paleta reescreve todos no :root
+   a partir de app/paletas.js; nada nas views usa cor literal. */
+:root{
+  color-scheme:dark;
+  --bg:#03060C; --panel:#0A1220; --panel2:#0F1A2C; --line:#16304F; --line2:#1F4573;
+  --txt:#EAF2FF; --txt2:#93A9C8; --mute:#7088A8;
+  --accent:#4DA3FF; --accent-ink:#04101F; --info:#7DD3FC;
+  --pos:#34D399; --neg:#FF5C6A; --warn:#FFC24D;
+  --bg-rgb:3,6,12; --panel-rgb:10,18,32; --txt-rgb:234,242,255; --line-rgb:22,48,79;
+  --accent-rgb:77,163,255; --pos-rgb:52,211,153; --neg-rgb:255,92,106; --warn-rgb:255,194,77;
+  --glow:.45; --glow-hi:.72; --glow-lo:.225; --glow-xlo:.113;
+  --f-display:'Syne','DM Sans',system-ui,sans-serif;
+  --f-ui:'DM Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --f-mono:'Fira Code','JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  --r:14px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:var(--f-ui);font-size:14px;line-height:1.45;min-height:100vh;-webkit-font-smoothing:antialiased;position:relative;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.55}
+input,select,textarea{font:inherit;color:var(--txt)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+h1,h2,h3{text-wrap:balance}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .warn{color:var(--warn)} .mute{color:var(--mute)} .txt2{color:var(--txt2)}
+.strong{font-weight:600;color:var(--txt)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.is-static *,.is-static *::before,.is-static *::after{animation:none!important;transition:none!important}
 
-  /* ---------- topbar (56px) ----------
-     Substitui a sidebar de 232px. Marca a esquerda, nav principal ao lado, acoes a direita,
-     hairline embaixo. Nao gruda no topo de proposito: com a tab bar o conteudo virou uma tela
-     por bloco, a rolagem e curta, e um topo grudado obrigaria o `th` sticky da tabela a
-     conhecer a altura da topbar -- numero magico que quebra assim que ela quebra de linha. */
-  .topbar{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;
-    min-height:56px;padding:8px 24px;background:var(--bg-el);border-bottom:1px solid var(--line)}
-  .brand{display:flex;align-items:center;gap:9px;margin-right:8px}
-  /* quadrado --accent de raio 4: a marca e o unico lugar onde o azul preenche sem ser acao */
-  .logo{width:26px;height:26px;flex:none;border-radius:var(--r-sm);background:var(--accent);
-    display:grid;place-items:center;font-size:15px}
-  .bname{font-size:var(--fs-200);font-weight:700;letter-spacing:-.2px;line-height:var(--lh-head)}
-  .brand .sub{font-size:var(--fs-75);color:var(--txt3);font-weight:500}
-  .topnav{display:flex;gap:2px}
-  /* item de nav principal: mantem class="tab" e data-v porque aba() mira
-     document.querySelectorAll('.tab') e liga o .on por dataset.v. As abas de CONTEUDO usam
-     .subtab/data-sub, classe diferente de proposito, para nao caírem nesse seletor. */
-  .tab{background:transparent;color:var(--txt2);padding:8px 12px;border:1px solid transparent;
-    font-size:var(--fs-100);font-weight:500;border-radius:var(--r-sm)}
-  @media(hover:hover){.tab:hover{background:var(--surface);color:var(--txt);filter:none}}
-  .tab.on{background:var(--surface);color:var(--txt);font-weight:600}
-  .topacts{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
-  /* [AB-1] seletor de conta. Classe propria (nao .tab): aba() varre querySelectorAll('.tab'). */
-  .conta-sel{display:flex;border:1px solid var(--line,#2a2f3a);border-radius:8px;overflow:hidden;margin-left:12px}
-  .conta-sel button{background:transparent;color:inherit;border:0;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer;opacity:.65}
-  .conta-sel button[aria-pressed="true"]{opacity:1;font-weight:600;background:rgba(255,255,255,.08)}
-  body.conta-b .conta-sel button[data-conta="B"][aria-pressed="true"]{background:#7c3aed;color:#fff}
-  body.conta-b .topbar{box-shadow:inset 0 -2px 0 #7c3aed}
+/* ---- faixas diagonais de luz (fundo) ---- */
+.streaks{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.streak{position:absolute;height:16vmax;width:150vmax;background:linear-gradient(90deg,transparent 0%,rgba(var(--accent-rgb),var(--glow-lo)) 50%,transparent 100%);filter:blur(42px);transform:rotate(-34deg);opacity:.5;will-change:transform}
+.s1{top:-14vmax;right:-45vmax} .s2{bottom:-10vmax;left:-50vmax;height:11vmax;opacity:.32}
 
-  /* ---------- tab bar: navega entre blocos de dado ----------
-     Ativo = --txt peso 600 + sublinhado de 2px em --accent. Sem fundo, sem pilula. */
-  .tabbar{display:flex;gap:2px;overflow-x:auto;-webkit-overflow-scrolling:touch;
-    border-bottom:1px solid var(--line);margin-bottom:20px;scrollbar-width:none}
-  .tabbar::-webkit-scrollbar{display:none}
-  .subtab{flex:none;background:transparent;color:var(--txt2);font-size:var(--fs-100);
-    font-weight:500;padding:11px 14px;border:none;border-radius:0;white-space:nowrap;
-    border-bottom:2px solid transparent;margin-bottom:-1px}
-  @media(hover:hover){.subtab:hover{color:var(--txt);filter:none}}
-  .subtab.on{color:var(--txt);font-weight:600;border-bottom-color:var(--accent)}
-  .subview[hidden]{display:none}
+/* ---- app: sidebar 240 + main ---- */
+.app{position:relative;z-index:1;display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;align-self:start;height:100vh;display:flex;flex-direction:column;gap:18px;padding-block:22px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:16px;border-right:1px solid var(--line);background:linear-gradient(180deg,rgba(var(--panel-rgb),.92),rgba(var(--bg-rgb),.86));backdrop-filter:blur(8px);overflow-y:auto}
+.main{min-width:0;padding-block:18px 28px;padding-left:20px;padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+.brand{display:flex;align-items:center;gap:10px;color:var(--accent);filter:drop-shadow(0 0 10px rgba(var(--accent-rgb),var(--glow)))}
+.brand-glyph{width:32px;height:32px;flex:none}
+.wordmark{font-family:var(--f-display);font-weight:800;font-size:22px;letter-spacing:-.01em;color:var(--txt);line-height:1}
+.nav{display:flex;flex-direction:column;gap:4px}
+.nav-label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:10px 0 4px;padding-left:12px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;color:var(--txt2);font-weight:500;transition:background .18s,color .18s,box-shadow .18s,transform .18s}
+.nav-item svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.nav-item:hover{background:rgba(var(--accent-rgb),.08);color:var(--txt);transform:translateX(2px)}
+.nav-item.is-active{background:var(--accent);color:var(--accent-ink);font-weight:600;box-shadow:0 0 18px rgba(var(--accent-rgb),var(--glow)),0 0 0 1px rgba(var(--accent-rgb),var(--glow-hi))}
+.nav-item.is-active:hover{transform:none;background:var(--accent);color:var(--accent-ink)}
+.badge{margin-left:auto;font-family:var(--f-mono);font-size:11px;min-width:20px;height:20px;padding:0 6px;border-radius:10px;display:inline-grid;place-items:center;background:rgba(var(--accent-rgb),var(--glow-xlo));color:var(--accent);border:1px solid rgba(var(--accent-rgb),var(--glow))}
+.badge[hidden]{display:none}
+.nav-item.is-active .badge{color:var(--accent-ink);border-color:currentColor;background:transparent}
+.nav-item.is-locked{color:var(--mute)}
+.nav-item.is-locked:hover{background:rgba(var(--accent-rgb),.06);color:var(--txt2)}
+.nav-item.is-locked.is-active,.nav-item.is-locked.is-active:hover{color:var(--accent-ink)}
+.nav-item.is-locked.is-active .soon{color:var(--accent-ink);border-color:currentColor;opacity:.75}
+.soon{margin-left:auto;font-family:var(--f-mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);border:1px dashed var(--line2);border-radius:999px;padding:1px 7px;white-space:nowrap}
+.side-foot{margin-top:auto;display:grid;gap:4px;font-family:var(--f-mono);font-size:11.5px;color:var(--txt2)}
+.side-foot .row{display:flex;align-items:center;gap:8px}
+.side-foot .sub{color:var(--mute);font-size:10.5px;padding-left:16px}
+.led{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px rgba(var(--accent-rgb),var(--glow-hi));animation:led 1.6s ease-in-out infinite;flex:none}
+.led.off{background:var(--mute);box-shadow:none;animation:none}
+.led.bad{background:var(--neg);box-shadow:0 0 10px rgba(var(--neg-rgb),.7)}
+@keyframes led{0%,100%{opacity:1;box-shadow:0 0 10px rgba(var(--accent-rgb),var(--glow-hi))}50%{opacity:.5;box-shadow:0 0 3px rgba(var(--accent-rgb),var(--glow))}}
 
-  /* ---------- status bar fixa ----------
-     Carrega o que precisa estar sempre visivel e SUBSTITUI os banners de risco, que hoje
-     empurram o conteudo para baixo. #risco-guard mora aqui dentro: o carregar() continua
-     escrevendo nele (o render final e do P2-31). O padding-bottom do body e medido em JS
-     porque a barra quebra de linha em tela estreita e um valor fixo cobriria a ultima linha
-     da tabela -- exatamente o que o criterio de aceite proibe. */
-  .statusbar{position:fixed;left:0;right:0;bottom:0;z-index:20;
-    display:flex;align-items:center;gap:6px 16px;flex-wrap:wrap;
-    padding:7px 24px;background:var(--bg-el);border-top:1px solid var(--line);
-    font-size:var(--fs-75);color:var(--txt2)}
-  .sb-live{display:flex;align-items:center;gap:7px;font-weight:600;flex:none}
-  .sb-cfg{color:var(--txt3)}
-  .sb-hora{margin-left:auto;color:var(--txt3);flex:none}
-  #risco-guard{display:contents}
-  /* o anel do pulso e variacao de alpha DECLARADA do --pos, montada a partir de --pos-rgb.
-     O anel vive num ::after e anima opacity+transform, que o compositor sabe fazer sozinho.
-     Antes era box-shadow no proprio .dot, e box-shadow nao e composto: cada quadro do ponto
-     "ao vivo" repintava, 1,8s em loop infinito e para sempre (non-composited-animations).
-     A geometria e a MESMA: spread de 0 -> 9px num circulo de 8px leva o diametro de 8 a 26,
-     que e escala 3,25; a tinta e rgba(--pos-rgb,.6) com opacity indo de 1 a 0, os mesmos
-     .6 -> 0 de antes. No instante 0 o anel cobre o ponto com a propria cor do ponto a 60%,
-     e rgba(--pos,.6) sobre --pos solido devolve --pos: nao ha diferenca visivel. */
-  .dot{position:relative;width:8px;height:8px;flex:none;border-radius:50%;background:var(--pos)}
-  .dot::after,.auto-badge::after{content:'';position:absolute;inset:0;border-radius:50%;
-    background:rgba(var(--pos-rgb),.6);opacity:0;pointer-events:none}
-  .dot::after{animation:pulse 1.8s infinite}
-  @keyframes pulse{0%{transform:scale(1);opacity:1}70%{transform:scale(3.25);opacity:0}100%{transform:scale(1);opacity:0}}
-  .btn-sec{background:var(--surface2);color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
-  .btn-danger{background:transparent;color:var(--txt2);padding:9px 12px;border:1px solid var(--line)}
-  @media(hover:hover){.btn-danger:hover{color:var(--neg);border-color:var(--neg-b);filter:none}}
+/* ---- topbar de operação ---- */
+.topbar{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(var(--panel-rgb),.7);position:relative;z-index:30}
+.contas{display:flex;gap:4px;flex-wrap:wrap}
+.conta{font-family:var(--f-mono);font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);color:var(--txt2);white-space:nowrap;transition:color .18s,border-color .18s}
+.conta:hover{color:var(--txt);border-color:var(--line2)}
+.conta[aria-pressed="true"]{color:var(--accent);border-color:rgba(var(--accent-rgb),var(--glow));box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),var(--glow-lo))}
+.conta.lock{border-style:dashed;color:var(--mute)}
+.conta-b .conta[aria-pressed="true"]{color:var(--warn);border-color:rgba(var(--warn-rgb),.6);box-shadow:inset 0 0 0 1px rgba(var(--warn-rgb),.3)}
+.conn{display:inline-flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11.5px;color:var(--txt2);white-space:nowrap}
+.conn .led{width:7px;height:7px}
+.top-acts{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.menu{position:relative}
+.menu-pop{position:absolute;right:0;top:calc(100% + 8px);min-width:250px;max-width:calc(100vw - 32px);border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-radius:12px;background:rgba(var(--panel-rgb),.98);backdrop-filter:blur(10px);box-shadow:0 14px 36px rgba(var(--bg-rgb),.7);padding:8px;display:grid;gap:2px;z-index:45}
+.menu-pop[hidden]{display:none}
+.menu-pop .mi{display:flex;align-items:center;gap:10px;text-align:left;padding:8px 10px;border-radius:8px;font-size:13px;color:var(--txt)}
+.menu-pop .mi:hover{background:rgba(var(--accent-rgb),.1)}
+.menu-pop .mi.danger{color:var(--neg)}
+.menu-pop .mi.danger:hover{background:rgba(var(--neg-rgb),.12)}
+.menu-pop .mi small{display:block;color:var(--mute);font-family:var(--f-mono);font-size:10.5px}
+.menu-pop hr{border:0;border-top:1px solid var(--line);margin:6px 2px}
+.menu-lbl{font-family:var(--f-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);padding:6px 10px 2px}
+.pal{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:4px}
+.acc{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:12px;color:var(--txt2);padding:5px 9px;border-radius:999px;border:1px solid var(--line);transition:all .18s;white-space:nowrap}
+.acc i{width:10px;height:10px;border-radius:50%;background:var(--c);box-shadow:0 0 8px var(--c);flex:none}
+.acc:hover{color:var(--txt);border-color:var(--line2)}
+.acc.is-on{color:var(--txt);border-color:var(--c);box-shadow:inset 0 0 0 1px var(--c)}
+.offline-bar{display:none;align-items:center;gap:10px;padding:10px 14px;border:1px solid rgba(var(--warn-rgb),.5);border-radius:12px;background:rgba(var(--warn-rgb),.08);color:var(--warn);font-family:var(--f-mono);font-size:12px}
+.is-offline .offline-bar{display:flex}
 
-  /* ---------- fileira de tiles ----------
-     Herda a marcacao do resumo antigo com superficie plana; os cinco tiles finais, com
-     sparkline e barra, sao o P2-29. */
-  /* ---------- fileira de tiles ----------
-     Cinco caixas iguais: borda hairline, raio 8, SEM sombra e SEM vidro. A hierarquia sai de
-     peso e tamanho, e cada tile fecha com um sparkline ou uma barra. */
-  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
-  .tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-    padding:14px 16px;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-  .lbl{font-size:var(--fs-75);color:var(--txt3);font-weight:500}
-  .tile .val{font-size:var(--fs-600);font-weight:700;line-height:var(--lh-head);margin-top:6px;letter-spacing:-.3px}
-  .tile-eq .val{font-size:var(--fs-800)}
-  .delta{font-size:var(--fs-75);font-weight:600;margin-top:5px}
-  /* rotulo textual da barra: cor nunca e o unico sinal (DESIGN.md > Accessibility) */
-  .tile-sub{font-size:var(--fs-75);color:var(--txt3);margin-top:6px;line-height:1.4}
-  .tile-bar{height:6px;border-radius:var(--r-pill);background:var(--surface2);overflow:hidden;
-    margin-top:auto;margin-bottom:2px}
-  .tile-bar i{display:block;height:100%;border-radius:var(--r-pill);background:var(--accent);
-    transition:width var(--dur2) var(--ease)}
-  .tile-bar i.b-neg{background:var(--neg)}
-  .tile-bar i.b-warn{background:var(--warn)}
-  /* a curva sangra ate a aresta do tile em vez de flutuar num padding */
-  .spark{margin:auto -16px -14px;height:40px;pointer-events:none}
-  .spark svg{display:block;width:100%;height:40px}
-  .spark-dim{opacity:.55}
-  /* contador de sinais pendentes: #npend continua existindo e continua sendo escrito, mas
-     mora na aba onde se age sobre ele em vez de gastar um tile inteiro */
-  .tab-n{font-size:var(--fs-75);font-weight:600;color:var(--txt3);margin-left:3px}
-  .subtab.on .tab-n{color:var(--txt2)}
+/* ---- KPIs ---- */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--r);background:var(--panel);overflow:hidden}
+.kpi{position:relative;padding:18px 20px;min-width:0}
+.kpi-div{position:absolute;left:0;top:14%;height:72%;width:1px;background:linear-gradient(180deg,transparent,var(--accent),transparent);box-shadow:0 0 10px rgba(var(--accent-rgb),var(--glow-hi));opacity:.85;transform-origin:center}
+.kpi-lbl{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.kpi-val{font-family:var(--f-mono);font-weight:600;font-size:27px;letter-spacing:-.02em;margin-top:6px;line-height:1.1;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:text-shadow .2s}
+.kpi-val .cur{font-size:14px;color:var(--txt2);font-weight:500;margin-right:3px}
+.kpi-val .pct{font-size:14px;font-weight:500;margin-left:6px}
+.kpi-sub{font-family:var(--f-mono);font-size:11.5px;color:var(--txt2);margin-top:6px}
+.kpi:hover .kpi-val{text-shadow:0 0 14px rgba(var(--accent-rgb),var(--glow))}
+.kpi:hover .kpi-val.pos{text-shadow:0 0 14px rgba(var(--pos-rgb),.55)}
+.flash{animation:flash .6s ease-out}
+@keyframes flash{0%{opacity:.35}100%{opacity:1}}
+@media (max-width:900px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi-div{display:none}.kpi:nth-child(n+3){border-top:1px solid var(--line)}.kpi:nth-child(2n){border-left:1px solid var(--line)}}
+@media (max-width:480px){.kpis{grid-template-columns:1fr}.kpi:nth-child(2n){border-left:0}.kpi+.kpi{border-top:1px solid var(--line)}.kpi-val{font-size:24px}}
 
-  /* Bloco de conteudo: SEM card em volta. A tabela e a protagonista e ocupa a largura; card
-     so existe para o que nao e tabela (.card, abaixo). */
-  .panel{margin-bottom:24px}
-  .panel:last-child{margin-bottom:0}
-  .panel h2{font-size:var(--fs-75);font-weight:700;color:var(--txt3);margin-bottom:12px;
-    display:flex;align-items:center;gap:6px 8px;justify-content:space-between;flex-wrap:wrap}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+/* ---- cards ---- */
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px;min-width:0;transition:border-color .2s,box-shadow .2s}
+.card:hover{border-color:rgba(var(--accent-rgb),var(--glow));box-shadow:0 0 0 1px rgba(var(--accent-rgb),var(--glow-xlo)),0 0 28px rgba(var(--accent-rgb),var(--glow-xlo))}
+.card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.h2{font-family:var(--f-display);font-weight:700;font-size:16px;letter-spacing:-.01em;margin:0}
+.sub{font-size:11.5px;color:var(--txt2);margin-top:3px}
+.count{font-family:var(--f-mono);font-size:11px;color:var(--accent);border:1px solid rgba(var(--accent-rgb),var(--glow));border-radius:999px;padding:1px 8px;white-space:nowrap}
+.count.neg{color:var(--neg);border-color:rgba(var(--neg-rgb),.5)}
+.count.warn{color:var(--warn);border-color:rgba(var(--warn-rgb),.5)}
+.count.mute{color:var(--mute);border-color:var(--line2)}
+.empty{border:1px dashed var(--line2);border-radius:10px;padding:16px;text-align:center;color:var(--txt2);font-size:12.5px;background:rgba(var(--panel-rgb),.4)}
+.empty b{color:var(--txt)}
+.soon-box{border:1px dashed var(--line2);border-radius:10px;padding:14px;color:var(--txt2);font-size:12.5px;display:grid;gap:6px;background:rgba(var(--panel-rgb),.4)}
+.soon-box .soon{margin-left:0;width:max-content}
+.skel{height:14px;border-radius:6px;background:linear-gradient(90deg,rgba(var(--txt-rgb),.05),rgba(var(--txt-rgb),.1),rgba(var(--txt-rgb),.05));background-size:200% 100%;animation:skel 1.4s linear infinite;margin:8px 0}
+@keyframes skel{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.row-2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:18px}
+.row-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.stack{display:grid;gap:18px;align-content:start}
 
-  /* ---------- fila de sinais: TABELA, nao lista de cards ----------
-     A linha mostra o essencial e fecha com sparkline; o que nao cabe (motivos, stop,
-     comparativo, Analisar) abre numa sub-linha, que e o padrao que o CMC usa para detalhe. */
-  /* Toda coluna encolhe ate o conteudo e UMA recebe a folga, marcada por classe (.flex).
-     Sem isso o `width:100%` da tabela espalha a folga por igual e abre buracos de 150px entre
-     colunas de numero. Marcar por classe e nao por indice: o indice quebraria se uma coluna
-     mudasse de lugar, e a classe diz por que aquela coluna e a elastica. */
-  .tbl-sinais thead th,.tbl-sinais .sig-row>td{width:1px;white-space:nowrap}
-  th.flex,td.flex{width:auto}
-  td.flex.wrap,th.flex.wrap{white-space:normal}
-  .sig-row{cursor:pointer}
-  .sig-row>td{padding:10px;border-bottom:1px solid var(--line)}
-  .sig-row.on>td{border-bottom-color:transparent}
-  @media(hover:hover){.sig-row:hover>td{background:var(--surface)}}
-  .sig-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-  .sig-ativo{font-weight:600;white-space:nowrap}
-  .sig-exp{display:inline-block;width:12px;color:var(--txt3);font-size:10px;
-    transition:transform var(--dur) var(--ease)}
-  .sig-row.on .sig-exp{transform:rotate(90deg)}
-  .sig-det>td{background:var(--surface);padding:12px 10px 16px;border-bottom:1px solid var(--line)}
-  .det-why{margin-bottom:8px}
-  .det-acts{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
-  /* placar de 0 a 100, nao P&L: por isso azul, e barra fina. O gradiente gold->verde de antes
-     gastava o vocabulario de dinheiro num numero que nao e dinheiro. */
-  .conv{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-75);font-weight:600;white-space:nowrap}
-  .convbar{width:44px;height:4px;border-radius:var(--r-pill);background:var(--surface2);overflow:hidden}
-  .convbar i{display:block;height:100%;background:var(--accent)}
-  /* direcao continua verde/vermelha: e o uso legitimo do par */
-  .tag{display:inline-block;padding:2px 8px;border-radius:var(--r-sm);font-size:var(--fs-75);font-weight:600}
-  .tag.long{background:var(--pos-bg);color:var(--pos)}.tag.short{background:var(--neg-bg);color:var(--neg)}
-  .acts-cell{white-space:nowrap;text-align:right}
-  .acts-cell button{margin-left:6px}
-  /* Operar e a acao primaria da tela inteira: azul solido, texto branco (4.92:1). Era um
-     gradiente verde-teal, que sugeria "lucro" antes mesmo do trade existir. */
-  .btn-op{background:var(--accent);color:var(--txt);padding:6px 12px;font-weight:600}
-  @media(hover:hover){.btn-op:hover{background:var(--accent-hover);filter:none}}
-  .btn-skip{background:transparent;color:var(--txt2);padding:6px 11px;border:1px solid var(--line2)}
-  @media(hover:hover){.btn-skip:hover{background:var(--surface2);filter:none}}
+/* ---- botões, chips, barras ---- */
+.btn{font-family:var(--f-ui);font-weight:600;font-size:12.5px;padding:8px 14px;border-radius:9px;border:1px solid var(--line2);color:var(--txt);transition:box-shadow .18s,transform .18s,border-color .18s,color .18s,background .18s;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;box-shadow:0 0 14px rgba(var(--accent-rgb),var(--glow))}
+.btn.primary:hover:not(:disabled){box-shadow:0 0 22px rgba(var(--accent-rgb),var(--glow-hi));transform:translateY(-1px)}
+.btn.ghost:hover:not(:disabled){border-color:rgba(var(--accent-rgb),var(--glow));color:var(--accent)}
+.btn.danger{border-color:rgba(var(--neg-rgb),.5);color:var(--neg)}
+.btn.danger:hover:not(:disabled){background:rgba(var(--neg-rgb),.14);box-shadow:0 0 16px rgba(var(--neg-rgb),.35)}
+.btn.danger.solid{background:var(--neg);color:var(--bg);border-color:transparent;box-shadow:0 0 20px rgba(var(--neg-rgb),.5)}
+.chip{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;padding:2px 7px;border-radius:5px;font-weight:600;white-space:nowrap;display:inline-block}
+.chip.long{background:rgba(var(--pos-rgb),.14);color:var(--pos);border:1px solid rgba(var(--pos-rgb),.4)}
+.chip.short{background:rgba(var(--neg-rgb),.14);color:var(--neg);border:1px solid rgba(var(--neg-rgb),.4)}
+.chip.info{background:rgba(var(--accent-rgb),.1);color:var(--accent);border:1px solid rgba(var(--accent-rgb),var(--glow-lo))}
+.chip.neutro{background:rgba(var(--txt-rgb),.05);color:var(--txt2);border:1px solid var(--line2)}
+.chip.warn{background:rgba(var(--warn-rgb),.12);color:var(--warn);border:1px solid rgba(var(--warn-rgb),.4)}
+.bar{height:5px;border-radius:3px;background:rgba(var(--txt-rgb),.08);overflow:hidden}
+.bar i{display:block;height:100%;width:var(--w);background:var(--accent);box-shadow:0 0 10px rgba(var(--accent-rgb),var(--glow-hi));border-radius:3px;transform-origin:left;transition:width .4s}
+.prog{height:3px;border-radius:2px;background:rgba(var(--txt-rgb),.08);overflow:hidden}
+.prog i{display:block;height:100%;width:var(--w);background:var(--warn);border-radius:2px;box-shadow:0 0 8px rgba(var(--warn-rgb),.6);transition:width .4s}
+.prog.neg i{background:var(--neg);box-shadow:0 0 8px rgba(var(--neg-rgb),.6)}
+.state{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--pos);border:1px solid rgba(var(--pos-rgb),.4);border-radius:999px;padding:2px 9px;background:rgba(var(--pos-rgb),.1)}
+.state::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 6px currentColor}
+.state.neg{color:var(--neg);border-color:rgba(var(--neg-rgb),.5);background:rgba(var(--neg-rgb),.12)}
+.state.off{color:var(--mute);border-color:var(--line2);background:transparent}
+.state.off::before{box-shadow:none}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:12.5px;margin:0}
+.kv dt{color:var(--mute);font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin:0;align-self:center}
+.kv dd{margin:0;font-family:var(--f-mono);text-align:right;font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere}
+.guards{display:flex;flex-wrap:wrap;gap:6px}
+.guard{font-family:var(--f-mono);font-size:10.5px;padding:3px 8px;border-radius:999px;border:1px solid var(--line2);color:var(--txt2);display:inline-flex;align-items:center;gap:6px}
+.guard::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--pos);box-shadow:0 0 6px rgba(var(--pos-rgb),.8)}
+.guard.off::before{background:var(--mute);box-shadow:none}
+.guard.hot{border-color:rgba(var(--neg-rgb),.5);color:var(--neg)}
+.guard.hot::before{background:var(--neg);box-shadow:0 0 6px rgba(var(--neg-rgb),.8)}
 
-  /* Tabela do DESIGN.md: th 12px/700 em --txt3, td 14px/500, e a separacao e sempre a
-     hairline --line embaixo -- sem zebra, que em tema escuro briga com as tintas de linha. */
-  table{width:100%;border-collapse:collapse}
-  /* cabecalho grudado no topo da PAGINA: por isso a tabela nao pode morar dentro de um
-     container com overflow, que viraria o contexto de rolagem e mataria o sticky. O fundo
-     e obrigatorio, senao a linha que passa por baixo aparece atraves dele. */
-  th{text-align:left;font-size:var(--fs-75);color:var(--txt3);font-weight:700;
-    padding:10px;border-bottom:1px solid var(--line);white-space:nowrap;
-    position:sticky;top:0;z-index:5;background:var(--bg)}
-  td{padding:12px 10px;border-bottom:1px solid var(--line);font-size:var(--fs-100);
-    font-weight:500;vertical-align:middle}
-  /* texto a esquerda, numero a direita e tabular (o tabular vem do body) */
-  .num,th.num{text-align:right}
-  /* Prioridade de coluna no lugar de rolagem horizontal. Rolar a tabela na horizontal e
-     incompativel com cabecalho grudado: o wrapper com overflow vira o contexto de rolagem.
-     O que some em tela estreita continua legivel na sub-linha expansivel. */
-  @media(max-width:1100px){.col-2{display:none}}
-  @media(max-width:820px){.col-3{display:none}}
-  /* Em 390 nem o conjunto reduzido cabe em uma linha de nowrap. Aqui a linha para de ser
-     nowrap: o status quebra, os dois botoes empilham, e a tabela volta a caber sem a pagina
-     rolar na horizontal. O que sumiu continua na sub-linha. */
-  @media(max-width:620px){
-    .col-4{display:none}
-    .tbl-sinais thead th,.tbl-sinais .sig-row>td{white-space:normal}
-    .tbl-sinais .sig-row>td{padding:8px 6px}
-    .tbl-sinais .st{white-space:normal;display:block;max-width:130px}
-    .acts-cell button{display:block;width:100%;margin:0 0 5px}
-    .acts-cell button:last-child{margin-bottom:0}
-  }
-  .empty{color:var(--txt2);text-align:center;padding:22px 0;font-size:var(--fs-100)}
-  .empty.off{color:var(--neg)}
-  /* skeleton de carregamento (some no 1o /estado) */
-  .skel-wrap{padding:8px 2px}
-  .skel{position:relative;overflow:hidden;background:var(--surface2);border-radius:var(--r-sm);height:14px;margin:9px 0}
-  .skel.lg{height:40px;margin:12px 0}
-  .skel.sm{height:11px}
-  .skel::after{content:"";position:absolute;inset:0;transform:translateX(-100%);
-    background:linear-gradient(90deg,transparent,var(--shimmer),transparent);animation:shimmer 1.4s infinite}
-  @keyframes shimmer{100%{transform:translateX(100%)}}
-  @media (prefers-reduced-motion:reduce){.skel::after{animation:none}}
-  .btn-close{background:var(--neg-bg);color:var(--neg);padding:5px 11px;font-size:var(--fs-75);border:1px solid var(--neg-b)}
-  /* hover de linha em --surface, SEM zebra: o separador de 1px basta, e zebra em tema escuro
-     briga com as tintas das linhas de saida sugerida */
-  @media(hover:hover){tbody tr:hover>td{background:var(--surface)}}
-  /* tabela de metrica: duas colunas, rotulo e valor. Era grade de tiles (.mstat), que dava a
-     14 numeros de importancia diferente o mesmo peso visual. */
-  /* "largura cheia" e regra para a tabela larga, que e a protagonista. Com duas ou quatro
-     colunas, esticar ate 1392px so afasta o rotulo do valor e obriga o olho a atravessar a
-     tela. Estas ficam num bloco legivel. */
-  .tbl-met,#funding table{max-width:640px}
-  .tbl-met td:first-child{color:var(--txt2)}
-  .tbl-met td:last-child{text-align:right;font-weight:600;white-space:nowrap}
-  .met-nota{color:var(--txt3);font-weight:500;font-size:var(--fs-75);margin-left:6px}
-  /* Mesma regra da tabela de sinais: coluna encolhe ate o conteudo e a folga vai para uma so,
-     senao o width:100% da tabela espalha o vazio por igual e abre buracos entre numeros.
-     Em Posicoes e DCA a folga vai para a coluna de acao (vira alinhamento a direita); no
-     Journal vai para Motivo, que e a unica de texto livre. */
-  #posicoes thead th,#posicoes tbody tr:not(.saida)>td,
-  #trades thead th,#trades tbody td,
-  #dca thead th,#dca tbody td,
-  #funding thead th,#funding tbody td{width:1px;white-space:nowrap}
-  .saida td{white-space:normal}
-  /* evolucao do P&L da posicao: mesma mini-curva que fecha a linha de sinal */
-  .row-spark{display:block;width:76px;height:22px;pointer-events:none}
-  .row-spark svg{display:block;width:76px;height:22px}
-  .row-spark.vazio{color:var(--txt3);font-size:var(--fs-75)}
-  #tv-ativo{background:var(--surface2);border:1px solid var(--line2);color:var(--txt);border-radius:var(--r-sm);
-    padding:6px 11px;font-family:inherit;font-weight:600;font-size:var(--fs-100)}
-  /* Altura recalibrada para a casca nova. O 248px do M5 era a conta da topbar antiga; agora a
-     conta e feita com a folga MEDIDA da status bar (--sb-h), porque ela quebra de linha em tela
-     estreita e um numero fixo faria a vista Grafico nascer rolada.
-     185 = topbar 56 + padding do main 20+24 + h2 32+12 + legenda 10+13 + folga. Medido no
-     navegador: com 175 a pagina passava 5px da viewport e a vista nascia rolada. */
-  #tvchart{width:100%;height:calc(100vh - var(--sb-h) - 185px);min-height:300px}
-  /* o full-bleed de 100vw morreu com o .wrap: dentro do shell com sidebar ele vazava por baixo
-     da nav. A coluna de conteudo ja da a largura toda. */
-  #view-grafico{width:100%;padding:0}
-  .tv-tfs{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle}
-  .tv-tfs button{background:transparent;color:var(--txt2);border:1px solid var(--line2);font-size:var(--fs-75);padding:5px 10px;border-radius:var(--r-sm);font-weight:600;cursor:pointer}
-  /* selecionado e estado de interface: azul, nao verde */
-  .tv-tfs button.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
-  /* .tv-expand e .tv-ind sao alvo de document.querySelector no toggleExpand() e no
-     toggleIndicadores(): as classes TEM que sobreviver, mesmo com o visual trocado. */
-  .tv-expand{background:transparent;color:var(--txt2);border:1px solid var(--line2);font-size:var(--fs-75);padding:5px 11px;border-radius:var(--r-sm);font-weight:600;cursor:pointer;float:right}
-  .expandido .grafico-side{display:none}
-  .expandido .grafico-layout{grid-template-columns:1fr}
-  .tv-ind{background:transparent;color:var(--txt2);border:1px solid var(--line2);font-size:var(--fs-75);padding:5px 11px;border-radius:var(--r-sm);font-weight:600;cursor:pointer;float:right;margin-right:8px}
-  .tv-ind.on{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
-  /* --accent-txt e nao --accent: o --accent como TEXTO sobre superficie da 4.28:1 e reprova */
-  .btn-analise{background:var(--surface);color:var(--accent-txt);padding:8px 13px;border:1px solid var(--line)}
-  .analise-box{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:14px}
-  .grid-ind{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin-top:12px;font-size:var(--fs-75)}
-  .grid-ind b{text-align:right}
-  /* ---------- aba Mercado ----------
-     Gauge de Fear & Greed. O gradiente vermelho-gold-verde e o UNICO gradiente do sistema, e
-     esta aqui porque e escala de medida: ele diz o que cada ponta significa. Nao e decoracao. */
-  .fg{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
-  .fg-num{font-size:var(--fs-1000);font-weight:700;line-height:1;letter-spacing:-1px;white-space:nowrap}
-  .fg-lbl{font-size:var(--fs-100);font-weight:600;margin-left:9px}
-  .fg-escala{flex:1;min-width:220px;max-width:520px}
-  .fg-barra{height:8px;border-radius:var(--r-pill);position:relative;
-    background:linear-gradient(90deg,var(--neg),var(--warn),var(--pos))}
-  .fg-agulha{position:absolute;top:-4px;width:3px;height:16px;background:var(--txt);
-    border-radius:var(--r-pill);transform:translateX(-1.5px);box-shadow:0 0 0 1px var(--bg)}
-  .fg-pontas{display:flex;justify-content:space-between;font-size:var(--fs-75);color:var(--txt3);margin-top:7px}
-  .fg-breadth{font-size:var(--fs-100);color:var(--txt2);margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
-  .fund-alert{font-size:var(--fs-75);padding:9px 12px;border-radius:var(--r-sm);background:var(--surface);
-    color:var(--txt2);margin-bottom:14px;border:1px solid var(--line)}
-  .fund-alert.on{background:var(--warn-bg);color:var(--warn);font-weight:600;border-color:var(--warn-b)}
-  .fund-a{font-weight:600;white-space:nowrap}
-  /* a barra e comparativa entre as moedas da lista, nao percentual absoluto: por isso a
-     escala e o maior |anual| da propria lista */
-  .fund-bar{display:block;min-width:90px;height:6px;background:var(--surface2);border-radius:var(--r-pill);overflow:hidden}
-  .fund-bar i{display:block;height:100%;border-radius:var(--r-pill)}
-  .fund-bar i.b-pos{background:var(--pos)}
-  .fund-bar i.b-neg{background:var(--neg)}
+/* ---- tabela densa ---- */
+.tablewrap{overflow-x:auto;margin:0 -6px;padding:0 6px;scrollbar-width:thin}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{font-family:var(--f-mono);font-weight:500;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl th.num,.tbl td.num{text-align:right}
+.tbl td{padding:8px 7px;border-bottom:1px solid rgba(var(--line-rgb),.6);white-space:nowrap;vertical-align:middle;font-variant-numeric:tabular-nums}
+.tbl tbody tr{transition:background .15s}
+.tbl tbody tr:hover{background:rgba(var(--accent-rgb),.06)}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .sub{display:block;color:var(--mute);font-size:10.5px;line-height:1.2;margin:0}
+.spark{width:72px;height:22px;display:block;overflow:visible}
+.spark path{fill:none;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
+.spark.pos path{stroke:var(--pos)} .spark.pos circle{fill:var(--pos)}
+.spark.neg path{stroke:var(--neg)} .spark.neg circle{fill:var(--neg)}
+.spark.flat path{stroke:var(--txt2)} .spark.flat circle{fill:var(--txt2)}
 
-  .dca-form{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
-  .dca-form select{width:auto;background:var(--surface2);border:1px solid var(--line);color:var(--txt);border-radius:var(--r-sm);padding:8px 11px;font-family:inherit;font-weight:600;font-size:13px}
-  .dca-form input{width:80px;padding:8px 10px;font-size:13px}
-  /* aportar e acao, nao dinheiro: azul. O verde aqui roubava a leitura do P&L ao lado. */
-  .btn-sug{background:var(--accent-bg);color:var(--accent-txt);border:1px solid var(--accent);padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;margin-left:7px}
-  .aviso-liq{background:var(--neg-bg);color:var(--neg);font-size:11.5px;padding:8px 11px;border-radius:7px;margin:7px 0;line-height:1.45}
-  .btn-panico{background:var(--neg-bg);color:var(--neg);padding:9px 12px;border:1px solid var(--neg-b);font-weight:700}
-  /* Guarda de risco: era banner de largura cheia empurrando o conteudo; agora sao itens da
-     status bar. A barra ficou nos tiles do P2-29 - aqui so o numero, porque status bar e
-     glance, nao painel. O banner sobrevive apenas para os dois estados que travam operacao. */
-  .rg-item{display:flex;align-items:center;gap:5px;white-space:nowrap}
-  .rg-banner{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:var(--r-sm);
-    font-weight:600;background:var(--neg-bg);color:var(--neg);border:1px solid var(--neg-b)}
-  .hidden{display:none}
-  .grafico-layout{display:grid;grid-template-columns:1fr 330px;gap:16px}
-  @media(max-width:900px){.grafico-layout{grid-template-columns:1fr}}
-  .grafico-side{max-height:calc(100vh - var(--sb-h) - 185px);overflow:auto}
-  .gs-titulo{font-size:var(--fs-75);color:var(--txt3);font-weight:700;margin-bottom:8px}
-  .why-lbl{font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-right:4px}
-  .tf-badge{background:var(--surface);color:var(--txt3);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600}
-  .tipo-badge{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:600}
-  /* categoria do setup, nao resultado: sai do verde. Reversao fica em gold porque e o
-     contra-tendencia, e gold aqui e o aviso. */
-  .tipo-tendencia{background:var(--accent-bg);color:var(--accent-txt)}
-  .tipo-reversao{background:var(--warn-bg);color:var(--warn)}
-  .cmp{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:11px;margin-top:7px}
-  .cmp b{color:var(--txt)}
-  .entry-status{margin:9px 0 2px;font-size:var(--fs-75);font-weight:600;padding:5px 9px;border-radius:var(--r-sm);display:inline-block}
-  /* mesma tinta da .entry-status, em formato de pilula de celula. O texto e o recorte antes do
-     travessao; o inteiro fica no title e na sub-linha. */
-  .st{display:inline-block;padding:2px 8px;border-radius:var(--r-sm);font-size:var(--fs-75);
-    font-weight:600;white-space:nowrap}
-  /* "ainda vale entrar?" fala de oportunidade de dinheiro: verde/vermelho ficam. */
-  .st-ok{background:var(--pos-bg);color:var(--pos)}
-  .st-tight{background:var(--warn-bg);color:var(--warn)}
-  .st-late{background:var(--surface);color:var(--txt2)}
-  .st-no{background:var(--neg-bg);color:var(--neg)}
-  .st-wait{background:var(--surface);color:var(--txt3)}
-  .sig-dim{opacity:.55}
-  .why-chip{display:inline-block;background:var(--surface);color:var(--txt2);font-size:11px;padding:3px 9px;border-radius:6px;margin:2px 3px 2px 0;border:1px solid var(--line)}
-  .saida td{padding:7px 10px!important;font-size:12px}
-  .saida-forte td,.saida-forte.saida-side{background:var(--pos-bg);color:var(--pos);font-weight:600}
-  .saida-lucro td,.saida-lucro.saida-side{background:var(--warn-bg);color:var(--warn)}
-  .saida-alvo td,.saida-alvo.saida-side{background:var(--warn-bg);color:var(--warn)}
-  .saida-risco td,.saida-risco.saida-side{background:var(--neg-bg);color:var(--neg)}
-  /* vender realiza dinheiro: verde E o significado, mesma logica do Panico em vermelho. Tinta
-     + texto + borda do proprio token, em vez do #04130c cravado que sobrou do tema navy. */
-  .btn-vender{background:var(--pos-bg);color:var(--pos);border:1px solid var(--pos-b);
-    padding:4px 12px;border-radius:var(--r-sm);font-weight:600;font-size:var(--fs-75);float:right;cursor:pointer}
+/* ---- campos ---- */
+.fld{display:grid;gap:5px;font-size:12.5px;color:var(--txt2)}
+.inp{width:100%;background:rgba(var(--bg-rgb),.5);border:1px solid var(--line);border-radius:9px;padding:8px 10px;color:var(--txt);font-family:var(--f-mono);font-size:13px;transition:border-color .15s,box-shadow .15s}
+.inp:focus{outline:none;border-color:rgba(var(--accent-rgb),var(--glow));box-shadow:0 0 0 3px rgba(var(--accent-rgb),var(--glow-xlo))}
+select.inp{font-family:var(--f-ui)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{padding:6px 11px;font-family:var(--f-mono);font-size:12px;color:var(--txt2);border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:rgba(var(--accent-rgb),.16);color:var(--accent)}
 
-  /* ---------- responsivo ----------
-     A casca nova nao tem coluna lateral para recolher: o que muda com a largura e (1) a topbar
-     quebra de linha, (2) a tab bar rola na horizontal em vez de quebrar, (3) os tiles empilham
-     sozinhos pelo auto-fit. Em nenhuma largura a PAGINA rola na horizontal: tabela larga rola
-     dentro do proprio wrapper (#posicoes/#trades/#dca/#metricas tem overflow-x:auto). */
-  @media(max-width:900px){
-    .main{padding:18px 16px 24px}
-    .topbar{padding:8px 16px}
-    .statusbar{padding:7px 16px}
-    /* a topbar quebra em duas linhas aqui, e a legenda desce: mais 40px de chrome */
-    #tvchart{height:calc(100vh - var(--sb-h) - 215px)}
-    .grafico-side{max-height:none}
-  }
-  @media(max-width:560px){
-    .main{padding:16px 12px 24px}
-    .topbar{padding:8px 12px;gap:8px 10px}
-    /* a nav principal e as acoes descem para a propria linha em vez de espremer a marca */
-    .topnav,.topacts{margin-left:0;width:100%}
-    .topacts{justify-content:flex-start}
-    .statusbar{padding:7px 12px;gap:4px 12px}
-    .sb-hora{margin-left:0}
-    /* topbar em tres linhas: a conta do #tvchart cresce junto */
-    #tvchart{height:calc(100vh - var(--sb-h) - 300px)}
-    /* No celular os cinco tiles empilhados enchiam a primeira tela inteira antes de qualquer
-       posicao ou sinal. Duas colunas, com o equity na largura toda: o resumo cabe em meia tela. */
-    .tiles{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
-    .tile-eq{grid-column:1/-1}
-    .tile{padding:12px}
-    .tile .val{font-size:var(--fs-300)}
-    .tile-eq .val{font-size:var(--fs-800)}
-    .spark{margin:auto -12px -12px}
-  }
-  /* ---------- app instalado ----------
-     Com viewport-fit=cover o app desenha embaixo do notch e da barra de gestos. env() vale 0
-     no navegador comum e no desktop, entao estas linhas so agem onde ha o que desviar. Ficam
-     DEPOIS dos @media de largura porque o padding deles e shorthand e apagaria esta folga. */
-  .topbar{padding-top:max(8px,env(safe-area-inset-top))}
-  .statusbar{padding-bottom:max(7px,env(safe-area-inset-bottom))}
+/* ---- cabeçalho de módulo ---- */
+.view-root{display:flex;flex-direction:column;gap:18px;min-width:0}
+.view-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.view-head .eyebrow{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.view-head h1{font-family:var(--f-display);font-weight:800;font-size:24px;letter-spacing:-.01em;margin:2px 0 0;line-height:1.1}
+.view-head .crumb{font-family:var(--f-mono);font-size:11.5px;color:var(--txt2)}
+.view-erro{border:1px dashed rgba(var(--neg-rgb),.5);border-radius:var(--r);padding:28px;text-align:center;color:var(--txt2);display:grid;gap:10px;justify-items:center}
 
-  /* modal */
-  /* Backdrop no --overlay-bg, que e o --c-color-overlay-bg do CMC. Era rgba(6,10,22,.72), navy
-     morto. O blur mora no OVERLAY, que e onde existe camada pra resolver; o modal em si e
-     superficie solida porque tem numero dentro -- vidro sob dado e o que este projeto nao faz.
-     E o unico backdrop-filter do arquivo. */
-  .overlay{position:fixed;inset:0;background:var(--overlay-bg);backdrop-filter:blur(5px);display:none;
-    align-items:center;justify-content:center;z-index:50;padding:20px}
-  .overlay.on{display:flex}
-  /* Aqui a sombra e legitima porque o modal FLUTUA sobre outro conteudo -- e a unica excecao a
-     "sempre aresta" do DESIGN.md, e usa a sombra de overlay do CMC em vez de um preto inventado. */
-  .modal{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-    padding:24px;width:420px;max-width:100%;box-shadow:var(--shadow-overlay);
-    animation:modalIn var(--dur2) var(--ease) both}
-  /* transform-origin sai do botao que abriu (setado em abrirModal): o dialogo cresce de onde
-     voce clicou, em vez de aparecer do nada no meio da tela. */
-  @keyframes modalIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
-  .modal h3{font-size:var(--fs-300);font-weight:700;margin-bottom:4px;line-height:var(--lh-head)}
-  .modal .msub{font-size:var(--fs-75);color:var(--txt3);margin-bottom:18px}
-  .field{margin-bottom:14px}.field label{display:block;font-size:var(--fs-75);color:var(--txt3);font-weight:600;margin-bottom:6px}
-  .preview{background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px;font-size:var(--fs-100);margin:4px 0 18px}
-  .preview .row{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
-  .warn{color:var(--warn)}.modal .mbtns{display:flex;gap:10px}
-  /* primario por ranking, nao por significado: azul solido, texto branco (4.92:1) */
-  .btn-conf{flex:1;background:var(--accent);color:var(--txt);padding:12px;font-size:var(--fs-200);font-weight:600}
-  @media(hover:hover){.btn-conf:hover{background:var(--accent-hover);filter:none}}
-  .btn-cancel{background:transparent;color:var(--txt2);padding:12px 18px;border:1px solid var(--line2)}
-  @media(hover:hover){.btn-cancel:hover{background:var(--surface2);filter:none}}
+/* ---- em construção ---- */
+.uc{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:18px;align-items:start}
+.uc-info{display:grid;gap:14px;align-content:start}
+.uc-tag{display:inline-flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);border:1px dashed var(--line2);border-radius:999px;padding:3px 10px;width:max-content;max-width:100%}
+.uc-tag svg{width:14px;height:14px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.uc-tag b{color:var(--warn);font-weight:600}
+.uc-lead{font-size:14.5px;color:var(--txt);line-height:1.5;margin:0;max-width:52ch}
+.uc-list{list-style:none;margin:0;padding:0;display:grid;gap:9px}
+.uc-list li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;font-size:13px;color:var(--txt2);line-height:1.45}
+.uc-list li::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px rgba(var(--accent-rgb),var(--glow));margin-top:7px}
+.uc-list b{color:var(--txt);font-weight:600}
+.uc-note{font-family:var(--f-mono);font-size:11px;color:var(--mute)}
+.uc-sketch{display:grid;gap:8px}
+.uc-sketch-lbl{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.wf{display:grid;gap:8px;border:1px solid var(--line);border-radius:12px;padding:12px;background:rgba(var(--panel-rgb),.5)}
+.wf-row{display:grid;gap:8px}
+.wf-b{border:1px dashed var(--line2);border-radius:8px;background:rgba(var(--txt-rgb),.03);min-height:38px;display:grid;place-items:center;font-family:var(--f-mono);font-size:10.5px;color:var(--mute);letter-spacing:.06em;text-transform:uppercase;padding:6px 8px;text-align:center;line-height:1.35}
+.wf-b.mid{min-height:72px} .wf-b.tall{min-height:130px}
+.wf-b.hot{border-style:solid;border-color:rgba(var(--accent-rgb),var(--glow));color:var(--accent)}
+.wf-b.lines{background:repeating-linear-gradient(180deg,transparent 0 11px,rgba(var(--txt-rgb),.05) 11px 12px)}
+.c2{grid-template-columns:repeat(2,minmax(0,1fr))} .c3{grid-template-columns:repeat(3,minmax(0,1fr))} .c4{grid-template-columns:repeat(4,minmax(0,1fr))} .c13{grid-template-columns:minmax(0,1fr) minmax(0,3fr)} .c31{grid-template-columns:minmax(0,3fr) minmax(0,1fr)} .c21{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+@media (max-width:900px){.uc{grid-template-columns:1fr}}
 
-  /* So transform e opacity animam, e nomeados: `transition:.3s` vira `all` e poe o browser a
-     vigiar propriedade que causa layout.
-     --sb-h e medido em JS: a status bar quebra de linha e um valor fixo poria o toast por cima
-     dela ou solto no meio da tela. */
-  #toast{position:fixed;bottom:calc(var(--sb-h,24px) + 14px);left:50%;transform:translateX(-50%) translateY(80px);
-    background:var(--surface2);border:1px solid var(--line);border-radius:var(--r);
-    padding:12px 18px;font-size:var(--fs-100);font-weight:600;opacity:0;
-    box-shadow:var(--shadow-overlay);z-index:60;max-width:calc(100vw - 32px);
-    transition:transform var(--dur2) var(--ease),opacity var(--dur2) var(--ease)}
-  #toast.on{transform:translateX(-50%) translateY(0);opacity:1}
-  /* ---------- gate de login ----------
-     Tela cheia, nao modal: sem credencial nao existe painel atras para espiar, entao nao faz
-     sentido desenhar um card flutuando sobre dados.
-     Plano e parado, como o resto do sistema: sem malha, sem varredura descendo a tela, sem
-     cascata de entrada, sem anel pulsante na marca, sem gradiente de fundo. A primeira tela do
-     produto nao pode contradizer todas as outras.
-     Sobraram DUAS animacoes, e as duas sao informacao, nao atmosfera: o ponto do indicador de
-     saude (significa "o backend esta vivo") e o giro do botao enquanto verifica. O shake de
-     senha errada e transitorio e e feedback de erro, nao movimento continuo. */
-  #gate{position:fixed;inset:0;z-index:100;display:none;padding:20px;overflow-y:auto;
-    /* minmax(0,1fr): sem isso a coluna implicita e dimensionada por max-content (a largura do
-       card), fica MAIOR que a tela, e ai o max-width:100% do card resolve contra a coluna
-       inflada em vez da viewport -- no celular o card vazava 34px pra fora. Foi bug real. */
-    grid-template-columns:minmax(0,1fr);
-    place-items:safe center;
-    background:var(--bg)}
-  #gate.on{display:grid}
+.foot{font-family:var(--f-mono);font-size:11px;color:var(--mute);text-align:center;padding:10px;border-top:1px solid var(--line)}
 
-  .gate-card{width:404px;max-width:100%;padding:28px 26px 20px;
-    background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
-  .gate-card.shake{animation:gateShake .4s}
-  @keyframes gateShake{10%,90%{transform:translateX(-2px)}30%,70%{transform:translateX(4px)}50%{transform:translateX(-5px)}}
+/* ---- gate de login ---- */
+#gate{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:16px;background:radial-gradient(120% 90% at 50% 0%,rgba(var(--accent-rgb),.12),transparent 60%),rgba(var(--bg-rgb),.96);backdrop-filter:blur(6px)}
+#gate[hidden]{display:none}
+.gate-on body{overflow:hidden}
+.gate-card{width:min(380px,100%);border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-radius:18px;background:var(--panel);padding:26px 24px;display:grid;gap:16px;box-shadow:0 0 40px rgba(var(--accent-rgb),var(--glow-xlo))}
+.gate-card .brand{justify-content:center}
+.gate-sub{text-align:center;font-family:var(--f-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin-top:-8px}
+.gate-status{display:flex;align-items:center;justify-content:center;gap:8px;font-family:var(--f-mono);font-size:11.5px;color:var(--txt2)}
+.gate-status::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--mute)}
+.gate-status.up::before{background:var(--pos);box-shadow:0 0 8px rgba(var(--pos-rgb),.8)}
+.gate-status.warn::before{background:var(--warn)}
+.gate-status.down::before{background:var(--neg)}
+.gate-f{display:grid;gap:5px;font-size:12.5px;color:var(--txt2);position:relative}
+.gate-eye{position:absolute;right:8px;bottom:6px;font-family:var(--f-mono);font-size:11px;color:var(--txt2);padding:3px 6px;border-radius:6px}
+.gate-eye:hover{color:var(--accent)}
+.gate-caps{font-family:var(--f-mono);font-size:11px;color:var(--warn);display:none}
+.gate-caps.on{display:block}
+.gate-msg{display:none;font-size:12.5px;line-height:1.45;border-radius:9px;padding:9px 11px}
+.gate-msg.on{display:block}
+.gate-msg.err{color:var(--neg);background:rgba(var(--neg-rgb),.1);border:1px solid rgba(var(--neg-rgb),.35)}
+.gate-msg.warn{color:var(--warn);background:rgba(var(--warn-rgb),.08);border:1px solid rgba(var(--warn-rgb),.35)}
+.gate-msg.info{color:var(--txt2);background:rgba(var(--txt-rgb),.05);border:1px solid var(--line)}
+.gate-foot{text-align:center;font-family:var(--f-mono);font-size:10.5px;color:var(--mute);overflow-wrap:anywhere}
+.shake{animation:shake .4s}
+@keyframes shake{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
 
-  /* marca: quadrado --accent de raio 4, o mesmo da topbar. Era um gradiente com sombra colorida
-     e anel pulsante -- tres efeitos para dizer uma coisa. */
-  .gate-mark{width:40px;height:40px;margin:0 auto 16px;border-radius:var(--r-sm);
-    background:var(--accent);display:grid;place-items:center;font-size:22px}
+/* ---- diálogo (confirmação de pânico, reset, config, trade) ---- */
+.dlg{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:16px;background:rgba(var(--bg-rgb),.72);backdrop-filter:blur(4px)}
+.dlg[hidden]{display:none}
+.dlg-box{width:min(480px,100%);max-height:calc(100vh - 32px);overflow:auto;border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-radius:16px;background:var(--panel);padding:20px;display:grid;gap:14px;box-shadow:0 20px 60px rgba(var(--bg-rgb),.8)}
+.dlg-box.perigo{border-color:rgba(var(--neg-rgb),.55);box-shadow:0 0 30px rgba(var(--neg-rgb),.2),0 20px 60px rgba(var(--bg-rgb),.8)}
+.dlg-box h3{font-family:var(--f-display);font-size:18px;margin:0}
+.dlg-body{font-size:13px;color:var(--txt2);display:grid;gap:10px}
+.dlg-body b{color:var(--txt)}
+.dlg-acts{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.diff{display:grid;gap:4px;font-family:var(--f-mono);font-size:12px;border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--panel2)}
+.diff div{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.prev{display:grid;gap:5px;font-size:12.5px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel2)}
+.prev .r{display:flex;justify-content:space-between;gap:10px}
+.prev .r span:first-child{color:var(--txt2)}
+.prev .r span:last-child{font-family:var(--f-mono);text-align:right}
+.aviso{border:1px solid rgba(var(--warn-rgb),.45);background:rgba(var(--warn-rgb),.08);color:var(--warn);border-radius:9px;padding:8px 10px;font-size:12px}
+.aviso.neg{border-color:rgba(var(--neg-rgb),.45);background:rgba(var(--neg-rgb),.08);color:var(--neg)}
 
-  .gate-h{text-align:center;font-size:var(--fs-300);font-weight:700;line-height:var(--lh-head)}
-  .gate-h span{color:var(--txt3);font-weight:500}
-  .gate-sub{text-align:center;font-size:var(--fs-75);color:var(--txt3);margin-top:5px}
+/* ---- Apollo: presença global (widget + mini chat) ---- */
+.apw{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:max(16px,env(safe-area-inset-bottom,0px));z-index:40;width:156px}
+.apw[hidden]{display:none}
+.apw-card{position:relative;border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-radius:14px;background:rgba(var(--panel-rgb),.92);backdrop-filter:blur(8px);box-shadow:0 0 18px rgba(var(--accent-rgb),var(--glow-xlo)),0 8px 24px rgba(var(--bg-rgb),.6);overflow:hidden;transition:border-color .2s,box-shadow .2s}
+.apw-card:hover{border-color:rgba(var(--accent-rgb),var(--glow))}
+.apw-mesh{display:block;width:100%;height:58px;position:relative;padding:0;cursor:pointer;background:rgba(var(--bg-rgb),.55)}
+.apw-mesh canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.apw-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 5px 0 9px;height:30px;border-top:1px solid rgba(var(--accent-rgb),var(--glow-xlo))}
+.apw-name{display:flex;flex-direction:column;line-height:1;min-width:0}
+.apw-name b{font-family:var(--f-display);font-size:11px;font-weight:700;color:var(--txt)}
+.apw-name span{font-family:var(--f-mono);font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.apw-name span.on{color:var(--accent)}
+.apw-btns{display:flex;gap:2px;flex:none}
+.apw-ib{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;color:var(--txt2);position:relative;transition:background .15s,color .15s}
+.apw-ib svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.apw-ib:hover{background:rgba(var(--accent-rgb),.12);color:var(--accent)}
+.apw-ib .lk{position:absolute;right:-2px;top:-2px;width:10px;height:10px;border-radius:3px;background:var(--panel2);border:1px solid var(--line2);display:grid;place-items:center;color:var(--mute)}
+.apw-ib .lk svg{width:6px;height:6px;stroke-width:2.2}
+.apw-pop{position:absolute;right:0;bottom:calc(100% + 10px);width:330px;max-width:calc(100vw - 32px);border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-radius:14px;background:rgba(var(--panel-rgb),.97);backdrop-filter:blur(10px);box-shadow:0 0 24px rgba(var(--accent-rgb),var(--glow-xlo)),0 14px 36px rgba(var(--bg-rgb),.7);display:grid;gap:10px;padding:12px}
+.apw-pop[hidden]{display:none}
+.apw-pop-head{display:flex;align-items:center;gap:8px}
+.apw-pop-head b{font-family:var(--f-display);font-size:13px}
+.apw-pop-state{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.apw-pop-state.on{color:var(--accent)}
+.apw-link{margin-left:auto;font-family:var(--f-mono);font-size:11px;color:var(--accent);border:1px solid rgba(var(--accent-rgb),var(--glow));border-radius:999px;padding:2px 8px;white-space:nowrap}
+.apw-link:hover{background:rgba(var(--accent-rgb),.12)}
+.apw-x{width:24px;height:24px;border-radius:7px;color:var(--txt2);font-size:16px;line-height:1;display:grid;place-items:center;flex:none}
+.apw-x:hover{background:rgba(var(--txt-rgb),.08);color:var(--txt)}
+.apw-msgs{display:grid;gap:8px;max-height:240px;overflow-y:auto;scrollbar-width:thin;padding:2px}
+.apw-m{font-size:12.5px;line-height:1.45;padding:8px 10px;border-radius:12px;max-width:94%;overflow-wrap:anywhere}
+.apw-m.ev{justify-self:start;background:rgba(var(--txt-rgb),.05);border:1px solid var(--line);font-family:var(--f-mono);font-size:11.5px;color:var(--txt2)}
+.apw-m.ai{justify-self:start;background:rgba(var(--accent-rgb),.09);border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-bottom-left-radius:4px}
+.apw-m .mono{font-size:12px;font-weight:600}
+.apw-m time{display:block;font-family:var(--f-mono);font-size:10px;color:var(--mute);margin-top:3px}
+.apw-chip{display:inline-flex;align-items:center;gap:4px;margin:5px 4px 0 0;font-family:var(--f-mono);font-size:10.5px;color:var(--accent);border:1px solid rgba(var(--accent-rgb),var(--glow));border-radius:999px;padding:1px 8px;white-space:nowrap}
+.apw-chip:hover{background:rgba(var(--accent-rgb),.14)}
+.apw-cur::after{content:"▍";color:var(--accent);animation:apwblink .8s steps(1) infinite}
+@keyframes apwblink{50%{opacity:0}}
+.apw-in{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:6px 8px 6px 10px;background:rgba(var(--bg-rgb),.5)}
+.apw-in input{flex:1;min-width:0;background:none;border:0;color:var(--txt);font:inherit;font-size:12.5px;outline:none}
+.apw-in input::placeholder{color:var(--mute)}
+.apw-in .soon{margin-left:0}
+.apw-act{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.apw-act small{font-family:var(--f-mono);font-size:10px;color:var(--mute)}
 
-  /* Estado do backend ao vivo. /health e a unica rota sem autenticacao, entao da pra dizer
-     "o backend esta de pe" ANTES de a pessoa digitar -- e nao confundir senha errada com
-     servico fora do ar, que e o que os dois prompt() do navegador nunca souberam fazer. */
-  .gate-status{display:flex;align-items:center;justify-content:center;gap:7px;margin:18px auto 20px;
-    width:fit-content;font-size:var(--fs-75);font-weight:600;padding:6px 12px;
-    border-radius:var(--r-pill);border:1px solid var(--line);background:var(--surface2);color:var(--txt2)}
-  /* o pulso agora mora no ::after (ver o bloco do .dot): quem liga e desliga o anel e o
-     pseudo-elemento, nao mais o proprio circulo. */
-  .gate-status .dot{background:var(--txt2)}
-  .gate-status .dot::after{animation:none}
-  .gate-status.up{color:var(--pos);background:var(--pos-bg);border-color:var(--pos-b)}
-  .gate-status.up .dot{background:var(--pos)}
-  .gate-status.up .dot::after{animation:pulse 1.8s infinite}
-  .gate-status.down{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
-  .gate-status.down .dot{background:var(--neg)}
+.toast{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom,0px));transform:translateX(-50%) translateY(20px);opacity:0;background:var(--panel2);border:1px solid rgba(var(--accent-rgb),var(--glow));border-radius:10px;padding:10px 14px;font-family:var(--f-mono);font-size:12px;box-shadow:0 0 20px rgba(var(--accent-rgb),var(--glow-lo));z-index:90;transition:opacity .25s,transform .25s;pointer-events:none;max-width:calc(100vw - 32px)}
+.toast.is-on{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.neg{border-color:rgba(var(--neg-rgb),.6)} .toast.warn{border-color:rgba(var(--warn-rgb),.6)}
 
-  .gate-f{position:relative;margin-bottom:13px}
-  .gate-f label{display:block;font-size:var(--fs-75);font-weight:600;color:var(--txt3);margin-bottom:6px}
-  .gate-f input{padding:11px 13px;font-size:var(--fs-200)}
-  .gate-f input:disabled{opacity:.55}
-  .gate-eye{position:absolute;right:4px;top:28px;height:38px;width:40px;background:transparent;
-    color:var(--txt2);font-size:15px;display:grid;place-items:center;border-radius:var(--r-sm);padding:0}
-  @media (hover:hover){.gate-eye:hover{color:var(--txt);background:var(--surface2)}}
-  .gate-caps{font-size:var(--fs-75);color:var(--warn);margin-top:7px;display:none}
-  .gate-caps.on{display:block}
-
-  /* azul solido com texto branco: 4.92:1, que e o par que o DESIGN.md fixa para o primario. */
-  .gate-btn{width:100%;padding:12px;font-size:var(--fs-200);font-weight:600;color:var(--txt);margin-top:6px;
-    background:var(--accent);border-radius:var(--r-sm);
-    display:flex;align-items:center;justify-content:center;gap:9px}
-  @media(hover:hover){.gate-btn:hover{background:var(--accent-hover);filter:none}}
-  .gate-spin{width:15px;height:15px;border-radius:50%;border:2px solid var(--sobre-azul);
-    border-top-color:var(--txt);animation:gateSpin .6s linear infinite;display:none}
-  .gate-btn.loading .gate-spin{display:block}
-  @keyframes gateSpin{to{transform:rotate(360deg)}}
-
-  /* as quatro mensagens distintas (401, 429, sem rede, sem DASH_PASS) moram nestas tres tintas */
-  .gate-msg{display:none;margin-top:14px;padding:10px 12px;border-radius:var(--r-sm);
-    font-size:var(--fs-75);line-height:1.55;border:1px solid transparent}
-  .gate-msg.on{display:block}
-  .gate-msg.err{color:var(--neg);background:var(--neg-bg);border-color:var(--neg-b)}
-  .gate-msg.warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-b)}
-  .gate-msg.info{color:var(--txt2);background:var(--surface2);border-color:var(--line)}
-  .gate-msg b{font-weight:700}
-
-  .gate-foot{margin-top:18px;padding-top:13px;border-top:1px solid var(--line);text-align:center;
-    font-size:var(--fs-50);color:var(--txt3);line-height:1.7;word-break:break-all}
-  @media(max-width:440px){.gate-card{padding:24px 18px 16px}}
+@media (max-width:1100px){.row-2,.row-3{grid-template-columns:1fr}}
+@media (max-width:1024px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side,.main{min-width:0}
+  .side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding-right:max(16px,env(safe-area-inset-right,0px));gap:12px;overflow:visible}
+  .nav{flex-direction:row;flex-wrap:wrap;gap:6px}
+  .nav-label{width:100%;padding-left:0;margin:6px 0 0}
+  .nav-item{padding:7px 10px}
+  .badge,.soon{margin-left:4px}
+  .side-foot{margin-top:4px}
+  .main{padding-left:max(16px,env(safe-area-inset-left,0px))}
+}
+@media (max-width:640px){
+  .side{padding-block:14px 10px}
+  .nav{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -16px;padding:0 16px 4px}
+  .nav::-webkit-scrollbar{display:none}
+  .nav-label{display:none}
+  .nav-item{flex:none}
+  .side-foot .sub{display:none}
+  .top-acts{margin-left:0;width:100%;justify-content:space-between}
+  .apw{width:124px;bottom:max(12px,env(safe-area-inset-bottom,0px));right:max(12px,env(safe-area-inset-right,0px))}
+  .apw-mesh{height:44px} .apw-foot{height:26px;padding:0 3px 0 8px} .apw-name span{display:none} .apw-ib{width:22px;height:22px}
+  .apw-pop{position:fixed;left:0;right:0;bottom:0;width:auto;max-width:none;border-radius:16px 16px 0 0;padding:14px 16px max(14px,env(safe-area-inset-bottom,0px));border-left:0;border-right:0;border-bottom:0}
+  .main{padding-bottom:96px}
+}
+@media (prefers-reduced-motion:reduce){
+  .led,.apw-cur::after,.skel{animation:none}
+  .card,.nav-item,.btn{transition:none}
+}
 </style>
 </head>
 <body>
-<!-- Gate de login. Fora do .wrap de proposito: e tela cheia, nao um modal do painel. So
-     aparece quando o backend devolve 401 -- em dev sem senha ninguem ve isto. -->
-<div id="gate" role="dialog" aria-modal="true" aria-labelledby="gate-h">
-  <form class="gate-card" id="gate-form">
-    <div class="gate-mark" aria-hidden="true">🤖</div>
-    <div>
-      <h2 class="gate-h" id="gate-h">Cripto Bot <span>Terminal</span></h2>
-      <div class="gate-sub">acesso restrito</div>
-    </div>
-    <div class="gate-status" id="gate-status"><span class="dot"></span><span id="gate-status-txt">verificando backend…</span></div>
-    <div class="gate-f">
-      <label for="gate-user">Usuário</label>
-      <input id="gate-user" name="username" autocomplete="username" value="admin" spellcheck="false" autocapitalize="off" autocorrect="off">
-    </div>
-    <div class="gate-f">
-      <label for="gate-pass">Senha</label>
-      <input id="gate-pass" name="password" type="password" autocomplete="current-password" spellcheck="false">
-      <button type="button" class="gate-eye" id="gate-eye" aria-label="Mostrar senha">👁</button>
-      <div class="gate-caps" id="gate-caps">⇪ Caps Lock ligado</div>
-    </div>
-    <div>
-      <button type="submit" class="gate-btn" id="gate-btn"><span class="gate-spin" aria-hidden="true"></span><span id="gate-btn-txt">Entrar no terminal</span></button>
-      <div class="gate-msg" id="gate-msg" role="alert" aria-live="polite"></div>
-    </div>
+<div class="streaks" aria-hidden="true"><span class="streak s1"></span><span class="streak s2"></span></div>
+
+<!-- Gate de login: só abre quando o backend devolve 401 (ou no "Sair"). Mesma credencial do clássico. -->
+<div id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gate-h">
+  <form class="gate-card" id="gate-form" autocomplete="on">
+    <div class="brand" id="gate-h"><svg class="brand-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/><polyline points="6,17 11,17 13.5,10 17,23 20,14 22,17 26,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="wordmark">Apollux</span></div>
+    <div class="gate-sub">acesso restrito</div>
+    <div class="gate-status" id="gate-status"><span id="gate-status-txt">verificando backend…</span></div>
+    <label class="gate-f">Usuário<input class="inp" id="gate-user" name="username" autocomplete="username" value="admin" spellcheck="false" autocapitalize="off" autocorrect="off"></label>
+    <label class="gate-f">Senha<input class="inp" id="gate-pass" name="password" type="password" autocomplete="current-password" spellcheck="false"><button type="button" class="gate-eye" id="gate-eye" aria-label="Mostrar senha">ver</button></label>
+    <div class="gate-caps" id="gate-caps">Caps Lock ligado</div>
+    <button type="submit" class="btn primary" id="gate-btn">Entrar</button>
+    <div class="gate-msg" id="gate-msg" role="alert" aria-live="polite"></div>
     <div class="gate-foot" id="gate-foot"></div>
   </form>
 </div>
-<!-- Casca do DESIGN.md > Layout grammar: topbar, tab bar e status bar fixa.
-     Sai a sidebar de 232px, sai o bento de duas colunas, saem os banners de risco. -->
-<header class="topbar">
-  <div class="brand"><span class="logo" aria-hidden="true">🤖</span>
-    <span><span class="bname">Cripto Bot</span> <span class="sub">Terminal</span></span></div>
-  <div class="conta-sel" role="group" aria-label="Conta">
-    <button type="button" data-conta="A" onclick="trocaConta('A')" title="Produção: as regras de hoje">A · Produção</button>
-    <button type="button" data-conta="B" onclick="trocaConta('B')" title="Teste B: as regras dos backtests, banca própria">B · Teste</button>
-  </div>
-  <!-- Os dois botoes de vista mantem class="tab" e data-v: aba() mira
-       document.querySelectorAll('.tab') e liga o .on por dataset.v. -->
-  <nav class="topnav" aria-label="Vistas">
-    <button class="tab on" data-v="painel" aria-pressed="true" onclick="aba('painel')">Painel</button>
-    <button class="tab" data-v="grafico" aria-pressed="false" onclick="aba('grafico')">Gráfico</button>
-  </nav>
-  <div class="topacts">
-    <button class="btn-sec" onclick="escanear()">Escanear</button>
-    <button class="btn-panico" onclick="panico()">Pânico</button>
-    <button class="btn-danger" onclick="resetar()">Resetar</button>
-    <button class="btn-sec" onclick="sairLogin()" title="Encerrar a sessão neste navegador">Sair</button>
-  </div>
-</header>
-<!-- #view-titulo continua existindo e continua sendo escrito pelo aba(); com a nav na topbar
-     ele deixou de precisar aparecer e virou o h1 da pagina, anunciado a quem usa leitor. -->
-<h1 class="sr-only" id="view-titulo">Painel</h1>
 
-<main class="main">
-  <div id="view-painel">
-    <!-- Abas de CONTEUDO: .subtab/data-sub, classe diferente da .tab de proposito, senao
-         entrariam no querySelectorAll('.tab') do aba() e a troca Painel/Grafico morreria.
-         Trocar de aba aqui so mostra/esconde: nao dispara requisicao. -->
-    <nav class="tabbar" role="tablist" aria-label="Blocos do painel">
-      <button class="subtab on" role="tab" id="tab-sinais" data-sub="sinais" aria-selected="true" aria-controls="sub-sinais" onclick="subaba('sinais')">Sinais <span class="tab-n mono" id="npend">—</span></button>
-      <button class="subtab" role="tab" id="tab-posicoes" data-sub="posicoes" aria-selected="false" aria-controls="sub-posicoes" tabindex="-1" onclick="subaba('posicoes')">Posições</button>
-      <button class="subtab" role="tab" id="tab-journal" data-sub="journal" aria-selected="false" aria-controls="sub-journal" tabindex="-1" onclick="subaba('journal')">Journal</button>
-      <button class="subtab" role="tab" id="tab-metricas" data-sub="metricas" aria-selected="false" aria-controls="sub-metricas" tabindex="-1" onclick="subaba('metricas')">Métricas</button>
-      <button class="subtab" role="tab" id="tab-dca" data-sub="dca" aria-selected="false" aria-controls="sub-dca" tabindex="-1" onclick="subaba('dca')">DCA</button>
-      <button class="subtab" role="tab" id="tab-mercado" data-sub="mercado" aria-selected="false" aria-controls="sub-mercado" tabindex="-1" onclick="subaba('mercado')">Mercado</button>
-      <button class="subtab" role="tab" id="tab-auto" data-sub="auto" aria-selected="false" aria-controls="sub-auto" tabindex="-1" onclick="subaba('auto')">Auto-trade</button>
+<div class="app">
+  <aside class="side">
+    <a class="brand" href="#painel" aria-label="Apollux · Painel">
+      <svg class="brand-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/><polyline points="6,17 11,17 13.5,10 17,23 20,14 22,17 26,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <span class="wordmark">Apollux</span>
+    </a>
+    <nav class="nav" aria-label="Módulos">
+      <div class="nav-label">Módulos</div>
+      <a class="nav-item" href="#painel" data-route="painel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>Painel</span></a>
+      <a class="nav-item" href="#operar" data-route="operar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17l5-5 4 4 7-8"/><path d="M14 8h6v6"/></svg><span>Operar</span><span class="badge" id="nb-sinais" hidden title="sinais na fila"></span></a>
+      <a class="nav-item" href="#apollo" data-route="apollo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="8" width="14" height="11" rx="3"/><circle cx="10" cy="13.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="14" cy="13.5" r="1.2" fill="currentColor" stroke="none"/><path d="M12 8V4M9 4h6"/></svg><span>Apollo</span><span class="badge" id="nb-ordens" hidden title="ordens descansando"></span></a>
+      <a class="nav-item" href="#analise" data-route="analise"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20v-9M10 20V5M16 20v-7M2 20h20"/></svg><span>Análise</span></a>
+      <a class="nav-item" href="#carteira" data-route="carteira"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 10h18M16 15h2"/></svg><span>Carteira</span></a>
+      <a class="nav-item" href="#pesquisa" data-route="pesquisa"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6L4.5 19a1 1 0 0 0 .9 1.5h13.2a1 1 0 0 0 .9-1.5L14 9V3"/></svg><span>Pesquisa</span></a>
+      <div class="nav-label">Em construção</div>
+      <a class="nav-item is-locked" href="#acoes" data-route="acoes"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Ações BR</span><span class="soon">em breve</span></a>
+      <a class="nav-item is-locked" href="#fundamentos" data-route="fundamentos"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Fundamentos (LLM)</span><span class="soon">em breve</span></a>
+      <a class="nav-item is-locked" href="#noticias" data-route="noticias"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Notícias</span><span class="soon">em breve</span></a>
+      <a class="nav-item is-locked" href="#mobile" data-route="mobile"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Mobile &amp; Push</span><span class="soon">em breve</span></a>
     </nav>
-
-    <!-- Cinco tiles. Risco do dia e Exposicao aberta vieram dos banners de largura cheia:
-         os dados ja chegavam em e.risco, nao houve mudanca de backend. -->
-    <section class="tiles">
-      <article class="tile tile-eq"><div class="lbl">Equity total</div><div class="val mono" id="equity">R$ —</div>
-        <div class="delta mono" id="pnl">—</div>
-        <div class="spark" id="spark" aria-hidden="true"></div></article>
-      <article class="tile"><div class="lbl">Banca (caixa)</div><div class="val mono" id="banca">R$ —</div>
-        <div class="tile-sub" id="banca-sub">caixa livre para novas entradas</div>
-        <div class="spark spark-dim" id="spark-banca" aria-hidden="true"></div></article>
-      <article class="tile"><div class="lbl">Posições abertas</div><div class="val mono" id="npos">—</div>
-        <div class="delta mono" id="pos-pnl">—</div>
-        <div class="tile-bar"><i id="pos-bar" style="width:0"></i></div>
-        <div class="tile-sub" id="pos-sub">—</div></article>
-      <article class="tile"><div class="lbl">Risco do dia</div><div class="val mono" id="risco-dia">—</div>
-        <div class="tile-bar"><i class="b-neg" id="risco-bar" style="width:0"></i></div>
-        <div class="tile-sub" id="risco-sub">—</div></article>
-      <article class="tile"><div class="lbl">Exposição aberta</div><div class="val mono" id="expo">—</div>
-        <div class="tile-bar"><i class="b-warn" id="expo-bar" style="width:0"></i></div>
-        <div class="tile-sub" id="expo-sub">—</div></article>
-    </section>
-
-    <section class="subview" id="sub-sinais" data-sub="sinais" role="tabpanel" aria-labelledby="tab-sinais">
-      <div class="panel"><h2>🔔 Sinais — Confirmar trade</h2><div id="pendentes"><div class="skel-wrap"><div class="skel lg"></div><div class="skel" style="width:80%"></div><div class="skel lg"></div></div></div></div>
-    </section>
-
-    <section class="subview" id="sub-posicoes" data-sub="posicoes" role="tabpanel" aria-labelledby="tab-posicoes" hidden>
-      <div class="panel" id="painel-ordens" hidden><h2>⏳ Ordens pendentes <span class="met-nota">post-only</span></h2><div id="ordens"></div></div>
-      <div class="panel"><h2>🎯 Posições abertas</h2><div id="posicoes"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:75%"></div></div></div></div>
-    </section>
-
-    <section class="subview" id="sub-journal" data-sub="journal" role="tabpanel" aria-labelledby="tab-journal" hidden>
-      <div class="panel"><h2>📋 Journal (trades)</h2><div id="trades"><div class="skel-wrap"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:65%"></div></div></div></div>
-    </section>
-
-    <!-- A curva de capital mora aqui: e a versao detalhada do que o tile de equity resume, e
-         Metricas e o bloco que fala de desempenho. Fora de uma aba ela devolveria a pagina
-         de 8000px que a tab bar existe para acabar. subaba() chama chart.resize() ao entrar,
-         senao o Chart.js fica com a largura que mediu enquanto o container estava escondido. -->
-    <section class="subview" id="sub-metricas" data-sub="metricas" role="tabpanel" aria-labelledby="tab-metricas" hidden>
-      <div class="panel"><h2>📈 Curva de capital</h2><div class="card" style="height:230px"><canvas id="chart"></canvas></div></div>
-      <div class="panel"><h2>📊 Métricas &amp; Tunagem</h2><div id="metricas"><div class="skel-wrap"><div class="skel lg"></div><div class="skel"></div><div class="skel" style="width:80%"></div></div></div></div>
-    </section>
-
-    <section class="subview" id="sub-dca" data-sub="dca" role="tabpanel" aria-labelledby="tab-dca" hidden>
-  <div class="panel"><h2>💰 DCA / Acumulação <span class="mut" style="font-size:11px;font-weight:400">— captura de beta sem timing (o único que, validado, bate o trade ativo do varejo)</span></h2>
-    <div id="dca"><div class="skel-wrap"><div class="skel"></div><div class="skel" style="width:70%"></div></div></div>
-    <div class="dca-form">
-      <select id="dca-ativo"></select>
-      <input id="dca-valor" type="number" value="50" min="1" title="R$ por aporte">
-      <span class="mut" style="font-size:12px">R$ a cada</span>
-      <input id="dca-freq" type="number" value="7" min="1" title="dias entre aportes">
-      <span class="mut" style="font-size:12px">dias</span>
-      <button class="btn-sec" onclick="criarDca()">+ Criar plano</button>
+    <div class="side-foot" aria-live="off">
+      <div class="row"><span class="led off" id="sf-led" aria-hidden="true"></span><span id="sf-txt">conectando…</span></div>
+      <div class="sub" id="sf-sub"></div>
     </div>
-  </div>
-    </section>
+  </aside>
 
-    <section class="subview" id="sub-mercado" data-sub="mercado" role="tabpanel" aria-labelledby="tab-mercado" hidden>
-      <!-- Sentimento nao e tabela: card. Funding e tabela: sem card em volta. -->
-      <div class="panel"><h2>🌡️ Sentimento do mercado</h2><div id="sentimento" class="card mut">carregando...</div></div>
-      <div class="panel"><h2>🔥 Funding Monitor <span class="mut" style="font-weight:400">— radar do carry (long spot + short perp)</span></h2><div id="funding" class="mut">carregando...</div></div>
-    </section>
-
-    <section class="subview" id="sub-auto" data-sub="auto" role="tabpanel" aria-labelledby="tab-auto" hidden>
-      <div class="panel"><h2>🤖 Auto-trade <span class="mut" style="font-weight:400">— experimento: o bot abre/fecha sozinho (paper)</span></h2>
-        <!-- nao e tabela, entao e card: e a regra do DESIGN.md. #auto-panel continua sendo
-             este elemento porque renderAuto() liga/desliga o .on nele. -->
-        <div class="card" id="auto-panel">
-          <div class="auto-row">
-            <button id="auto-toggle" class="btn-auto" onclick="toggleAuto()" aria-pressed="false">Ativar bot 🤖</button>
-            <span id="auto-status" class="auto-status"><span class="auto-badge"></span> desligado</span>
+  <main class="main">
+    <header class="topbar" aria-label="Conta e ações">
+      <div class="contas" role="group" aria-label="Conta">
+        <button type="button" class="conta" data-conta="A" title="Produção: as regras de hoje">Paper A</button>
+        <button type="button" class="conta" data-conta="B" title="Teste A/B: outra instância, banca própria">Conta B</button>
+        <button type="button" class="conta lock" disabled title="Esteira testnet → dry-run → live (PLANO-LIVE-BINANCE)">Real · em esteira</button>
+      </div>
+      <span class="conn" id="conn"><span class="led off" aria-hidden="true"></span><span>conectando…</span></span>
+      <div class="top-acts">
+        <div class="menu">
+          <button type="button" class="btn ghost sm" id="pal-btn" aria-haspopup="true" aria-expanded="false" aria-controls="pal-pop"><span class="acc" style="padding:0;border:0"><i id="pal-dot"></i></span><span id="pal-nome">Paleta</span></button>
+          <div class="menu-pop" id="pal-pop" hidden><div class="menu-lbl">Paleta · lembrada neste navegador</div><div class="pal" id="pal-list"></div></div>
+        </div>
+        <button type="button" class="btn danger sm" id="btn-panico" title="Desliga o auto-trade e fecha todas as posições a mercado">Pânico</button>
+        <div class="menu">
+          <button type="button" class="btn ghost sm" id="menu-btn" aria-haspopup="true" aria-expanded="false" aria-controls="menu-pop" aria-label="Menu da conta">Conta ▾</button>
+          <div class="menu-pop" id="menu-pop" hidden>
+            <div class="menu-lbl" id="menu-conta">conta</div>
+            <button type="button" class="mi" data-acao="scan">Escanear agora<small>POST /scan · varre o mercado fora do ciclo</small></button>
+            <a class="mi" href="classico.html">Painel clássico<small>a versão anterior, até a paridade ser assinada</small></a>
+            <button type="button" class="mi" data-acao="sair">Sair<small>encerra a sessão neste navegador</small></button>
+            <hr>
+            <button type="button" class="mi danger" data-acao="reset">Resetar simulação…<small>apaga posições, trades e curva; pede confirmação digitada</small></button>
           </div>
-          <div class="auto-cfg">
-            <label for="a-conv">Convicção mín<input id="a-conv" type="number" min="0" max="100" value="60"></label>
-            <label for="a-lev" id="a-lev-lbl">Alav. teto (x)<input id="a-lev" type="number" min="1" max="125" value="20"></label>
-            <label for="a-risco">Risco/trade %<input id="a-risco" type="number" min="0.1" max="20" step="0.5" value="3"></label>
-            <label for="a-maxpos">Máx posições<input id="a-maxpos" type="number" min="1" max="20" value="5"></label>
-            <label for="a-levmodo" style="flex-direction:row;align-items:center;gap:7px"><input id="a-levmodo" type="checkbox" checked style="width:auto"> Alav. ∝ convicção</label>
-            <button class="btn-sec" onclick="salvarAuto()">Salvar</button>
-          </div>
-          <div id="auto-log" class="auto-log mut"></div>
-          <div class="auto-warn">⚠️ Paper trading (dinheiro fictício). Já provamos que essa estratégia <b>não tem edge</b> — o esperado é o bot derivar pra perda (taxa + alavancagem). Roda dentro da trava diária e do teto de exposição. É pra <b>observar</b>, não pra ganhar.</div>
         </div>
       </div>
-    </section>
-  </div><!-- /view-painel -->
-
-  <div id="view-grafico" class="hidden">
-    <div class="panel">
-      <h2>🕯️ Gráfico <select id="tv-ativo"></select>
-        <span class="tv-tfs" id="tv-tfs"><button data-tf="5m" onclick="mudarTf('5m')">5m</button><button data-tf="15m" onclick="mudarTf('15m')">15m</button><button data-tf="30m" onclick="mudarTf('30m')">30m</button><button data-tf="1h" onclick="mudarTf('1h')">1h</button><button data-tf="4h" onclick="mudarTf('4h')">4h</button><button data-tf="1d" onclick="mudarTf('1d')">1d</button></span>
-        <button class="tv-ind" onclick="toggleIndicadores()" title="EMAs + Bollinger">📉 Indicadores</button><button class="tv-expand" onclick="toggleExpand()" title="Expandir / recolher">⛶ Expandir</button></h2>
-      <div class="grafico-layout">
-        <div id="tvchart"></div>
-        <div class="grafico-side">
-          <div id="g-analise"></div>
-          <div class="gs-titulo">📖 Book / Fluxo</div><div id="g-book"></div>
-          <div class="gs-titulo" style="margin-top:16px">🐋 Smart money</div><div id="g-smart"></div>
-          <div class="gs-titulo" style="margin-top:16px">Posições abertas</div><div id="g-posicoes"></div>
-          <div class="gs-titulo" style="margin-top:16px">Trades recentes</div><div id="g-trades"></div>
-        </div>
-      </div>
-      <div class="mut" style="font-size:11.5px;margin-top:10px">Linha cheia = entrada · tracejada = stop · seta = trade. Verde LONG, vermelho SHORT.</div>
-    </div>
-  </div>
+    </header>
+    <div class="offline-bar" role="status"><span class="led bad" aria-hidden="true"></span><span id="offline-txt">backend offline · reconectando a cada 3 s. Os números abaixo são do último retrato.</span></div>
+    <div id="view-root" class="view-root"></div>
+    <footer class="foot">Apollux · paper trading: dinheiro fictício, preço real da Binance · <span id="pal-foot">Elétrico</span></footer>
   </main>
-
-<!-- Status bar fixa: AO VIVO, o que o #risco-guard escrever (banca, exposicao, risco do dia),
-     a config e a hora do ultimo poll. Substitui os banners que empurravam o conteudo. -->
-<div class="statusbar" role="status" aria-live="off">
-  <span class="sb-live"><span class="dot"></span> AO VIVO</span>
-  <div id="risco-guard"></div>
-  <span class="sb-cfg" id="cfg">paper trading · preço real Binance</span>
-  <span class="sb-hora mono" id="sb-hora">—</span>
 </div>
 
-<!-- MODAL CONFIRMAR -->
-<div class="overlay" id="overlay">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-titulo">
-    <h3 id="m-titulo">Confirmar trade</h3>
-    <div class="msub" id="m-sub">—</div>
-    <div class="field"><label for="m-valor">Valor de entrada (R$)</label><input id="m-valor" type="number" value="100" min="1" oninput="previa()"></div>
-    <div class="field"><label for="m-lev">Alavancagem (x)</label><input id="m-lev" type="number" value="10" min="1" max="125" oninput="previa()"></div>
-    <div class="field"><label for="m-risco">Risco por trade (% da banca)</label><input id="m-risco" type="number" value="3" min="0.1" max="20" step="0.5" oninput="previa()"></div>
-    <div class="preview" id="m-prev"></div>
-    <div class="mbtns">
-      <button class="btn-cancel" onclick="fecharModal()">Cancelar</button>
-      <button class="btn-conf" id="m-conf" onclick="confirmarTrade()">✅ Confirmar</button>
+<!-- Apollo: presença global. Some só em #apollo, onde a esfera ganha a tela. -->
+<div class="apw" id="apw">
+  <div class="apw-card">
+    <button type="button" class="apw-mesh" id="apw-open" aria-label="Apollo: abrir o resumo" aria-haspopup="dialog"><canvas id="apw-canvas" aria-hidden="true"></canvas></button>
+    <div class="apw-foot">
+      <div class="apw-name"><b>Apollo</b><span id="apw-state">—</span></div>
+      <div class="apw-btns">
+        <button type="button" class="apw-ib" id="apw-voice" title="Voz · em breve" aria-label="Voz (em breve)"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg><span class="lk" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span></button>
+        <button type="button" class="apw-ib" id="apw-chat" aria-label="Abrir o resumo do Apollo" aria-expanded="false" aria-controls="apw-pop"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg></button>
+      </div>
     </div>
   </div>
+  <div class="apw-pop" id="apw-pop" hidden role="dialog" aria-label="Apollo">
+    <div class="apw-pop-head"><b>Apollo</b><span class="apw-pop-state" id="apw-pop-state">—</span><a class="apw-link" href="#apollo">Abrir no Apollo</a><button type="button" class="apw-x" id="apw-close" aria-label="Fechar">×</button></div>
+    <div class="apw-msgs" id="apw-msgs" aria-live="polite"></div>
+    <div class="apw-in"><input type="text" placeholder="Fale com o Apollo…" disabled aria-label="Chat com o Apollo (em breve)"><span class="soon">em breve</span></div>
+    <div class="apw-act"><small>resumo do /estado, sem LLM</small><button type="button" class="btn primary sm" id="apw-call">Chamar Apollo</button></div>
+  </div>
 </div>
-<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-<script>
-const brl=v=>'R$ '+(v??0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-const pct=v=>(v>=0?'+':'')+(v??0).toFixed(2)+'%';
-const num=v=>(v??0).toLocaleString('pt-BR',{maximumFractionDigits:(v!=null&&Math.abs(v)<10)?5:2});
-let chart, _sig=null, _est=null, _saidas={}, _saidasVistas={}, _precos={}, _busy=false, _modalTrigger=null;
+<div class="dlg" id="dlg" hidden role="dialog" aria-modal="true" aria-labelledby="dlg-h"><div class="dlg-box" id="dlg-box"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-// ---- vendor sob demanda -----------------------------------------------------
-// As duas libs de gráfico saíram do <head>. Elas continuam sendo servidas por NÓS, de
-// web/vendor/ — a regra "nada de CDN de terceiro" é sobre a ORIGEM do script, não sobre o
-// momento em que ele entra, e a origem não mudou. O que mudou é que agora entram quando
-// alguém vai desenhar um gráfico, em vez de antes de existir markup.
-// Memoizado por arquivo: chamar duas vezes devolve a MESMA promessa e injeta um <script> só.
-const _libs={};
-function carregarLib(arquivo,global){
-  if(window[global]) return Promise.resolve(true);
-  if(_libs[arquivo]) return _libs[arquivo];
-  return _libs[arquivo]=new Promise(res=>{
-    const s=document.createElement('script'); s.src='vendor/'+arquivo;
-    s.onload=()=>res(!!window[global]);
-    // Falha ao baixar a lib não pode derrubar o painel: o gráfico fica de fora e o resto do
-    // terminal (tiles, tabelas, status bar, risco) segue de pé. Quem chama testa o retorno.
-    s.onerror=()=>{ _libs[arquivo]=null; res(false); };
-    document.head.appendChild(s);
-  });
-}
-const libChart=()=>carregarLib('chart.umd.min.js','Chart');
-const libTV=()=>carregarLib('lightweight-charts.standalone.production.js','LightweightCharts');
-let _tvWarm=false;   // aquecimento ocioso da lib de velas já disparado? (ver fim do carregar())
-
-function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');
-  setTimeout(()=>t.classList.remove('on'),2600);}
-
-// ---- ponte com o backend ---------------------------------------------------
-// API vazio = mesma origem (o próprio backend serve este arquivo). Front separado
-// (Vercel): config.js define window.API_BASE = 'https://seu-backend' e as credenciais
-// do Basic Auth passam a ir no header explicitamente (o navegador não as anexa sozinho
-// em requisição cross-origin).
-// [AB-1] Conta A (produção) ou B (teste A/B). A B é outra instância do bot, com banca própria,
-// que o backend expõe em /testeB/...: trocar de conta é só trocar o prefixo de TODAS as rotas.
-// Fica no localStorage por ser preferência deste navegador; sem storage, cai na A.
-const CONTA=(()=>{try{return localStorage.getItem('cbConta')==='B'?'B':'A';}catch{return 'A';}})();
-const API=(window.API_BASE||'').replace(/\/+$/,'')+(CONTA==='B'?'/testeB':'');
-function trocaConta(c){ if(c===CONTA) return; try{localStorage.setItem('cbConta',c);}catch{} location.reload(); }
-let _cred=localStorage.getItem('cbAuth')||'';
-
-// ---------- gate de login ----------
-// Substitui os dois prompt() do navegador. O ganho não é só estético: prompt() não sabe a
-// diferença entre senha errada, IP bloqueado pelo throttle, backend sem DASH_PASS e backend
-// fora do ar — devolve as quatro como "não entrou". Aqui cada uma tem a sua mensagem, e o
-// /health (única rota que dispensa credencial) diz ao vivo se o serviço está de pé ANTES de
-// a pessoa digitar. Foi exatamente essa confusão que custou uma madrugada de investigação.
-const $g=id=>document.getElementById(id);
-let _gateSessao=null, _gateTimer=null, _gateHealth=null;
-
-function gateMsg(html,tipo){ const m=$g('gate-msg'); m.innerHTML=html; m.className='gate-msg on '+(tipo||'err'); }
-function gateLimpa(){ $g('gate-msg').className='gate-msg'; }
-function gateOcupado(on,rotulo,girando){
-  $g('gate-btn').disabled=on;
-  $g('gate-btn').classList.toggle('loading',!!(on&&girando));
-  $g('gate-btn-txt').textContent=rotulo||'Entrar no terminal';
-  $g('gate-user').disabled=on; $g('gate-pass').disabled=on;
-}
-function gateSacode(){ const c=$g('gate-form');
-  c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake');
-  c.addEventListener('animationend',()=>c.classList.remove('shake'),{once:true}); }
-
-// /health não passa pela autenticação (é o que o monitoramento consome), então serve de
-// prova de vida do backend mesmo com o painel trancado.
-async function gateSaude(){ const s=$g('gate-status'), t=$g('gate-status-txt');
-  try{
-    const j=await (await fetch(API+'/health',{cache:'no-store'})).json();
-    // versao E commit, os dois. A versao diz o que o sistema E; o commit diz qual codigo esta
-    // RODANDO -- e os dois nao andam juntos, porque a main avanca e o deploy e ato deliberado
-    // (CLAUDE.md 5). Mostrar so a versao foi o que deixou o painel anunciar v0.3 por meses.
-    // Commit ausente e declarado como tal: 'sem git' nunca vira string parecida com um sha.
-    const sha=j.commit?(' · '+String(j.commit).slice(0,7)):' · sem git';
-    s.className='gate-status up'; t.textContent='backend online · v'+j.versao+sha;
-  }catch{ s.className='gate-status down'; t.textContent='backend sem resposta'; } }
-
-// 429 = throttle do backend (15 senhas erradas bloqueiam o IP). Trava o botão e conta o
-// tempo em vez de deixar a pessoa martelar e renovar o próprio bloqueio.
-function gateEspera(seg){
-  clearInterval(_gateTimer);
-  const tick=()=>{ if(seg<=0){ clearInterval(_gateTimer); gateOcupado(false); gateLimpa(); $g('gate-pass').focus(); return; }
-    gateMsg('Tentativas demais. O backend libera de novo em <b>'+seg+'s</b>.','warn'); seg--; };
-  gateOcupado(true,'Aguarde',false); tick(); _gateTimer=setInterval(tick,1000);
-}
-
-async function gateEntrar(ev){
-  ev.preventDefault();
-  const u=$g('gate-user').value.trim(), p=$g('gate-pass').value;
-  if(!p){ gateMsg('Digite a senha.','info'); $g('gate-pass').focus(); return; }
-  const cand='Basic '+btoa(u+':'+p);
-  gateLimpa(); gateOcupado(true,'Verificando…',true);
-  let r;
-  // /status é a rota autenticada mais barata que existe: valida a credencial sem arrastar
-  // a curva de equity inteira só para descobrir se a senha presta.
-  try{ r=await fetch(API+'/status',{headers:{Authorization:cand}}); }
-  catch{ gateOcupado(false); gateSaude();
-    gateMsg('Sem resposta do backend. Ou o serviço está fora do ar, ou a origem deste painel não está liberada no <b>CORS_ORIGINS</b> da VM.','err'); return; }
-
-  if(r.ok){ _cred=cand; localStorage.setItem('cbAuth',cand);
-    gateOcupado(true,'Entrando…',false); gateFecha(true);
-    cargaInicial(); iniciarPolling(); return; }
-
-  gateOcupado(false);
-  if(r.status===401){ gateSacode(); gateMsg('Usuário ou senha incorretos.','err');
-    const c=$g('gate-pass'); c.focus(); c.select(); }
-  else if(r.status===429){ const txt=await r.text().catch(()=>'');
-    // Retry-After não atravessa o CORS sem expose_headers, mas o backend repete o tempo no corpo.
-    const m=txt.match(/(\d+)\s*s/); gateEspera(m?+m[1]:120); }
-  else if(r.status===503){ gateMsg('O backend está no ar, mas sem <b>DASH_PASS</b> definido — e sem senha ele recusa qualquer acesso externo. Defina a senha no <b>.env</b> da VM e reinicie o serviço.','warn'); }
-  else{ gateMsg('Resposta inesperada do backend (HTTP '+r.status+').','err'); }
-}
-
-// Single-flight: o poll dispara ~5 requisições por ciclo e todas levam 401 juntas. Quem
-// chegar com o gate já aberto espera o MESMO login em vez de empilhar telas.
-function gateAbre(){
-  if(_gateSessao) return _gateSessao.promessa;
-  let resolver; const promessa=new Promise(res=>{resolver=res;});
-  _gateSessao={promessa,resolver};
-  $g('gate').classList.add('on'); document.body.style.overflow='hidden';
-  $g('gate-foot').innerHTML='autenticando em<br>'+(API||location.origin);
-  gateLimpa(); gateOcupado(false); $g('gate-pass').value='';
-  ($g('gate-user').value.trim()?$g('gate-pass'):$g('gate-user')).focus();
-  gateSaude(); clearInterval(_gateHealth); _gateHealth=setInterval(gateSaude,15000);
-  return promessa;
-}
-function gateFecha(ok){
-  clearInterval(_gateHealth); clearInterval(_gateTimer);
-  $g('gate').classList.remove('on'); document.body.style.overflow='';
-  $g('gate-pass').value='';
-  if(_gateSessao){ const r=_gateSessao.resolver; _gateSessao=null; r(!!ok); }
-}
-
-async function sairLogin(){
-  localStorage.removeItem('cbAuth'); _cred=''; pararPolling();
-  // Backend sem senha (dev/monolito local) não tem sessão pra encerrar: mostrar o gate ali
-  // seria pedir uma credencial que ninguém vai conferir.
-  try{ if((await fetch(API+'/status')).ok){ cargaInicial(); iniciarPolling();
-        toast('Este backend não pede senha — não há sessão para encerrar'); return; } }catch{}
-  gateAbre();
-}
-
-async function apiFetch(path,opts={}){
-  const mk=()=>({...opts,headers:{...(opts.headers||{}),...(_cred?{Authorization:_cred}:{})}});
-  let r=await fetch(API+path,mk());
-
-  // Bloqueado pelo throttle: parar de bater, senão o poll renova o bloqueio pra sempre.
-  if(r.status===429){ pararPolling(); toast(await r.clone().text()); return r; }
-
-  // 401: NUNCA insistir com a mesma credencial. O poll dispara ~5 requisições a cada 3s e
-  // 15 senhas erradas bloqueiam o IP por 2 min — um typo repetido viraria lockout. Então:
-  // para o polling, descarta a credencial e abre o gate. Quem religa o painel é o próprio
-  // gate quando a credencial nova passa, uma vez só, e não cada requisição que esperou.
-  if(r.status===401){
-    pararPolling();
-    localStorage.removeItem('cbAuth'); _cred='';
-    if(await gateAbre()) r=await fetch(API+path,mk());
-  }
-  return r;
-}
-
-async function api(path,body){const o=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};
-  const r=await apiFetch(path,o); if(!r.ok) throw new Error(await r.text()); return r.json();}
-
-function statusEntrada(s, pa){
-  // Decide se ainda vale entrar comparando o quanto o preço andou a favor vs o R (stop)
-  if(!pa) return {txt:'aguardando preço ao vivo…', cls:'st-wait'};
-  const d = s.direcao==='LONG'?1:-1;
-  const favor = (pa - s.preco)/s.preco*100 * d;                          // % a favor do sinal
-  const stopDist = Math.abs(s.preco - s.stop_sugerido)/s.preco*100 || 1; // R inicial em %
-  const ageMin = (Date.now() - Date.parse((s.ts||'').replace(' ','T')))/60000;
-  const tfMin = {'5m':5,'15m':15,'30m':30,'1h':60,'4h':240,'1d':1440}[s.tf]||15;
-  const candles = ageMin/tfMin;
-  if(favor <= -stopDist)     return {txt:'✗ invalidado — já teria batido o stop', cls:'st-no'};
-  if(favor >= stopDist*0.8)  return {txt:'⏭ já correu — movimento já aconteceu (chasing)', cls:'st-late'};
-  if(candles >= 4)           return {txt:'⌛ expirou — sinal antigo, reavalie', cls:'st-late'};
-  if(favor <= -stopDist*0.4) return {txt:'⚠ janela apertada — preço andou contra', cls:'st-tight'};
-  return {txt:'✓ ainda dá pra entrar', cls:'st-ok'};
-}
-
-// Sparkline do card hero. Desenha a curva de equity que o /estado JA traz (e.equity_hist), sem
-// lib e sem requisicao extra. SVG em vez de canvas porque escala junto com o CSS, sem precisar
-// medir o elemento nem reagir a resize. Verde/vermelho aqui e legitimo: e direcao de dinheiro.
-// Chart.js e Lightweight-Charts recebem STRING de cor: nao entendem var(). Em vez de repetir
-// hex e deixar o grafico dessincronizar do resto, o tema dos graficos LE os tokens do :root.
-// Assim o DESIGN.md continua sendo a fonte unica e trocar um token troca a vela junto.
-const TEMA=(()=>{ const cs=getComputedStyle(document.documentElement);
-  const t=n=>cs.getPropertyValue('--'+n).trim();
-  return {pos:t('pos'),neg:t('neg'),warn:t('warn'),accent:t('accent'),accentTxt:t('accent-txt'),
-          txt:t('txt'),txt2:t('txt2'),txt3:t('txt3'),line:t('line')}; })();
-// Variacoes de alpha DECLARADAS dos tokens, para as libs de grafico, que so aceitam string de
-// cor. Derivadas do PROPRIO token em vez de hex repetido: assim trocar --accent ou --txt2 no
-// :root troca a area da curva e as bandas de Bollinger junto, que e o ponto de ter token.
-const rgbDe=hex=>{const h=(hex||'').replace('#','').trim();
-  const n=parseInt(h.length===3?h.split('').map(c=>c+c).join(''):h,16);
-  return isFinite(n)?[(n>>16)&255,(n>>8)&255,n&255].join(','):'56,97,251';};
-const ACCENT_RGB=rgbDe(TEMA.accent);
-const BOLL=`rgba(${rgbDe(TEMA.txt2)},.5)`, BOLL_MID=`rgba(${rgbDe(TEMA.txt2)},.25)`;
-
-// Sparkline generico: recebe a SERIE e o ALVO. Antes mirava o #spark do hero, que era o unico
-// que existia; com cinco tiles o mesmo desenho serve equity e banca e o alvo tem que vir de fora.
-// Azul, nao verde/vermelho: e a MESMA serie da Curva de capital, e pintar a mesma serie de duas
-// cores em dois lugares da tela seria defeito. A direcao ja esta dita, em verde/vermelho, na
-// linha de P&L logo acima.
-// Devolve o SVG como STRING: a linha da tabela e montada por template, e um sparkline que so
-// sabe escrever em innerHTML nao serve de fechamento de linha. O sparkline() abaixo passou a ser
-// so o escritor.
-function sparkSVG(valores, opts){
-  const o=opts||{};
-  const v=(valores||[]).filter(n=>typeof n==='number'&&isFinite(n));
-  if(v.length<2) return '';
-  const W=100,H=32,min=Math.min(...v),max=Math.max(...v),amp=(max-min)||1;
-  const d=v.map((n,i)=>`${i?'L':'M'}${(i/(v.length-1)*W).toFixed(2)} ${(H-(n-min)/amp*H).toFixed(2)}`).join('');
-  const gid='spark-g-'+(o.id||'x');             // id unico: dois <defs> com o mesmo id colidem
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" focusable="false" aria-hidden="true">`+
-    (o.area===false?'':
-      `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">`+
-      `<stop offset="0" stop-color="rgba(${ACCENT_RGB},.28)"/>`+
-      `<stop offset="1" stop-color="rgba(${ACCENT_RGB},0)"/>`+
-      `</linearGradient></defs>`+
-      `<path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#${gid})"/>`)+
-    // non-scaling-stroke: sem isso o preserveAspectRatio="none" estica a linha junto com a caixa
-    `<path d="${d}" fill="none" stroke="var(--accent-txt)" stroke-width="1.5"`+
-    ` vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
-}
-// Azul, nao verde/vermelho: e a MESMA serie da Curva de capital, e pintar a mesma serie de duas
-// cores em dois lugares da tela seria defeito. A direcao ja esta dita, em verde/vermelho, na
-// coluna de delta ao lado.
-function sparkline(valores, alvo, opts){
-  const el=typeof alvo==='string'?document.getElementById(alvo):alvo; if(!el) return;
-  el.innerHTML=sparkSVG(valores,{...(opts||{}),id:el.id||'x'});
-}
-
-// ---- fila de sinais: tabela com linha expansivel ----
-// Quais linhas estao abertas mora AQUI, num Set, e nao no HTML: o carregar() reescreve
-// #pendentes inteiro a cada 3s, entao qualquer estado guardado na marcacao fecharia sozinho
-// no proximo poll. O render le o Set, e por isso a linha continua aberta atravessando polls.
-const _sigAbertos=new Set();
-// Serie observada de preco por ativo, alimentada pelo /precos (poll de 8s). O /estado nao traz
-// historico de preco do sinal, entao o sparkline da linha desenha o que o painel VIU desde que
-// abriu -- dado honesto, sem requisicao nova. Fica vazio ate ter dois pontos.
-const _serie={}, SERIE_MAX=60;
-function anotaSerie(precos){
-  Object.entries(precos||{}).forEach(([a,p])=>{
-    if(typeof p!=='number'||!isFinite(p))return;
-    const v=_serie[a]||(_serie[a]=[]);
-    if(v[v.length-1]!==p)v.push(p);
-    if(v.length>SERIE_MAX)v.splice(0,v.length-SERIE_MAX);
-  });
-}
-// Evolucao do P&L por posicao, para o sparkline que fecha a linha. O /estado manda o P&L
-// atual a cada poll, nao a serie; entao a serie e o que o painel observou, comecando em zero -
-// que e o P&L no momento da entrada. Dado honesto, sem requisicao nova.
-const _pnlHist={}, PNL_MAX=60;
-function anotaPnl(posicoes){
-  const vivos=new Set();
-  (posicoes||[]).forEach(p=>{
-    vivos.add(String(p.id));
-    const v=_pnlHist[p.id]||(_pnlHist[p.id]=[0]);
-    const pl=p.pnl||0;
-    if(v[v.length-1]!==pl)v.push(pl);
-    if(v.length>PNL_MAX)v.splice(1,v.length-PNL_MAX);
-  });
-  // posicao fechada nao acumula serie para sempre
-  Object.keys(_pnlHist).forEach(k=>{if(!vivos.has(k))delete _pnlHist[k];});
-}
-function toggleSinal(ev,id){
-  // clique num botao da linha e acao, nao expansao
-  if(ev&&ev.target&&ev.target.closest&&ev.target.closest('button'))return;
-  if(_sigAbertos.has(id))_sigAbertos.delete(id); else _sigAbertos.add(id);
-  if(_est)carregarPendentes(_est);
-}
-function carregarPendentes(e){
-  const pe2=document.getElementById('pendentes'); if(!pe2)return;
-  if(!e.pendentes||!e.pendentes.length){
-    pe2.innerHTML='<div class="empty">Nenhum sinal no momento — engine observando 👀</div>'; return;
-  }
-  pe2.innerHTML='<table class="tbl-sinais"><thead><tr>'+
-    '<th class="col-2">#</th><th>Ativo</th><th>Lado</th><th class="col-2">Conv.</th>'+
-    '<th class="num col-2">Entrada</th><th class="num col-3">Agora</th><th class="num col-4">Δ</th>'+
-    '<th>Status</th><th class="col-3">Tendência</th><th class="flex"></th></tr></thead><tbody>'+
-    e.pendentes.map((s,i)=>linhaSinal(s,i)).join('')+'</tbody></table>';
-}
-function linhaSinal(s,i){
-  const cls=s.direcao==='LONG'?'long':'short', pa=_precos[s.ativo];
-  const dlt=pa?(pa-s.preco)/s.preco*100:null;
-  const fav=dlt!=null&&((s.direcao==='LONG'&&dlt>0)||(s.direcao==='SHORT'&&dlt<0));
-  const st=statusEntrada(s,pa), aberto=_sigAbertos.has(s.id);
-  // statusEntrada() e logica e nao se toca: o texto curto e so recorte para caber na celula,
-  // e o inteiro fica no title e na sub-linha.
-  const stCurto=st.txt.split(' — ')[0];
-  const json=JSON.stringify(s);
-  // a serie da linha comeca no preco do PROPRIO sinal e segue pelo que o painel observou:
-  // e a leitura util aqui ("de onde saiu, pra onde foi"), e ja tem dois pontos no primeiro
-  // /precos em vez de esperar dois polls para aparecer
-  const spark=sparkSVG([s.preco].concat(_serie[s.ativo]||[]),{area:false,id:'sig'+s.id});
-  const linha=`<tr class="sig-row${aberto?' on':''}${st.cls==='st-no'?' sig-dim':''}" data-sid="${s.id}"
-      tabindex="0" aria-expanded="${aberto}" onclick="toggleSinal(event,${s.id})">
-    <td class="mono mut col-2">${i+1}</td>
-    <td class="sig-ativo"><span class="sig-exp" aria-hidden="true">▶</span> ${s.ativo.replace('/USDT','')} <span class="tf-badge">${s.tf||''}</span></td>
-    <td><span class="tag ${cls}">${s.direcao}</span></td>
-    <td class="col-2"><span class="conv">${s.conviccao}<span class="convbar"><i style="width:${s.conviccao}%"></i></span></span></td>
-    <td class="mono num col-2">${num(s.preco)}</td>
-    <td class="mono num col-3">${pa?num(pa):'—'}</td>
-    <td class="mono num col-4 ${dlt==null?'mut':(fav?'pos':'neg')}" title="${dlt==null?'sem preço ao vivo':(fav?'a favor do sinal':'contra o sinal')}">${dlt==null?'—':(dlt>=0?'+':'')+dlt.toFixed(2)+'% '+(fav?'✓':'✗')}</td>
-    <td><span class="st ${st.cls}" title="${st.txt}">${stCurto}</span></td>
-    <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
-    <td class="acts-cell flex"><button class="btn-op" data-foco="op-${s.id}" onclick='abrirModal(${json})'>⚡ Operar</button><button class="btn-skip" onclick="pular(${s.id})">Pular</button></td>
-  </tr>`;
-  if(!aberto)return linha;
-  const chips=(s.motivos||'').split(', ').filter(Boolean).map(m=>`<span class="why-chip">${m}</span>`).join('')
-    ||'<span class="why-chip">sinal fraco</span>';
-  return linha+`<tr class="sig-det" data-sid="${s.id}"><td colspan="10">
-    <div class="det-why"><span class="why-lbl">Por quê</span>${chips}</div>
-    <div class="cmp"><span class="tipo-badge tipo-${s.tipo||'tendencia'}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span>
-      <span class="mut">🕐 ${(s.ts||'').slice(11,16)}</span>
-      <span class="mut">sinal <b>${num(s.preco)}</b></span>
-      ${pa?`<span class="mut">→ agora <b>${num(pa)}</b></span><span class="${fav?'pos':'neg'}" style="font-weight:600">${dlt>=0?'+':''}${dlt.toFixed(2)}% ${fav?'✓ a favor':'✗ contra'}</span>`:'<span class="mut">→ agora …</span>'}
-      <span class="mut">· stop sugerido <b class="neg">${num(s.stop_sugerido)}</b></span></div>
-    <div class="entry-status ${st.cls}">${st.txt}</div>
-    <div class="det-acts"><button class="btn-analise" onclick='analisarSinal(${json})'>🔍 Analisar no gráfico</button></div>
-  </td></tr>`;
-}
-
-// Tiles de Posicoes, Risco do dia e Exposicao. Os tres fecham com barra em vez de sparkline
-// porque sao ocupacao de um teto, nao serie no tempo. Cada barra vem com o numero escrito ao
-// lado: cor nunca e o unico sinal.
-function tiles(e){
-  const txt=(id,v,cls)=>{const el=document.getElementById(id); if(!el)return;
-    el.textContent=v; if(cls!=null)el.className=cls;};
-  const barra=(id,pct)=>{const el=document.getElementById(id);
-    if(el)el.style.width=Math.min(Math.max(pct||0,0),100).toFixed(1)+'%';};
-
-  const cfg=e.config||{}, rg=e.risco||{};
-
-  // posicoes: contagem, P&L nao realizado e ocupacao das vagas
-  const naoReal=(e.posicoes||[]).reduce((a,p)=>a+(p.pnl||0),0);
-  const vagas=+(cfg.auto_max_posicoes||5)||5, usadas=(e.posicoes||[]).length;
-  txt('pos-pnl',`${naoReal>=0?'▲':'▼'} ${brl(Math.abs(naoReal))} não realizado`,
-      'delta mono '+(naoReal>=0?'pos':'neg'));
-  barra('pos-bar',usadas/vagas*100);
-  txt('pos-sub',`${usadas} de ${vagas} vagas ocupadas`);
-
-  // risco do dia: perda do dia contra o limite diario
-  if(rg.limite_rs!=null){
-    const perdaPct=rg.limite_rs?Math.min(Math.max(-rg.pnl_dia,0)/rg.limite_rs*100,100):0;
-    txt('risco-dia',brl(rg.pnl_dia),'val mono '+(rg.pnl_dia>=0?'pos':'neg'));
-    barra('risco-bar',perdaPct);
-    txt('risco-sub',rg.trava_dia
-      ? `travado — limite ${brl(-rg.limite_rs)} atingido, sem novos trades hoje`
-      : `${perdaPct.toFixed(0)}% do limite de ${brl(-rg.limite_rs)} (${rg.limite_pct}%)`);
-  }
-
-  // exposicao aberta: risco-ate-o-stop somado contra o teto
-  if(rg.risco_aberto_max_rs){
-    const expoPct=Math.min(rg.risco_aberto_rs/rg.risco_aberto_max_rs*100,100);
-    txt('expo',brl(rg.risco_aberto_rs),'val mono'+(rg.teto_aberto?' neg':''));
-    barra('expo-bar',expoPct);
-    txt('expo-sub',rg.teto_aberto
-      ? `teto de ${brl(rg.risco_aberto_max_rs)} atingido — feche uma posição antes de abrir outra`
-      : `${expoPct.toFixed(0)}% do teto de ${brl(rg.risco_aberto_max_rs)} (${rg.risco_aberto_pct}%)`);
-  } else {
-    txt('expo','sem teto','val mono');
-    txt('expo-sub','nenhum teto de exposição configurado');
-  }
-}
-
-// Curva de capital. Saiu de dentro do carregar() porque o Chart.js agora entra sob demanda:
-// o ciclo dispara e segue, e a curva aparece quando a lib chega — uma vez só por sessão.
-// Duas chamadas concorrentes não criam dois Chart: libChart() devolve a mesma promessa e os
-// .then entram na fila na ordem em que foram registrados, então o segundo já vê `chart` setado.
-function desenharEquity(h){
-  libChart().then(ok=>{
-    if(!ok) return;                       // lib não veio: o resto do painel continua inteiro
-    if(!chart){const ctx=document.getElementById('chart').getContext('2d');const g=ctx.createLinearGradient(0,0,0,230);
-      // area da curva de capital: rgba(56,97,251,.28), o valor que o DESIGN.md fixa
-      g.addColorStop(0,`rgba(${ACCENT_RGB},.28)`);g.addColorStop(1,`rgba(${ACCENT_RGB},0)`);
-      chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{data:[],borderColor:TEMA.accentTxt,borderWidth:2,fill:true,backgroundColor:g,tension:.3,pointRadius:0}]},
-        options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},
-          tooltip:{callbacks:{label:c=>brl(c.parsed.y)}}},scales:{x:{display:false},y:{position:'right',grid:{color:TEMA.line},ticks:{color:TEMA.txt3,callback:v=>brl(v)}}}}});}
-    chart.data.labels=h.map(x=>x.ts); chart.data.datasets[0].data=h.map(x=>x.equity_total); chart.update('none');
-  });
-}
-
-async function carregar(){
-  let e; try{ e=await api('/estado'); }catch{
-    document.getElementById('cfg').textContent='⚠️ backend offline — reconectando…';
-    if(!_est){ ['pendentes','posicoes','trades','metricas','dca'].forEach(id=>{const el=document.getElementById(id); if(el)el.innerHTML='<div class="empty off">⚠️ Sem conexão com o backend. Reconectando…</div>';}); }
-    return;
-  }
-  _est=e;
-  const total=e.equity_total, b0=e.banca.inicial, lucro=total-b0;
-  document.getElementById('equity').textContent=brl(total);
-  const pe=document.getElementById('pnl'); pe.textContent=`${lucro>=0?'▲':'▼'} ${brl(Math.abs(lucro))} (${pct(lucro/b0*100)})`;
-  pe.className='delta mono '+(lucro>=0?'pos':'neg');
-  document.getElementById('banca').textContent=brl(e.banca.atual);
-  document.getElementById('npos').textContent=e.posicoes.length;
-  document.getElementById('npend').textContent=e.pendentes.length;
-  tiles(e);
-  const sbh=document.getElementById('sb-hora');
-  if(sbh)sbh.textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  if(e.config) document.getElementById('cfg').textContent=`${e.config.ativos.split(',').length} ativos · ${e.config.timeframe} · paper trading · preço real`;
-
-  // chart
-  const h=e.equity_hist||[];
-  desenharEquity(h);          // sem await: a lib entra sob demanda e não segura o resto do ciclo
-  sparkline(h.map(x=>x.equity_total),'spark');
-  sparkline(h.map(x=>x.banca),'spark-banca',{area:false});   // discreto: so a linha
-
-  // guarda de risco: alimenta a status bar. A leitura detalhada (barra, limite, percentual)
-  // vive nos tiles de Risco do dia e Exposicao aberta; aqui fica so o que precisa estar
-  // sempre visivel, e o banner sobrou para os DOIS estados que travam operacao.
-  const rg=e.risco, rgEl=document.getElementById('risco-guard');
-  if(rg&&rgEl){
-    let rgh=`<span class="rg-item"><span class="mut">banca</span><b class="mono">${brl(e.banca.atual)}</b></span>`;
-    rgh+=`<span class="rg-item"><span class="mut">risco dia</span><b class="mono ${rg.pnl_dia>=0?'pos':'neg'}">${brl(rg.pnl_dia)}</b><span class="mut">de ${brl(-rg.limite_rs)}</span></span>`;
-    if(rg.risco_aberto_max_rs){
-      const usadoAb=Math.min(Math.max(rg.risco_aberto_rs/rg.risco_aberto_max_rs*100,0),100);
-      rgh+=`<span class="rg-item"><span class="mut">exposição</span><b class="mono${rg.teto_aberto?' neg':''}">${usadoAb.toFixed(0)}%</b><span class="mut">do teto</span></span>`;
-    }
-    if(rg.trava_dia) rgh+=`<span class="rg-banner">🛑 trava diária — sem novos trades hoje</span>`;
-    if(rg.teto_aberto) rgh+=`<span class="rg-banner">🛑 teto de exposição — feche uma posição antes de abrir outra</span>`;
-    rgEl.innerHTML=rgh;
-  }
-
-  // pendentes: uma linha por sinal, sub-linha sob demanda
-  carregarPendentes(e);
-
-  // posicoes: a linha fecha com a evolucao do P&L da propria posicao
-  anotaPnl(e.posicoes);
-  // [EX-1] Ordens post-only pendentes. Elas JA reservam exposicao nos tetos do
-  // `simulador`, entao esconde-las seria esconder risco ja comprometido -- por isso o bloco
-  // fica ACIMA das posicoes, e nao numa aba propria. Some sozinho quando nao ha nenhuma.
-  const pOrd=document.getElementById('painel-ordens'), od=document.getElementById('ordens'), ords=e.ordens||[];
-  pOrd.hidden = !ords.length;
-  if(ords.length){
-    od.innerHTML='<table><thead><tr><th>Ativo</th><th>Lado</th><th class="num">Limite</th>'+
-    '<th class="num col-2">Preço ref.</th><th class="num col-2">Distância</th><th class="col-2">Tam.</th>'+
-    '<th class="num col-3">Expira</th></tr></thead><tbody>'+
-    ords.map(o=>{
-      const dist=o.preco_ref?Math.abs(o.preco_limite/o.preco_ref-1)*100:0;
-      // minutos ate expirar, do relogio do NAVEGADOR contra o carimbo do backend. Os dois sao
-      // hora de Sao Paulo sem fuso (CLAUDE.md §1), entao a subtracao fecha.
-      const falta=o.expira_em?Math.max(0,Math.round((new Date(o.expira_em.replace(' ','T'))-new Date())/60000)):null;
-      return `<tr><td style="font-weight:600">${o.ativo.replace('/USDT','')}</td>
-      <td><span class="tag ${o.direcao==='LONG'?'long':'short'}">${o.direcao}</span></td>
-      <td class="mono num" style="font-weight:600">${num(o.preco_limite)}</td>
-      <td class="mono mut num col-2">${num(o.preco_ref)}</td>
-      <td class="mono mut num col-2">${dist.toFixed(2)}%</td>
-      <td class="mono mut col-2">R$${o.valor_reais}·${o.alavancagem}x</td>
-      <td class="mono mut num col-3">${falta===null?'—':falta+' min'}</td></tr>`}).join('')+'</tbody></table>';
-  }
-
-  const po=document.getElementById('posicoes');
-  if(e.posicoes.length){
-    po.innerHTML='<table><thead><tr><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada</th>'+
-    '<th class="num">Atual</th><th class="col-2">Tam.</th><th class="num">P&L (ROE)</th>'+
-    '<th class="num col-3">Liq.</th><th class="col-3">Evolução</th><th class="flex"></th></tr></thead><tbody>'+
-    e.posicoes.map(p=>{const pl=p.pnl||0, roe=p.valor_reais?pl/p.valor_reais*100:0, d=p.direcao==='LONG'?1:-1, liq=p.entrada*(1-d*0.9/p.alavancagem), sd=_saidas[p.id];
-      const spark=sparkSVG(_pnlHist[p.id],{area:false,id:'pos'+p.id});
-      return `<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
-      <td><span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span></td>
-      <td class="mono mut num col-2">${num(p.entrada)}</td>
-      <td class="mono num">${num(p.preco_atual)}</td>
-      <td class="mono mut col-2">R$${p.valor_reais}·${p.alavancagem}x</td>
-      <td class="mono num ${pl>=0?'pos':'neg'}" style="font-weight:600">${brl(pl)} <span class="met-nota ${pl>=0?'pos':'neg'}">${pct(roe)}</span></td>
-      <td class="mono neg num col-3">${num(liq)}</td>
-      <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
-      <td class="acts-cell flex"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${sd.nivel}"><td colspan="9">${sd.acao}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</tbody></table>';
-  } else po.innerHTML='<div class="empty">Nenhuma posição aberta</div>';
-
-  // trades
-  const tr=document.getElementById('trades'), ts=e.trades||[];
-  if(ts.length){
-    tr.innerHTML='<table><thead><tr><th>Hora</th><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada→Saída</th>'+
-    '<th class="col-2">Tam.</th><th class="col-3 flex wrap">Motivo</th><th class="num">Resultado (ROE)</th></tr></thead><tbody>'+
-    ts.map(t=>`<tr><td class="mono mut">${(t.fechado_em||'').slice(11,16)}</td><td style="font-weight:600">${t.ativo.replace('/USDT','')}</td>
-      <td><span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span></td>
-      <td class="mono mut num col-2">${num(t.entrada)}→${num(t.saida)}</td>
-      <td class="mono mut col-2">R$${t.valor_reais}·${t.alavancagem}x</td><td class="mut col-3 flex wrap">${t.motivo_saida}</td>
-      <td class="mono num ${t.pnl_reais>=0?'pos':'neg'}" style="font-weight:600">${brl(t.pnl_reais)} <span class="met-nota ${t.pnl_reais>=0?'pos':'neg'}">${pct(t.valor_reais?t.pnl_reais/t.valor_reais*100:0)}</span></td></tr>`).join('')+'</tbody></table>';
-  } else tr.innerHTML='<div class="empty">Nenhum trade ainda</div>';
-
-  // metricas
-  const m=e.metricas||{};
-  const sqn=m.sqn||0, sqnCor=sqn>=2?'pos':(sqn>=1.6?'':'neg'),
-    sqnLbl=sqn<=0?'sem dados':(sqn>7?'suspeito (overfit?)':sqn>=3?'excelente':sqn>=2?'bom':sqn>=1.6?'médio':'fraco');
-  // Tabela de duas colunas, que e o que o CMC faz com dado tabular. A grade de .mstat dava a
-  // 14 numeros de importancia muito diferente exatamente o mesmo peso visual.
-  const linhaMet=(rot,val,nota,cls)=>`<tr><td>${rot}</td><td class="mono${cls?' '+cls:''}">${val}${nota?`<span class="met-nota">${nota}</span>`:''}</td></tr>`;
-  let mh='<table class="tbl-met"><thead><tr><th>Métrica</th><th class="num">Valor</th></tr></thead><tbody>'+
-    linhaMet('Trades',m.n_trades||0)+
-    linhaMet('Win rate',(m.win_rate||0).toFixed(1)+'%')+
-    linhaMet('Profit factor',(m.profit_factor||0).toFixed(2))+
-    linhaMet('P&L total',brl(m.pnl_total),'',m.pnl_total>=0?'pos':'neg')+
-    linhaMet('Taxa paga',brl(m.taxa_total),'','neg')+
-    linhaMet('SQN',sqn.toFixed(2),sqnLbl,sqnCor)+
-    linhaMet('SQN-R (R-múltiplos)',(m.sqn_r||0).toFixed(2))+
-    linhaMet('Sortino',(m.sortino||0).toFixed(2),'',(m.sortino||0)>=0?'pos':'neg')+
-    linhaMet('Sharpe (diário)',(m.sharpe||0).toFixed(2),'',(m.sharpe||0)>=0?'pos':'neg')+
-    linhaMet('Calmar',(m.calmar||0).toFixed(2))+
-    linhaMet('Max drawdown',brl(m.max_drawdown),`${(m.max_drawdown_pct||0).toFixed(1)}%`,'neg')+
-    linhaMet('Max DD (mark-to-market)',(m.max_dd_mtm_pct||0).toFixed(1)+'%','','neg')+
-    linhaMet('Expectativa/trade',brl(m.expectancia),'',m.expectancia>=0?'pos':'neg')+
-    linhaMet('Expectativa-R',(m.expectancia_r||0).toFixed(2)+'R','',(m.expectancia_r||0)>=0?'pos':'neg')+
-    '</tbody></table>';
-  if(m.por_conviccao&&m.por_conviccao.length){
-    mh+=`<h2 style="margin-top:24px">🎯 Win rate por convicção — a tunagem</h2>
-    <table><thead><tr><th>Faixa</th><th class="num">Trades</th><th class="num">Win rate</th><th class="num">P&L</th></tr></thead><tbody>`+
-    m.por_conviccao.map(c=>`<tr><td class="mono">${c.faixa}</td><td class="mono num mut">${c.n}</td>
-      <td class="mono num ${c.win_rate>=50?'pos':'neg'}" style="font-weight:600">${c.win_rate}%</td>
-      <td class="mono num ${c.pnl>=0?'pos':'neg'}">${brl(c.pnl)}</td></tr>`).join('')+'</tbody></table>';
-  } else mh+='<div class="empty">Confirme alguns trades pra ver o win rate por convicção.</div>';
-  document.getElementById('metricas').innerHTML=mh;
-
-  // DCA / acumulação
-  const dcaEl=document.getElementById('dca'), planos=e.dca||[];
-  if(dcaEl){
-    if(planos.length){
-      dcaEl.innerHTML='<table><thead><tr><th>Ativo</th><th class="num col-2">Investido</th>'+
-        '<th class="num col-2">Preço médio</th><th class="num">Valor atual</th><th class="num">P&L</th>'+
-        '<th class="col-3">Aportes</th><th class="flex"></th></tr></thead><tbody>'+
-        planos.map(p=>`<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
-          <td class="mono mut num col-2">${brl(p.total_investido)}</td>
-          <td class="mono mut num col-2">${num(p.preco_medio)}</td>
-          <td class="mono num">${brl(p.valor_atual)}</td>
-          <td class="mono num ${p.pnl>=0?'pos':'neg'}" style="font-weight:600">${brl(p.pnl)} <span class="met-nota ${p.pnl>=0?'pos':'neg'}">${pct(p.pnl_pct)}</span></td>
-          <td class="mono mut col-3">${p.n_aportes}× · R$${p.valor_aporte}/${p.freq_dias}d</td>
-          <td class="acts-cell flex"><button class="btn-sug" onclick="aportarDca(${p.id})">aportar</button> <button class="btn-skip" onclick="removerDca(${p.id})" aria-label="remover plano DCA" title="remover">×</button></td></tr>`).join('')+'</tbody></table>';
-    } else dcaEl.innerHTML='<div class="empty">Nenhum plano. Crie um abaixo pra acumular cripto de forma disciplinada (sem adivinhar timing).</div>';
-    const dsel=document.getElementById('dca-ativo');
-    if(dsel&&!dsel.options.length&&e.config){e.config.ativos.split(',').forEach(a=>{const o=document.createElement('option');o.value=a.trim();o.textContent=a.trim().replace('/USDT','');dsel.appendChild(o);});}
-  }
-
-  renderAuto(e);
-  atualizarGrafico(e);
-
-  // Aquecimento ocioso da lib de velas: só AQUI, depois que o painel já tem dado, porque é
-  // daqui pra frente que a aba Gráfico passa a ser alcançável. Fazê-lo no boot devolveria os
-  // 52 KB ao caminho crítico justamente enquanto a página espera a resposta que abre o gate.
-  if(!_tvWarm){ _tvWarm=true;
-    if(window.requestIdleCallback) requestIdleCallback(()=>libTV(),{timeout:5000});
-    else setTimeout(libTV,3000); }
-}
-
-// ---- medidor de sentimento ----
-async function carregarSentimento(){
-  try{
-    const s=await apiFetch('/sentimento').then(r=>r.json());
-    const fg=s.fear_greed, br=s.breadth; let h='';
-    if(fg){
-      // faixa: a cor do numero e a mesma escala da barra. Todas saem de token, e todas passam
-      // 4.5:1 sobre --surface (o --neg corrigido inclusive).
-      const cor=fg.valor<25?'var(--neg)':fg.valor<45?'var(--warn)':fg.valor<55?'var(--txt2)':'var(--pos)';
-      h+=`<div class="fg">
-        <div><div class="lbl">Fear &amp; Greed</div>
-          <div class="fg-num mono" style="color:${cor}">${fg.valor}<span class="fg-lbl">${fg.label}</span></div></div>
-        <div class="fg-escala">
-          <div class="fg-barra" role="img" aria-label="Fear and Greed em ${fg.valor} de 100: ${fg.label}">
-            <span class="fg-agulha" style="left:${fg.valor}%"></span></div>
-          <div class="fg-pontas"><span>Medo extremo</span><span>Ganância extrema</span></div>
-        </div></div>`;
-    }
-    if(br) h+=`<div class="fg-breadth">📊 <b>${br.pct_subindo}%</b> das ${br.n} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
-    document.getElementById('sentimento').innerHTML=h||'sentimento indisponível';
-  }catch(e){}
-}
-
-// ---- monitor de funding (radar do carry) ----
-async function carregarFunding(){
-  try{
-    const arr=await apiFetch('/funding').then(r=>r.json());
-    const el=document.getElementById('funding'); if(!el)return;
-    if(!arr||!arr.length){el.innerHTML='<div class="mut">indisponível</div>';return;}
-    const gordos=arr.filter(x=>x.gordo);
-    const banner=gordos.length
-      ? `<div class="fund-alert on">🔥 ${gordos.length} moeda(s) com funding GORDO — possível janela de CARRY! (${gordos.map(x=>x.ativo.replace('/USDT','')).join(', ')})</div>`
-      : `<div class="fund-alert">😴 Mercado calmo — funding fraco, sem prêmio de carry agora. Gatilho: funding anualizado ≥ 15%/ano.</div>`;
-    // barra comparativa dentro da propria lista: a escala e o maior |anual| que veio agora
-    const max=Math.max(1,...arr.map(x=>Math.abs(x.anual)));
-    const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100);
-      return `<tr><td class="fund-a">${x.gordo?'🔥 ':''}${x.ativo.replace('/USDT','')}</td>
-        <td class="flex"><span class="fund-bar"><i class="${x.anual>=0?'b-pos':'b-neg'}" style="width:${w}%"></i></span></td>
-        <td class="mono num ${x.anual>=0?'pos':'neg'}" style="font-weight:600">${x.anual>=0?'+':''}${x.anual}%</td>
-        <td class="mono num mut">${x.funding_pct}%</td></tr>`;
-    }).join('');
-    // Sem sparkline aqui, e de proposito: o /funding devolve so o instante, nao serie. Inventar
-    // uma curva a partir de um ponto seria desenho, nao dado.
-    el.innerHTML=banner+'<table><thead><tr><th>Ativo</th><th class="flex">Carry (relativo)</th>'+
-      '<th class="num">%/ano</th><th class="num">%/8h</th></tr></thead><tbody>'+linhas+'</tbody></table>';
-  }catch(e){}
-}
-
-// ---- gráfico estilo TradingView (Lightweight Charts) + abas ----
-let _tv=null,_candles=null,_plines=[],_zlines=[],_tvAtivo=null,_tvLast=0,_bookLast=0,_aba='painel',_tvTf=null;
-let _indSeries={},_indOn=false,_analiseSig=null;
-const TF_SEG={'1m':60,'5m':300,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400};
-function tfAtual(){return _tvTf||(_est&&_est.config&&_est.config.timeframe)||'15m';}
-function marcarTfBtn(){document.querySelectorAll('#tv-tfs button').forEach(b=>{const sel=b.dataset.tf===_tvTf;b.classList.toggle('on',sel);b.setAttribute('aria-pressed',sel);});}
-function mudarTf(tf){_tvTf=tf; marcarTfBtn(); if(_tvAtivo)recarregarGrafico(_tvAtivo);}
-function toggleExpand(){
-  const g=document.getElementById('view-grafico'); g.classList.toggle('expandido');
-  const b=document.querySelector('.tv-expand'); if(b)b.textContent=g.classList.contains('expandido')?'⛶ Recolher':'⛶ Expandir';
-  setTimeout(()=>{if(_tv)_tv.timeScale().fitContent();},80);
-}
-// Abas de conteudo. Guardadas fora do HTML (_sub) porque o carregar() reescreve o miolo
-// dos blocos a cada 3s; o estado de qual aba esta aberta nao pode morar no que e reescrito.
-let _sub='sinais';
-function subaba(v){
-  _sub=v;
-  document.querySelectorAll('.subview').forEach(sec=>{sec.hidden=sec.dataset.sub!==v;});
-  document.querySelectorAll('.subtab').forEach(b=>{const sel=b.dataset.sub===v;
-    b.classList.toggle('on',sel);b.setAttribute('aria-selected',sel);b.tabIndex=sel?0:-1;});
-  // o Chart.js mediu o container enquanto ele estava escondido (largura 0); ao aparecer
-  // precisa remedir, senao a curva de capital nasce com 0px de largura
-  if(v==='metricas'&&chart)chart.resize();
-}
-function aba(v){
-  _aba=v;
-  document.getElementById('view-painel').classList.toggle('hidden',v!=='painel');
-  document.getElementById('view-grafico').classList.toggle('hidden',v!=='grafico');
-  document.querySelectorAll('.tab').forEach(b=>{const sel=b.dataset.v===v;b.classList.toggle('on',sel);b.setAttribute('aria-pressed',sel);});
-  // a marca vive na sidebar; o titulo da topbar diz onde voce esta, entao segue a vista
-  const vt=document.getElementById('view-titulo'); if(vt)vt.textContent=v==='painel'?'Painel':'Gráfico';
-  // A lib de velas entra sob demanda. Ela nunca desenhou nada na aba Painel, então esperar
-  // o clique aqui é onde ela realmente faz falta. Devolve promessa porque quem chama pode
-  // precisar do _tv já montado — ver analisarSinal().
-  if(v!=='grafico') return Promise.resolve();
-  return libTV().then(ok=>{
-    if(!ok) return;
-    if(!_tv)initTV();
-    if(_est)prepararSelector(_est);
-    if(!_tvTf)_tvTf=tfAtual(); marcarTfBtn();
-    const el=document.getElementById('tvchart'); _tv.applyOptions({width:el.clientWidth,height:el.clientHeight});
-    if(_tvAtivo)recarregarGrafico(_tvAtivo);
-    if(_est)sidebar(_est);
-  });
-}
-function initTV(){
-  const el=document.getElementById('tvchart');
-  _tv=LightweightCharts.createChart(el,{width:el.clientWidth||700,height:el.clientHeight||600,
-    layout:{background:{color:'transparent'},textColor:TEMA.txt3},
-    grid:{vertLines:{color:TEMA.line},horzLines:{color:TEMA.line}},
-    timeScale:{timeVisible:true,borderColor:TEMA.line},rightPriceScale:{borderColor:TEMA.line}});
-  // vela continua verde/vermelha: e direcao de preco, o uso legitimo do par (decisao travada 4.4)
-  _candles=_tv.addCandlestickSeries({upColor:TEMA.pos,downColor:TEMA.neg,borderVisible:false,wickUpColor:TEMA.pos,wickDownColor:TEMA.neg});
-  // mantém o gráfico SEMPRE do tamanho do container (resize, troca de aba, expandir)
-  const ajusta=()=>{if(_tv&&el.clientWidth)_tv.applyOptions({width:el.clientWidth,height:el.clientHeight});};
-  if(window.ResizeObserver){new ResizeObserver(ajusta).observe(el);}
-  window.addEventListener('resize',ajusta);
-}
-function prepararSelector(e){
-  const sel=document.getElementById('tv-ativo');
-  if(sel&&!sel.options.length&&e.config){
-    e.config.ativos.split(',').forEach(a=>{const o=document.createElement('option');o.value=a.trim();o.textContent=a.trim();sel.appendChild(o);});
-    _tvAtivo=(e.posicoes[0]&&e.posicoes[0].ativo)||sel.options[0].value; sel.value=_tvAtivo;
-    sel.onchange=()=>{_tvAtivo=sel.value;fecharAnalise();recarregarGrafico(_tvAtivo);};
-  }
-}
-async function carregarCandles(ativo,tf){
-  try{
-    _plines.forEach(l=>{try{_candles.removePriceLine(l)}catch(_){}});_plines=[];  // limpa linhas do ativo anterior
-    _zlines.forEach(l=>{try{_candles.removePriceLine(l)}catch(_){}});_zlines=[];   // limpa zonas de liquidez
-    try{_candles.setMarkers([])}catch(_){}                                        // limpa setas anteriores
-    const r=await apiFetch(`/candles?ativo=${encodeURIComponent(ativo)}&tf=${tf}&limite=200`);
-    _candles.setData(await r.json());
-    _candles.priceScale().applyOptions({autoScale:true});                         // reescala pro preço do novo ativo
-    _tv.timeScale().fitContent();
-    _tvLast=Date.now();
-  }catch(e){}
-}
-function recarregarGrafico(ativo){
-  carregarCandles(ativo,tfAtual()).then(()=>{
-    if(_est)marcar(_est,ativo,tfAtual());
-    carregarSmartMoney(ativo); carregarBook(ativo);
-    carregarIndicadores(ativo,tfAtual()).then(a=>{
-      const el=document.getElementById('g-analise');
-      if(a&&_analiseSig)renderAnalise(_analiseSig,a);
-      else if(el)el.innerHTML='';
-    });
-    if(_tv)_tv.timeScale().fitContent();
-  });
-}
-async function analisarSinal(s){
-  _analiseSig=s; _indOn=true; _tvTf=s.tf;
-  await aba('grafico');                             // garante chart + selector (a lib entra sob demanda)
-  _tvAtivo=s.ativo;                                 // foca no ativo do sinal
-  const sel=document.getElementById('tv-ativo'); if(sel)sel.value=s.ativo;
-  marcarTfBtn();
-  const b=document.querySelector('.tv-ind'); if(b)b.classList.add('on');
-  if(_tv)recarregarGrafico(s.ativo);
-}
-function garanteIndSeries(){
-  if(_indSeries.ema20)return;
-  // EMA20 azul (era teal, cor que saiu da paleta), EMA50 gold, Bollinger cinza-azulado.
-  // Mapa de cor do DESIGN.md > Graficos: EMA20 azul (--accent-txt), EMA50 gold (--warn),
-  // Bollinger cinza translucido. O roxo do tema antigo ja tinha saido, mas o cinza que ficou no
-  // lugar era inventado: nao correspondia a token nenhum. Agora e o --txt2 (#A1A7BB) a 50%, que
-  // e variacao de alpha DECLARADA de um token que existe.
-  _indSeries.ema20=_tv.addLineSeries({color:TEMA.accentTxt,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.ema50=_tv.addLineSeries({color:TEMA.warn,lineWidth:2,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.bbU=_tv.addLineSeries({color:BOLL,lineWidth:1,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.bbL=_tv.addLineSeries({color:BOLL,lineWidth:1,priceLineVisible:false,lastValueVisible:false});
-  _indSeries.bbM=_tv.addLineSeries({color:BOLL_MID,lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false});
-}
-function limparInd(){Object.values(_indSeries).forEach(s=>{try{s.setData([])}catch(_){}});}
-async function carregarIndicadores(ativo,tf){
-  if(!_indOn&&!_analiseSig){limparInd();return null;}
-  try{
-    const a=await apiFetch(`/analise?ativo=${encodeURIComponent(ativo)}&tf=${tf}`).then(r=>r.json());
-    if(_indOn){garanteIndSeries();
-      _indSeries.ema20.setData(a.ema20);_indSeries.ema50.setData(a.ema50);
-      _indSeries.bbU.setData(a.bb_up);_indSeries.bbL.setData(a.bb_lo);_indSeries.bbM.setData(a.bb_mid);
-    } else limparInd();
-    return a;
-  }catch(e){return null;}
-}
-function toggleIndicadores(){
-  _indOn=!_indOn;
-  const b=document.querySelector('.tv-ind'); if(b)b.classList.toggle('on',_indOn);
-  if(_tvAtivo)recarregarGrafico(_tvAtivo);
-}
-function renderAnalise(s,a){
-  const el=document.getElementById('g-analise'); if(!el)return;
-  const snap=a.snapshot, pa=_precos[s.ativo]||snap.preco, st=statusEntrada(s,pa);
-  el.innerHTML=`<div class="analise-box">
-    <div class="gs-titulo" style="display:flex;justify-content:space-between;align-items:center">🔍 Análise do sinal <span style="cursor:pointer;font-size:13px" onclick="fecharAnalise()">✕</span></div>
-    <div style="font-size:14px;font-weight:700;margin-bottom:7px">${s.ativo} <span class="tag ${s.direcao==='LONG'?'long':'short'}">${s.direcao}</span> <span class="tipo-badge tipo-${s.tipo}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span> <span class="tf-badge">${s.tf}</span></div>
-    <div style="font-size:12px;line-height:1.6;color:var(--txt3)">${a.leitura}</div>
-    <div class="grid-ind">
-      <span class="mut">RSI</span><b>${snap.rsi}</b>
-      <span class="mut">ADX</span><b>${snap.adx}</b>
-      <span class="mut">EMA20</span><b style="color:var(--accent-txt)">${num(snap.ema20)}</b>
-      <span class="mut">EMA50</span><b style="color:var(--warn)">${num(snap.ema50)}</b>
-      <span class="mut">Bollinger</span><b style="color:var(--txt2)">${num(snap.bb_lo)}–${num(snap.bb_up)}</b><!-- mesma cor da banda no grafico -->
-    </div>
-    <div style="margin-top:9px;font-size:12px">entrada <b>${num(s.preco)}</b> · stop <b class="neg">${num(s.stop_sugerido)}</b></div>
-    <div class="entry-status ${st.cls}" style="margin-top:8px">${st.txt}</div>
-    <button class="btn-op" style="width:100%;margin-top:11px" onclick='abrirModal(${JSON.stringify(s)})'>⚡ Operar este sinal</button>
-  </div>`;
-}
-function fecharAnalise(){_analiseSig=null;const el=document.getElementById('g-analise');if(el)el.innerHTML='';}
-async function carregarSmartMoney(ativo){
-  try{
-    const s=await apiFetch('/smartmoney?ativo='+encodeURIComponent(ativo)).then(r=>r.json());
-    _zlines.forEach(l=>{try{_candles.removePriceLine(l)}catch(_){}});_zlines=[];
-    (s.liquidez_acima||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.warn,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↑'})));
-    (s.liquidez_abaixo||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.warn,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↓'})));
-    const el=document.getElementById('g-smart');
-    if(el)el.innerHTML=`<div style="font-size:13px">Funding: <b class="${(s.funding_pct||0)>=0?'pos':'neg'}">${s.funding_pct??'—'}%</b></div>
-      <div class="mut" style="font-size:11px;margin:5px 0 9px">${s.leitura_funding||''}</div>
-      <div class="mut" style="font-size:11px">🟡 liquidez acima: ${(s.liquidez_acima||[]).map(num).join(' · ')||'—'}</div>
-      <div class="mut" style="font-size:11px;margin-top:3px">🟡 liquidez abaixo: ${(s.liquidez_abaixo||[]).map(num).join(' · ')||'—'}</div>`;
-  }catch(e){}
-}
-async function carregarBook(ativo){
-  try{
-    const b=await apiFetch('/book?ativo='+encodeURIComponent(ativo)).then(r=>r.json());
-    const el=document.getElementById('g-book'); if(!el||!b)return;
-    const corLado=b.lado_grande==='COMPRA'?'pos':(b.lado_grande==='VENDA'?'neg':'mut');
-    el.innerHTML=`
-      <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">Pressão no book (±1%)</div>
-      <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:6px">
-        <div style="width:${b.pressao_compra}%;background:var(--pos)"></div><div style="flex:1;background:var(--neg)"></div></div>
-      <div style="font-size:11.5px;display:flex;justify-content:space-between"><span class="pos">${b.pressao_compra}% compra</span><span class="neg">${(100-b.pressao_compra).toFixed(1)}% venda</span></div>
-      <div style="font-size:12.5px;margin-top:10px">Fluxo taker: <b class="${b.fluxo_comprador>=50?'pos':'neg'}">${b.fluxo_comprador}% comprando</b></div>
-      <div style="font-size:12.5px;margin-top:6px">💰 Dinheiro grande: <b class="${corLado}">${b.lado_grande}</b> <span class="mut" style="font-size:10.5px">(C R$${(b.grande_compra/1000).toFixed(0)}k · V R$${(b.grande_venda/1000).toFixed(0)}k)</span></div>
-      <div class="mut" style="font-size:10.5px;margin-top:8px">🟢 parede ${num(b.parede_compra.preco)} · R$${(b.parede_compra.valor/1000).toFixed(0)}k</div>
-      <div class="mut" style="font-size:10.5px">🔴 parede ${num(b.parede_venda.preco)} · R$${(b.parede_venda.valor/1000).toFixed(0)}k</div>`;
-  }catch(e){}
-}
-function marcar(e,ativo,tf){
-  if(!_candles)return;
-  _plines.forEach(l=>{try{_candles.removePriceLine(l)}catch(_){}});_plines=[];
-  (e.posicoes||[]).filter(p=>p.ativo===ativo).forEach(p=>{
-    const cor=p.direcao==='LONG'?TEMA.pos:TEMA.neg;
-    _plines.push(_candles.createPriceLine({price:p.entrada,color:cor,lineWidth:2,lineStyle:0,axisLabelVisible:true,title:`${p.direcao} entrada`}));
-    if(p.stop)_plines.push(_candles.createPriceLine({price:p.stop,color:TEMA.neg,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'stop'}));
-  });
-  const seg=TF_SEG[tf]||900, mk=[];
-  const snap=dt=>Math.floor(new Date(String(dt).replace(' ','T')).getTime()/1000/seg)*seg;
-  (e.trades||[]).filter(t=>t.ativo===ativo&&t.aberto_em).forEach(t=>mk.push({time:snap(t.aberto_em),position:t.direcao==='LONG'?'belowBar':'aboveBar',color:t.direcao==='LONG'?TEMA.pos:TEMA.neg,shape:t.direcao==='LONG'?'arrowUp':'arrowDown',text:t.direcao}));
-  (e.posicoes||[]).filter(p=>p.ativo===ativo&&p.aberto_em).forEach(p=>mk.push({time:snap(p.aberto_em),position:p.direcao==='LONG'?'belowBar':'aboveBar',color:TEMA.warn,shape:p.direcao==='LONG'?'arrowUp':'arrowDown',text:p.direcao+' aberta'}));
-  mk.sort((a,b)=>a.time-b.time);
-  try{_candles.setMarkers(mk)}catch(_){}
-}
-function sidebar(e){
-  const gp=document.getElementById('g-posicoes');
-  if(gp)gp.innerHTML=(e.posicoes&&e.posicoes.length)?e.posicoes.map(p=>{const roe=p.valor_reais?p.pnl/p.valor_reais*100:0, sd=_saidas[p.id];
-    return `<div style="font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)">${p.ativo} <span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span><br><span class="mut" style="font-size:11px">R$${p.valor_reais}·${p.alavancagem}x</span> <span class="mono ${p.pnl>=0?'pos':'neg'}">${brl(p.pnl)} <b>${pct(roe)}</b></span>${(sd&&sd.acao)?`<div class="saida-side saida-${sd.nivel}" style="font-size:10.5px;margin-top:4px;padding:3px 6px;border-radius:5px">${sd.acao}</div>`:''}</div>`}).join(''):'<div class="mut" style="font-size:12px">nenhuma</div>';
-  const gt=document.getElementById('g-trades');
-  if(gt)gt.innerHTML=(e.trades&&e.trades.length)?e.trades.slice(0,15).map(t=>`<div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">${t.ativo} <span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span> <span class="mono ${t.pnl_reais>=0?'pos':'neg'}">${brl(t.pnl_reais)}</span></div>`).join(''):'<div class="mut" style="font-size:12px">nenhum</div>';
-}
-function atualizarGrafico(e){
-  if(_aba!=='grafico'||!_tv)return;
-  if(_tvAtivo&&Date.now()-_tvLast>30000){recarregarGrafico(_tvAtivo);}
-  else if(_tvAtivo)marcar(e,_tvAtivo,tfAtual());
-  if(_tvAtivo&&Date.now()-_bookLast>6000){carregarBook(_tvAtivo);_bookLast=Date.now();}
-  sidebar(e);
-}
-
-function abrirModal(s){_sig=s; _modalTrigger=document.activeElement;
-  // o dialogo cresce de onde o clique saiu. Sem gatilho conhecido (teclado, chamada direta),
-  // cai no centro, que e o comportamento antigo.
-  try{ const m=document.querySelector('.modal');
-    if(m&&_modalTrigger&&_modalTrigger.getBoundingClientRect){
-      const r=_modalTrigger.getBoundingClientRect();
-      m.style.transformOrigin=`${Math.round(r.left+r.width/2)}px ${Math.round(r.top+r.height/2)}px`;
-    } else if(m){ m.style.transformOrigin='center'; }
-  }catch(_){}
-  document.getElementById('m-titulo').textContent=`${s.direcao} ${s.ativo}`;
-  document.getElementById('m-sub').textContent=`convicção ${s.conviccao} · ${s.tipo||'tendência'} · ${s.tf||''} · entrada ~${s.preco}`;
-  if(_est?.config){document.getElementById('m-lev').value=_est.config.alavancagem_padrao||10;
-    document.getElementById('m-risco').value=(parseFloat(_est.config.risco_por_trade||0.03)*100);}
-  usarSugestao(); document.getElementById('overlay').classList.add('on');
-  setTimeout(()=>{const v=document.getElementById('m-valor'); if(v){v.focus();v.select();}},50);}   // foco no 1o campo
-function fecharModal(){document.getElementById('overlay').classList.remove('on');_sig=null;
-  // O poll reescreve #pendentes a cada 3s: enquanto o modal esta aberto, o botao guardado em
-  // _modalTrigger vira no DETACHED, e focar um no fora do documento joga o foco no body. Por
-  // isso o gatilho carrega data-foco, uma identidade que sobrevive ao rerender.
-  let alvo=_modalTrigger;
-  if(alvo&&!document.body.contains(alvo)&&alvo.dataset&&alvo.dataset.foco)
-    alvo=document.querySelector('[data-foco="'+alvo.dataset.foco+'"]');
-  if(alvo&&alvo.focus)alvo.focus();
-  _modalTrigger=null;}
-function calcSugestao(){
-  const l=+document.getElementById('m-lev').value||1, risco=(+document.getElementById('m-risco').value||3)/100;
-  const banca=_est&&_est.banca?_est.banca.atual:1000;
-  const taxa=(_est&&_est.config?parseFloat(_est.config.taxa_por_lado):0.0005)||0.0005;
-  const sd=_sig?Math.abs(_sig.preco-_sig.stop_sugerido)/_sig.preco:0.03;
-  const sdEf=Math.min(sd,0.9/l);                                             // R efetivo = min(stop, liquidação)
-  const valor=Math.max(1,Math.round(banca*risco/Math.max((sdEf+2*taxa)*l,0.0001)));  // inclui taxa -> arrisca risco% de verdade
-  return {valor, sd, sdEf, taxa, banca, risco, l};
-}
-function usarSugestao(){document.getElementById('m-valor').value=calcSugestao().valor; previa();}
-function previa(){
-  const v=+document.getElementById('m-valor').value||0, l=+document.getElementById('m-lev').value||1;
-  const sug=calcSugestao(), sd=sug.sd, taxa=sug.taxa;
-  const liq=0.9/l, liqAntes=liq<sd, sdEf=Math.min(sd,liq);                    // R efetivo = min(stop, liquidação)
-  const perdaBruta=v*l*(sdEf+2*taxa), perdaStop=Math.min(perdaBruta,v);       // inclui taxa, capada na margem
-  const perdaPct=sug.banca?perdaStop/sug.banca*100:0;
-  const wr=((_est&&_est.metricas&&_est.metricas.por_conviccao)||[]).find(c=>{const p=c.faixa.split('-').map(Number);return _sig&&_sig.conviccao>=p[0]&&_sig.conviccao<p[1];});
-  document.getElementById('m-prev').innerHTML=
-   `<div class="row"><span class="mut">Stop sugerido</span><span class="mono">${num(_sig?_sig.stop_sugerido:0)} (${(sd*100).toFixed(2)}%)</span></div>
-    <div class="row"><span class="mut">R efetivo (min stop/liq)</span><span class="mono ${liqAntes?'warn':''}">${(sdEf*100).toFixed(2)}%${liqAntes?' ← liquida antes do stop ⚠️':''}</span></div>
-    <div class="row"><span class="mut">Nocional</span><span class="mono">${brl(v*l)}</span></div>
-    <div class="row"><span class="mut">Perda no pior caso (c/ taxa)</span><span class="mono neg">${brl(perdaStop)} (${perdaPct.toFixed(1)}% da banca)${perdaBruta>=v?' · margem inteira':''}</span></div>
-    ${(_est&&_est.risco&&_est.risco.risco_aberto_max_rs)?(()=>{const nt=_est.risco.risco_aberto_rs+perdaStop,tt=_est.risco.risco_aberto_max_rs;return `<div class="row"><span class="mut">Exposição após este trade</span><span class="mono ${nt>tt?'neg':''}">${brl(nt)} / ${brl(tt)} ${nt>tt?'⛔ estoura o teto':''}</span></div>`;})():''}
-    ${liqAntes?`<div class="aviso-liq">⚠️ Alavancagem alta pra esse stop — você LIQUIDA antes do stop agir (perde ~a margem). Baixe pra ≤ ${Math.floor(0.9/sd)}x pro stop valer.</div>`:''}
-    <div class="row" style="margin-top:7px"><span class="mut">💡 Tamanho p/ arriscar ${(sug.risco*100).toFixed(1)}%</span><span><b class="mono">${brl(sug.valor)}</b> <button class="btn-sug" onclick="usarSugestao()">usar</button></span></div>
-    ${wr?`<div class="mut" style="font-size:11px;margin-top:7px">📊 Win rate histórico nessa faixa: <b>${wr.win_rate}%</b> (${wr.n} trades) — referência, não garantia.</div>`:''}`;
-}
-
-async function confirmarTrade(){if(_busy||!_sig)return; _busy=true;        // trava: evita abrir 2 trades no duplo-clique
-  const cbtn=document.getElementById('m-conf'); if(cbtn){cbtn.disabled=true;cbtn.textContent='Confirmando…';}
-  const valor=+document.getElementById('m-valor').value, lev=+document.getElementById('m-lev').value;
-  try{const r=await api('/confirmar',{sinal_id:_sig.id,valor_reais:valor,alavancagem:lev});
-    if(r&&r.ok===false){toast(r.erro);return;}
-    toast(`✅ ${_sig.direcao} ${_sig.ativo} aberto — R$${valor} @ ${lev}x`);fecharModal();carregar();}
-  catch(e){toast('erro: '+e.message);}
-  finally{_busy=false; if(cbtn){cbtn.disabled=false;cbtn.textContent='✅ Confirmar';}}}
-async function pular(id){await api('/pular',{id});carregar();}
-async function fechar(id){const r=await api('/fechar',{id});toast(`Posição fechada — P&L ${brl(r.pnl)}`);carregar();}
-async function escanear(){toast('🔍 escaneando...');await api('/scan',{});carregar();}
-async function resetar(){if(!confirm('Resetar a simulação? (zera banca, posições e trades)'))return;
-  await api('/reset',{confirmar:'RESET'});toast('↻ simulação resetada');carregar();}
-async function criarDca(){if(_busy)return;
-  const ativo=document.getElementById('dca-ativo').value, valor=+document.getElementById('dca-valor').value, freq=+document.getElementById('dca-freq').value;
-  if(!ativo||valor<=0||freq<=0){toast('preencha ativo/valor/frequência');return;}
-  _busy=true;
-  try{await api('/dca',{ativo,valor_aporte:valor,freq_dias:freq}); toast(`💰 Plano DCA criado: ${ativo} R$${valor}/${freq}d`); carregar();}
-  finally{_busy=false;}
-}
-async function aportarDca(id){const r=await api('/dca/aportar',{id}); toast(r.ok?`💰 Aporte feito @ ${num(r.preco)}`:'erro no aporte'); carregar();}
-async function removerDca(id){if(!confirm('Remover este plano DCA?'))return; await api('/dca/remover',{id}); toast('plano removido'); carregar();}
-async function panico(){const n=(_est&&_est.posicoes)?_est.posicoes.length:0;
-  if(!n){toast('Nenhuma posição aberta');return;}
-  if(!confirm(`🛑 Fechar TODAS as ${n} posições AGORA (preço de mercado)?`))return;
-  const r=await api('/panico',{});toast(`🛑 ${r.fechadas} posição(ões) fechada(s) · P&L ${brl(r.pnl)}`);carregar();}
-
-async function carregarSaidas(){
-  try{
-    const arr=await apiFetch('/saidas').then(r=>r.json());
-    _saidas={};
-    (arr||[]).forEach(s=>{ _saidas[s.posicao_id]=s;
-      if((s.nivel==='forte'||s.nivel==='lucro') && _saidasVistas[s.posicao_id]!==s.nivel){
-        toast(`🔔 ${s.ativo}: ${s.acao}`); _saidasVistas[s.posicao_id]=s.nivel;
-      }
-    });
-  }catch(e){}
-}
-async function carregarPrecos(){
-  try{
-    const ativos=[...new Set((_est?.pendentes||[]).map(s=>s.ativo))];
-    if(!ativos.length){_precos={};return;}
-    _precos=await apiFetch('/precos?ativos='+encodeURIComponent(ativos.join(','))).then(r=>r.json());
-    anotaSerie(_precos);
-    if(_est)carregarPendentes(_est);          // redesenha com o preco novo sem esperar o /estado
-  }catch(e){}
-}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.getElementById('overlay').classList.contains('on'))fecharModal();});
-// Expandir pelo teclado. Delegado no document porque a lista e reescrita a cada 3s e um
-// listener preso na linha morreria junto com ela.
-document.addEventListener('keydown',e=>{
-  const tr=e.target&&e.target.classList&&e.target.classList.contains('sig-row')?e.target:null;
-  if(tr&&(e.key==='Enter'||e.key===' ')){ e.preventDefault(); toggleSinal(e,+tr.dataset.sid); }
-});
-// ---- auto-trader (experimento) ----
-function renderAuto(e){
-  const cfg=e.config||{}, a=e.auto||{};
-  const on=String(cfg.auto_trade)==='1'||cfg.auto_trade===true;
-  const panel=document.getElementById('auto-panel'); if(!panel)return;
-  panel.classList.toggle('on',on);
-  const btn=document.getElementById('auto-toggle');
-  if(btn){btn.textContent=on?'🟢 Bot ATIVO — desativar':'Ativar bot 🤖';btn.classList.toggle('on',on);btn.setAttribute('aria-pressed',on);}
-  const af=document.activeElement;                                   // não rouba foco se estiver editando
-  const setIf=(id,v)=>{const el=document.getElementById(id); if(el&&el!==af&&v!=null&&v!=='')el.value=v;};
-  setIf('a-conv',cfg.auto_conviccao_min);
-  setIf('a-risco',cfg.risco_por_trade!=null?(parseFloat(cfg.risco_por_trade)*100):null);
-  setIf('a-maxpos',cfg.auto_max_posicoes);
-  const modoConv=String(cfg.auto_lev_modo||'conviccao')==='conviccao';
-  const cb=document.getElementById('a-levmodo'); if(cb&&cb!==af)cb.checked=modoConv;
-  const lbl=document.getElementById('a-lev-lbl'); if(lbl)lbl.childNodes[0].nodeValue=modoConv?'Alav. teto (x)':'Alavancagem (x)';
-  setIf('a-lev',modoConv?cfg.auto_lev_max:cfg.alavancagem_padrao);
-  const st=document.getElementById('auto-status');
-  if(st){ if(!on){st.innerHTML='<span class="auto-badge"></span> desligado';}
-    else{ const ab=(a.abertos||[]).length, fc=(a.fechados||[]).length;
-      let txt='<span class="auto-badge on"></span> ativo — ';
-      if(ab||fc) txt+=`última ação: ${ab} aberto(s), ${fc} fechado(s)`;
-      else if(a.motivo) txt+=a.motivo;
-      else txt+='monitorando sinais frescos…';
-      if(a.ts) txt+=` <span class="mut">(${String(a.ts).slice(11,19)})</span>`;
-      st.innerHTML=txt; } }
-  const lg=document.getElementById('auto-log');
-  if(lg){ const ls=[];
-    (a.abertos||[]).forEach(o=>ls.push(`🟢 abriu ${o.direcao} ${o.ativo} ${o.tf||''} — R$${o.valor} @ ${o.lev}x (conv ${o.conviccao})`));
-    (a.fechados||[]).forEach(f=>ls.push(`⚪ fechou ${f.ativo} — P&L R$${f.pnl} (${f.motivo})`));
-    (a.rejeitados||[]).forEach(r=>ls.push(`<span class="mut">⏭️ pulou ${r.ativo}: ${r.erro}</span>`));
-    lg.innerHTML=ls.length?ls.join('<br>'):''; }
-}
-async function toggleAuto(){
-  if(_busy)return; _busy=true;
-  const on=String(_est&&_est.config&&_est.config.auto_trade)==='1';
-  const btn=document.getElementById('auto-toggle'); if(btn)btn.disabled=true;
-  try{ await api('/auto',{auto_trade:on?'0':'1'}); toast(on?'Bot desativado':'🤖 Bot ATIVADO — paper trading'); carregar(); }
-  catch(e){ toast('erro: '+e.message); }
-  finally{ _busy=false; if(btn)btn.disabled=false; }
-}
-async function salvarAuto(){
-  if(_busy)return; _busy=true;
-  const modoConv=document.getElementById('a-levmodo').checked;
-  const levVal=document.getElementById('a-lev').value;
-  const body={ auto_conviccao_min:document.getElementById('a-conv').value,
-    risco_por_trade:(parseFloat(document.getElementById('a-risco').value)/100),
-    auto_max_posicoes:document.getElementById('a-maxpos').value,
-    auto_lev_modo:modoConv?'conviccao':'fixo' };
-  if(modoConv) body.auto_lev_max=levVal; else body.alavancagem_padrao=levVal;
-  try{ await api('/auto',body); toast('Config do bot salva'); carregar(); }
-  catch(e){ toast('erro: '+e.message); }
-  finally{ _busy=false; }
-}
-const _timers=[];
-function iniciarPolling(){ if(_timers.length)return;
-  _timers.push(setInterval(carregar,3000), setInterval(carregarSentimento,60000),
-    setInterval(carregarFunding,60000), setInterval(carregarSaidas,8000), setInterval(carregarPrecos,8000)); }
-function pararPolling(){ _timers.forEach(clearInterval); _timers.length=0; }
-// carregarPrecos() precisa de _est.pendentes para saber que ativos pedir. Disparado em
-// paralelo com o carregar(), o primeiro pedido saia vazio e as colunas Agora/Delta/Tendencia
-// ficavam em "—" ate o poll de 8s. Encadear custa nada e enche a tabela de primeira.
-function cargaInicial(){ carregar().then(carregarPrecos); carregarSentimento(); carregarFunding(); carregarSaidas(); }
-// Sem gate preventivo: se o backend exigir senha, o tratamento de 401 no apiFetch abre a
-// tela de login e para o polling. Com o backend aberto, ela nunca aparece. A credencial do
-// localStorage é reaproveitada: descartá-la aqui obrigava a redigitar login a cada F5, e
-// foi essa fricção que levou a desligar a senha no servidor. Credencial que não serve mais
-// é limpa no tratamento de 401, que é onde se descobre isso.
-$g('gate-form').addEventListener('submit',gateEntrar);
-$g('gate-eye').addEventListener('click',()=>{ const i=$g('gate-pass'), oculto=i.type==='password';
-  i.type=oculto?'text':'password'; const b=$g('gate-eye');
-  b.textContent=oculto?'\u{1F648}':'\u{1F441}'; b.setAttribute('aria-label',oculto?'Ocultar senha':'Mostrar senha'); i.focus(); });
-// Caps Lock explica metade dos "a senha está certa e não entra".
-['keydown','keyup'].forEach(ev=>$g('gate-pass').addEventListener(ev,e=>{
-  $g('gate-caps').classList.toggle('on', !!(e.getModifierState&&e.getModifierState('CapsLock'))); }));
-
-// A status bar e fixa: sem folga embaixo ela cobriria a ultima linha da tabela. A folga e
-// MEDIDA, nao chutada, porque a barra quebra de linha quando a tela aperta.
-function folgaStatusBar(){ const sb=document.querySelector('.statusbar'); if(!sb)return;
-  const h=sb.offsetHeight;
-  document.body.style.paddingBottom=(h+8)+'px';
-  document.documentElement.style.setProperty('--sb-h',h+'px'); }
-// A PRIMEIRA medida vai em requestAnimationFrame; as outras (ResizeObserver) já chegam pelo
-// caminho do próprio browser. Ler offsetHeight aqui, direto no boot, forçava o layout do
-// documento inteiro no meio do script — 82 ms medidos em produção (forced-reflow-insight) —
-// e as duas linhas que vêm logo abaixo, que disparam as requisições, só saíam depois disso.
-// O layout tem que acontecer de qualquer jeito; o que muda é a ORDEM: agora a rede começa
-// primeiro e a medida ocorre no quadro seguinte. O callback de rAF roda ANTES da pintura
-// desse quadro, então a folga já está aplicada quando a tela aparece: nada salta.
-requestAnimationFrame(folgaStatusBar);
-if(window.ResizeObserver){ const sb=document.querySelector('.statusbar');
-  if(sb)new ResizeObserver(folgaStatusBar).observe(sb); }
-else window.addEventListener('resize',folgaStatusBar);
-
-// App instalavel: o service worker guarda so a casca (ver web/sw.js). Ele so existe em https
-// ou localhost; no http da VM o navegador recusa e o painel segue igual, sem app.
-if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-
-// [AB-1] marca a conta ativa: botão pressionado, faixa roxa na B e o título da aba do navegador,
-// para não haver dúvida de qual banca está na tela antes de apertar Pânico ou Resetar.
-document.querySelectorAll('.conta-sel button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.conta===CONTA)));
-if(CONTA==='B'){ document.body.classList.add('conta-b'); document.title='[Teste B] '+document.title; }
-
-cargaInicial(); iniciarPolling();
-// pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
-document.addEventListener('visibilitychange',()=>{ if(document.hidden){ pararPolling(); } else { cargaInicial(); iniciarPolling(); } });
-</script>
+<script src="vendor/gsap.min.js" defer></script>
+<script src="app/paletas.js" defer></script>
+<script src="app/api.js" defer></script>
+<script src="app/apollo-mesh.js" defer></script>
+<script src="app/casca.js" defer></script>
 </body>
 </html>
