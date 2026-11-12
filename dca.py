@@ -4,6 +4,9 @@ SEM stop. A pesquisa (BASE-CONHECIMENTO §5.8) mostrou que DCA disciplinado supe
 trade ativo do varejo: captura o beta do ativo sem tentar adivinhar timing nem pagar
 o "imposto" de giro/taxas. Dinheiro fictício, preço real. Separado da banca de trade.
 """
+import math
+import re
+
 import pandas as pd
 
 import db
@@ -12,7 +15,23 @@ import simulador
 from logbot import log
 
 
+_PAR = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,5}$")
+
+
 def criar(ativo, valor_aporte, freq_dias):
+    # Validação aqui, e não só na rota: `aportar()` confia no plano gravado. Valor negativo ou
+    # NaN viraria unidades negativas/NaN no acumulado; `freq_dias` 0 aportava a cada ciclo do
+    # worker (15 s); e um par que não existe só falhava depois, a cada ciclo, no preço ao vivo.
+    if not isinstance(ativo, str) or not _PAR.match(ativo):
+        raise ValueError(f"ativo inválido: {ativo!r} (formato BASE/QUOTE, ex. BTC/USDT)")
+    try:
+        v, f = float(valor_aporte), float(freq_dias)
+    except (TypeError, ValueError):
+        raise ValueError("valor do aporte e frequência precisam ser números")
+    if not (math.isfinite(v) and v > 0):
+        raise ValueError("valor do aporte precisa ser maior que zero")
+    if not (math.isfinite(f) and f >= 1):
+        raise ValueError("frequência mínima é 1 dia")
     with db.conectar() as c:
         c.execute("INSERT INTO dca(ativo,valor_aporte,freq_dias,unidades,total_investido,"
                   "n_aportes,ultimo_aporte,criado_em,status) VALUES(?,?,?,0,0,0,?,?, 'ativo')",

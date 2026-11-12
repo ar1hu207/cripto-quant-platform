@@ -416,8 +416,9 @@ CONFIG_CATALOGO = {
     "tp_fallback_r":        ("texto", 60),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
-    # estado / integrações
-    "trava_dia_em":         ("data",),
+    # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
+    # relaxar invariante (CLAUDE.md §2), e o `POST /config` a soltava no mesmo dia com um
+    # `{"trava_dia_em": ""}`. Quem escreve nela é só `guarda_risco()` (trava) e o `/reset`.
     "telegram_token":       ("texto", 200),
     "telegram_chat_id":     ("texto", 64),
 }
@@ -877,6 +878,9 @@ def reset(req: ResetReq):
         for t in tabelas:                       # é pior que reset nenhum
             c.execute(f"DELETE FROM {t}")
         c.execute("UPDATE banca SET atual=inicial WHERE id=1")
+        # [EX-1] A ordem pendente sobrevivia ao reset e enchia na conta zerada, apontando para um
+        # sinal que acabou de ser apagado. Na mesma transação: reset pela metade é pior que nenhum.
+        _cancelar_ordens("reset", c)
         # [F-15] O reset e o UNICO escritor de config que nao passa pelo `db.set_config`, e
         # continua nao passando: a limpeza da trava tem de cair na MESMA transacao dos DELETEs
         # (reset pela metade e pior que reset nenhum), e `set_config` abre a sua propria. Entao
@@ -1183,6 +1187,10 @@ def panico(pular_pendentes: bool = False):
     envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
     db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
     _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
+    # [EX-1] Ordem post-only pendente é posição esperando o preço: sem cancelar aqui, ela enchia
+    # no ciclo seguinte e o pânico deixava o sistema com posição aberta. Logo depois de desligar
+    # o bot e antes de fechar, pela mesma razão de ordem: matar a fonte primeiro.
+    canceladas = _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
     n, total = 0, 0.0
@@ -1199,13 +1207,31 @@ def panico(pular_pendentes: bool = False):
         with db.conectar() as c:
             pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
     return {"ok": True, "fechadas": n, "pnl": round(total, 2),
-            "auto_desligado": True, "pendentes_pulados": pulados}
+            "auto_desligado": True, "pendentes_pulados": pulados,
+            "ordens_canceladas": canceladas}
+
+
+def _cancelar_ordens(motivo, con=None):
+    """Cancela toda ordem pendente. Cancela, e não apaga: a tabela `ordens` é o log de fill do
+    post-only (PLANO-V2 D-2), e a ordem que não chegou a encher também é medição."""
+    sql = ("UPDATE ordens SET status='cancelada', motivo=?, resolvida_em=? "
+           "WHERE status='pendente'")
+    args = (motivo, str(pd.Timestamp.now()))
+    if con is not None:
+        return con.execute(sql, args).rowcount
+    with db.conectar() as c:
+        return c.execute(sql, args).rowcount
 
 
 @app.post("/pular")
 def pular(req: IdReq):
+    # Só sinal na fila: sem `status='novo'` o pular reescrevia um sinal já confirmado (que virou
+    # posição) para 'pulado', e o histórico passava a dizer que a posição veio de um sinal pulado.
     with db.conectar() as c:
-        c.execute("UPDATE sinais SET status='pulado' WHERE id=?", (req.id,))
+        n = c.execute("UPDATE sinais SET status='pulado' WHERE id=? AND status='novo'",
+                      (req.id,)).rowcount
+    if n != 1:
+        return {"ok": False, "erro": "sinal não está mais na fila"}
     return {"ok": True}
 
 
@@ -1255,7 +1281,10 @@ def set_auto(body: dict):
 
 @app.post("/dca")
 def dca_criar(req: DcaReq):
-    dca.criar(req.ativo, req.valor_aporte, req.freq_dias)
+    try:                                     # mesmo contrato do /confirmar: recusa do dominio nao e 500
+        dca.criar(req.ativo, req.valor_aporte, req.freq_dias)
+    except ValueError as e:
+        return {"ok": False, "erro": f"📊 {e}"}
     return {"ok": True}
 
 

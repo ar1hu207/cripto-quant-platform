@@ -4,6 +4,7 @@ no preço REAL ao vivo, com alavancagem, taxa, funding e LIQUIDAÇÃO. Persiste 
 Dinheiro fictício; preço de verdade.
 """
 import json
+import math
 import threading
 
 import pandas as pd
@@ -223,7 +224,10 @@ def guarda_risco():
     risco_aberto = sum(_risco_posicao(p["valor_reais"], p["alavancagem"], p["entrada"], p["stop"]) for p in abertas)
     teto_ab = equity_inicio * lim_ab if lim_ab > 0 else None            # <=0 => sem teto
     # trava STICKY: uma vez acionada no dia, fica travada até a virada (não destrava se o unreal recupera)
-    tripou = pnl_dia <= -limite_rs
+    # `pnl_dia < 0` só muda o caso `limite_perda_dia=0`, que o catálogo documenta como "trava no
+    # primeiro centavo de PERDA": sem ele, `0 <= -0` travava o dia sem perda nenhuma, na primeira
+    # leitura. Com limite > 0 a segunda condição já implica a primeira, e nada afrouxa.
+    tripou = pnl_dia < 0 and pnl_dia <= -limite_rs
     trava_em = cfg.get("trava_dia_em", "")
     if tripou and trava_em != hoje:
         db.set_config("trava_dia_em", hoje)        # marca o dia (idempotente: só na 1a vez)
@@ -239,8 +243,19 @@ def guarda_risco():
             "teto_aberto": (teto_ab is not None) and (risco_aberto >= teto_ab)}
 
 
+def _positivo(x):
+    """Número finito e > 0. `x <= 0` sozinho deixa NaN passar (toda comparação com NaN é falsa),
+    e a posição nascia com `valor_reais` NaN: os tetos não a viam e o `fechar()` não a fechava.
+    Aqui, e não só na rota, porque `abrir()` e `colocar_ordem()` são os pontos por onde todo
+    fluxo passa (manual, auto-trader, script)."""
+    try:
+        return math.isfinite(float(x)) and float(x) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def abrir(sinal_id, valor_reais, alavancagem):
-    if valor_reais <= 0 or alavancagem <= 0:              # valida parâmetros (evita posição degenerada / ÷0)
+    if not _positivo(valor_reais) or not _positivo(alavancagem):   # valida parâmetros (degenerada, ÷0, NaN)
         raise ValueError("valor de entrada e alavancagem devem ser > 0")
     g = guarda_risco()
     if g["trava_dia"]:                                    # defesa: não abre com trava diária ativa
@@ -351,7 +366,7 @@ def colocar_ordem(sinal_id, valor_reais, alavancagem):
     [CX-1] mediu, e o [CX-3] mostrou que a alternativa -- esperar e mandar a mercado -- nao
     paga (Sharpe 0,960 contra 0,955 do taker de hoje).
     """
-    if valor_reais <= 0 or alavancagem <= 0:
+    if not _positivo(valor_reais) or not _positivo(alavancagem):
         raise ValueError("valor de entrada e alavancagem devem ser > 0")
     g = guarda_risco()
     if g["trava_dia"]:
@@ -511,7 +526,26 @@ def executar(sinal_id, valor_reais, alavancagem):
     return "posicao", abrir(sinal_id, valor_reais, alavancagem)
 
 
+_MUDOU = object()
+
+
 def fechar(pos_id, motivo, preco_saida=None):
+    """Fecha a posição INTEIRA que estiver aberta no momento da escrita.
+
+    Entre a leitura da posição e o UPDATE há rede (preço e funding). Se nesse meio o worker
+    realizar um TP parcial (`fechar_parcial` reduz `valor_reais` e credita a parcela), o UPDATE
+    antigo -- só `status='aberta'` -- passava e creditava a margem LIDA, a inteira: a banca
+    recebia a parcela duas vezes. Agora o UPDATE exige o `valor_reais` lido, o mesmo padrão do
+    `fechar_parcial`; se mudou, relê e fecha o que sobrou. Recusar em vez de reler faria o
+    clique do operador sumir em silêncio justamente quando o mercado está andando."""
+    for _ in range(3):
+        r = _fechar_uma(pos_id, motivo, preco_saida)
+        if r is not _MUDOU:
+            return r
+    raise ValueError("a posição mudou três vezes durante o fechamento; tente de novo")
+
+
+def _fechar_uma(pos_id, motivo, preco_saida):
     with db.conectar() as con:                                 # lê a posição (transação curta de leitura)
         row = con.execute("SELECT * FROM posicoes WHERE id=? AND status='aberta'", (pos_id,)).fetchone()
     if not row:
@@ -547,8 +581,12 @@ def fechar(pos_id, motivo, preco_saida=None):
     risco_ab = pos.get("risco_abertura")
     with db.conectar() as con:                                 # transação de escrita curta
         cur = con.execute("UPDATE posicoes SET status='fechada', preco_atual=?, pnl=? "
-                          "WHERE id=? AND status='aberta'", (preco_saida, pnl, pos_id))
+                          "WHERE id=? AND status='aberta' AND valor_reais=?",
+                          (preco_saida, pnl, pos_id, pos["valor_reais"]))
         if cur.rowcount != 1:                                  # outra thread fechou primeiro — não duplica
+            if con.execute("SELECT 1 FROM posicoes WHERE id=? AND status='aberta'",
+                           (pos_id,)).fetchone():
+                return _MUDOU                                  # TP parcial no meio: relê e fecha o resto
             return None
         # [P2-40] DUAS colunas de retorno, e a distinção é o conserto.
         #

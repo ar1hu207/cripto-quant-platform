@@ -236,7 +236,12 @@ def auto_executar(saidas=None):
         return res
 
     # 3) slots livres
-    abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
+    # [EX-1] Ordem pendente ocupa vaga, ativo e margem como se já fosse posição -- a mesma regra
+    # que os tetos do `simulador` aplicam (CLAUDE.md §2, regra 1). Sem ela, em `post_only` o bot
+    # colocava uma ordem por ciclo no mesmo ativo e passava do `auto_max_posicoes` quando elas
+    # enchiam juntas; o teto de risco não pega isso, porque cada ordem cabe sozinha nele.
+    abertas = (db.listar("posicoes", 200, "WHERE status='aberta'")
+               + db.listar("ordens", 200, "WHERE status='pendente'"))
     max_pos = int(float(cfg.get("auto_max_posicoes", 5)))
     slots = max_pos - len(abertas)
     if slots <= 0:
