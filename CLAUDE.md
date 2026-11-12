@@ -222,6 +222,6 @@ próprio alcance**. Uma sessão queimou seis tentativas nisso em 22/08; vá dire
 | `ORQUESTRACAO-ORCA.md` | despachar sessões (Orca + fallback manual) e operar o Trello pela API |
 | `RUNBOOK-VM.md` | **operar a VM**: acesso, transferências, deploy, backup, diagnóstico (§5 completo) |
 | `legado/README.md` · `pesquisa/__init__.py` | o que cada território é, e por que ele é assim |
-| `DESIGN.md` | direção visual do front (transposição CoinMarketCap night) |
+| `DESIGN.md` | direção visual do front: Apollux, direção Pulse, 12 paletas (o CMC night de antes vive em `web/classico.html`) |
 | `STATUS-SISTEMA-*.md`, `INVESTIGACAO-*.md`, `AUDITORIA-*.md`, `PLANO-SPRINTS.md`, `PLANO-DEV-*.md` | **histórico datado**: origem dos cards e a fase de construção. É aqui que mora o que não é regra |
 | `DEPLOY-AZURE.md` | roteiro de provisionamento (⚠️ descreve SSH; ver §5 acima) |
