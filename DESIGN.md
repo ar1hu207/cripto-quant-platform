@@ -3,8 +3,9 @@
 Fonte da verdade do sistema visual do front (`web/index.html` + `web/app/`). O CSS da casca e o CSS
 escopado de cada view são projeções deste arquivo. Se divergirem, este arquivo vence.
 
-**Direção atual: Apollux, direção Pulse, paleta padrão Elétrico.** Decidido pelo dono em
-2026-11-12 ("do jeito que está no mock, está perfeito"): marca Apollux, agente Apollo, seletor de
+**Direção atual: Apollux, direção Pulse, paleta padrão Osso.** Decidido pelo dono em
+2026-11-12 ("do jeito que está no mock, está perfeito"; no mesmo dia o padrão passou do Elétrico
+para o Osso): marca Apollux, agente Apollo, seletor de
 12 paletas lembrado no `localStorage`. Fonte do desenho: os mockups em `DS/mockups/d4-pulse.html` e
 `DS/mockups/pulse-views/` (fora do git, do dono) e o brand book `DS/BRAND-BOOK-2026-11-12.md`.
 
@@ -68,8 +69,8 @@ Cada paleta define 15 valores (`web/app/paletas.js`, `window.APOLLUX_PALETAS`); 
 | `--glow-hi` · `--glow-lo` · `--glow-xlo` | derivados | `glow × 1,6` (teto 1) · `× 0,5` · `× 0,25` |
 | `--{bg,panel,txt,line,accent,pos,neg,warn}-rgb` | derivados | o mesmo hex como `r,g,b`, para alfa |
 
-Precedência na abertura: `?paleta=` na URL (ou no hash) > `localStorage['pulse.paleta']` > `eletrico`.
-O `<head>` já nasce com os valores do Elétrico, então a primeira pintura não pisca.
+Precedência na abertura: `?paleta=` na URL (ou no hash) > `localStorage['pulse.paleta']` > `osso`.
+O `<head>` já nasce com os valores do Osso (e o `theme-color` e o manifesto com o `bg` dele), então a primeira pintura não pisca.
 
 ### As 12 paletas, medidas
 

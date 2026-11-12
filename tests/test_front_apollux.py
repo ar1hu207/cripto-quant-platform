@@ -170,7 +170,7 @@ def test_service_worker_casca_v2_e_api_fora_do_cache():
 def test_manifesto_apollux():
     m = json.loads(_ler(WEB, "manifest.webmanifest"))
     assert m["name"] == "Apollux" and m["short_name"] == "Apollux"
-    assert m["background_color"].upper() == m["theme_color"].upper() == "#03060C"
+    assert m["background_color"].upper() == m["theme_color"].upper() == "#0B0B0C"
 
 
 # ---------------------------------------------------------------- backend: o mount de /app
@@ -210,15 +210,15 @@ def _contraste(a, b):
     return (la + 0.05) / (lb + 0.05)
 
 
-def test_doze_paletas_completas_e_eletrico_e_o_padrao():
+def test_doze_paletas_completas_e_osso_e_o_padrao():
     p = _paletas()
     assert len(p) == 12
     campos = {"bg", "panel", "panel2", "line", "line2", "text", "text2", "mute",
               "accent", "on", "pos", "neg", "warn", "info", "glow"}
     for pid, t in p.items():
         assert set(t) == campos, pid
-    assert "eletrico" in p
-    assert re.search(r"'eletrico'", _ler(WEB, "app", "casca.js"))
+    assert "osso" in p
+    assert re.search(r"byId\('osso'\)", _ler(WEB, "app", "casca.js"))
 
 
 PARES = [("text", "panel"), ("text2", "panel"), ("mute", "panel"), ("mute", "panel2"),

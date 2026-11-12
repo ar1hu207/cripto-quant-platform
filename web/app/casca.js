@@ -43,9 +43,9 @@
     if (guardar) A.store.set('pulse.paleta', p.id);
     A.emit('paleta', p);
   }
-  /* ?paleta= na query ou no hash vence o localStorage, que vence o padrão (Elétrico, decisão D-3) */
+  /* ?paleta= na query ou no hash vence o localStorage, que vence o padrão (Osso: o dono trocou o padrão do Elétrico para o Osso em 12/11, D-3) */
   var qPal = (location.search + '&' + location.hash).match(/[?&#]paleta=([a-z-]+)/);
-  var pal0 = (qPal && byId(qPal[1])) || byId(A.store.get('pulse.paleta')) || byId('eletrico') || PAL[0];
+  var pal0 = (qPal && byId(qPal[1])) || byId(A.store.get('pulse.paleta')) || byId('osso') || PAL[0];
   if (pal0) aplicaPaleta(pal0, false);
 
   /* ================= menus da topbar ================= */

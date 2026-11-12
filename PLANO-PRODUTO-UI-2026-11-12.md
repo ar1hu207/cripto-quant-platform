@@ -72,7 +72,7 @@ O que foi produzido em 12/11, para o dono escolher:
 |---|---|---|---|---|
 | D-1 | **Nome** | **DECIDIDO em 12/11: marca Apollux, agente Apollo** (Pítia proposta para o oráculo LLM, não decidido). Varredura: apollux.com.br, .app e .io livres; nenhuma marca igual achada; checar APOLLO/APOLLUX no INPI (classes 36, 42, 9) antes de registrar | registrar domínios e abrir pedido no INPI | `NORTE.md` + `DESIGN.md` |
 | D-2 | **Direção visual** | **DECIDIDO em 12/11: Pulse (D4)** — sidebar, faixa de KPIs, terreno de partículas, curva neon. Volt, Orbit e Ledger ficam como referência de componentes | paleta em exploração (D-3): 12 paletas completas em `DS/ds/paletas-pulse.js`, catálogo em `DS/ds/paletas-pulse.html`, seletor no mockup `?paleta=<id>` | `DESIGN.md` v2 |
-| D-3 | **Paleta** | **DECIDIDO em 12/11: "a identidade do jeito que está no mock está perfeita"** — padrão Elétrico (o do print dele), seletor das 12 paletas mantido e lembrado por navegador | — | `DESIGN.md` v2 |
+| D-3 | **Paleta** | **DECIDIDO em 12/11: "a identidade do jeito que está no mock está perfeita"** — padrão Elétrico (o do print dele); **no mesmo dia o dono trocou o padrão para Osso**; seletor das 12 paletas mantido e lembrado por navegador | — | `DESIGN.md` v2 |
 | D-4 | **Stack do front** | §5 | **DECIDIDO em 12/11: a stack que já está no Vercel** — `web/` estático, JS sem build, libs em `web/vendor/`. A recomendação Vite + React + TS (§5) fica de lado | `ARQUITETURA.md` §8 |
 | D-5 | **Onde mora** | `web/` substituído vs. `app/` novo ao lado | **DECIDIDO em 12/11: no `web/` do projeto atual.** Produção real (assinatura, terceiros) fica para depois: por ora só o dono opera, front no Vercel, backend no dl380 | `CLAUDE.md` §0 |
 

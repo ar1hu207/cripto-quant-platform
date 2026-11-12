@@ -9,7 +9,7 @@
      contrato window.PULSE_VIEWS (ver app/casca.js). O painel antigo continua em classico.html até o dono
      assinar a paridade. -->
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#03060C">
+<meta name="theme-color" content="#0B0B0C">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -25,17 +25,17 @@
 <script src="config.js"></script>
 <script>if(window.API_BASE){var _pc=document.createElement('link');_pc.rel='preconnect';_pc.href=window.API_BASE;_pc.crossOrigin='';document.head.appendChild(_pc);}</script>
 <style>
-/* Tokens: valores padrão = paleta Elétrico (DESIGN.md v2). O seletor de paleta reescreve todos no :root
+/* Tokens: valores padrão = paleta Osso (DESIGN.md v2). O seletor de paleta reescreve todos no :root
    a partir de app/paletas.js; nada nas views usa cor literal. */
 :root{
   color-scheme:dark;
-  --bg:#03060C; --panel:#0A1220; --panel2:#0F1A2C; --line:#16304F; --line2:#1F4573;
-  --txt:#EAF2FF; --txt2:#93A9C8; --mute:#7088A8;
-  --accent:#4DA3FF; --accent-ink:#04101F; --info:#7DD3FC;
-  --pos:#34D399; --neg:#FF5C6A; --warn:#FFC24D;
-  --bg-rgb:3,6,12; --panel-rgb:10,18,32; --txt-rgb:234,242,255; --line-rgb:22,48,79;
-  --accent-rgb:77,163,255; --pos-rgb:52,211,153; --neg-rgb:255,92,106; --warn-rgb:255,194,77;
-  --glow:.45; --glow-hi:.72; --glow-lo:.225; --glow-xlo:.113;
+  --bg:#0B0B0C; --panel:#121214; --panel2:#18181B; --line:#2A2A2F; --line2:#3A3A41;
+  --txt:#EDEDEF; --txt2:#9A9AA3; --mute:#8A8A92;
+  --accent:#E8E4D9; --accent-ink:#121212; --info:#9FB3C8;
+  --pos:#3FD98C; --neg:#FF5A5F; --warn:#E3B341;
+  --bg-rgb:11,11,12; --panel-rgb:18,18,20; --txt-rgb:237,237,239; --line-rgb:42,42,47;
+  --accent-rgb:232,228,217; --pos-rgb:63,217,140; --neg-rgb:255,90,95; --warn-rgb:227,179,65;
+  --glow:.2; --glow-hi:.32; --glow-lo:.1; --glow-xlo:.05;
   --f-display:'Syne','DM Sans',system-ui,sans-serif;
   --f-ui:'DM Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
   --f-mono:'Fira Code','JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
@@ -448,7 +448,7 @@ select.inp{font-family:var(--f-ui)}
     </header>
     <div class="offline-bar" role="status"><span class="led bad" aria-hidden="true"></span><span id="offline-txt">backend offline · reconectando a cada 3 s. Os números abaixo são do último retrato.</span></div>
     <div id="view-root" class="view-root"></div>
-    <footer class="foot">Apollux · paper trading: dinheiro fictício, preço real da Binance · <span id="pal-foot">Elétrico</span></footer>
+    <footer class="foot">Apollux · paper trading: dinheiro fictício, preço real da Binance · <span id="pal-foot">Osso</span></footer>
   </main>
 </div>
 
