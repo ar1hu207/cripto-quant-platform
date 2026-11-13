@@ -8,6 +8,17 @@
      login, widget global do Apollo e o diálogo de confirmação. As views moram em app/views/<id>.js, no
      contrato window.PULSE_VIEWS (ver app/casca.js). O painel antigo continua em classico.html até o dono
      assinar a paridade. -->
+<script>
+/* Celular abre o app do celular (m.html), que é outra tela sobre o MESMO backend, a mesma credencial e as
+   mesmas regras (app/api.js e app/comum.js). Roda antes de qualquer pintura para não piscar o desktop.
+   Escolha explícita vence a largura: "Versão completa" no app grava apx.ui=desktop, e "App do celular" no
+   menu da conta grava apx.ui=mobile. O hash vai junto (#operar abre o Operar de lá). */
+(function () {
+  var pref = null; try { pref = localStorage.getItem('apx.ui'); } catch (e) {}
+  var cel = window.matchMedia && (matchMedia('(max-width: 760px)').matches || matchMedia('(max-height: 500px) and (pointer: coarse)').matches);
+  if (pref === 'mobile' || (pref !== 'desktop' && cel)) location.replace('m.html' + location.search + location.hash);
+})();
+</script>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0B0B0C">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -461,6 +472,7 @@ select.inp{font-family:var(--f-ui)}
             <div class="menu-lbl" id="menu-conta">conta</div>
             <button type="button" class="mi" data-acao="scan">Escanear agora<small>POST /scan · varre o mercado fora do ciclo</small></button>
             <a class="mi" href="classico.html">Painel clássico<small>a versão anterior, até a paridade ser assinada</small></a>
+            <a class="mi" href="m.html" onclick="try{localStorage.setItem('apx.ui','mobile')}catch(e){}">App do celular<small>a versão feita para o celular, sobre o mesmo backend</small></a>
             <button type="button" class="mi" data-acao="sair">Sair<small>encerra a sessão neste navegador</small></button>
             <hr>
             <button type="button" class="mi danger" data-acao="reset">Resetar simulação…<small>apaga posições, trades e curva; pede confirmação digitada</small></button>
@@ -500,6 +512,7 @@ select.inp{font-family:var(--f-ui)}
 <script src="vendor/gsap.min.js" defer></script>
 <script src="app/paletas.js" defer></script>
 <script src="app/api.js" defer></script>
+<script src="app/comum.js" defer></script>
 <script src="app/apollo-mesh.js" defer></script>
 <script src="app/casca.js" defer></script>
 </body>

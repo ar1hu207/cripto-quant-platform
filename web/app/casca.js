@@ -16,10 +16,8 @@
   var $ = function (id) { return document.getElementById(id); };
   window.PULSE_VIEWS = window.PULSE_VIEWS || {};
 
-  /* ================= paleta (fonte única: app/paletas.js) ================= */
-  var PAL = window.APOLLUX_PALETAS || [];
-  function hexRgb(h) { h = String(h).replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]; }
-  function byId(id) { for (var i = 0; i < PAL.length; i++) if (PAL[i].id === id) return PAL[i]; return null; }
+  /* ================= paleta (fonte única: app/paletas.js; tokens e escolha inicial em app/comum.js) ================= */
+  var PAL = A.paletas;
   var palBtns = PAL.map(function (p) {
     var b = document.createElement('button'); b.type = 'button'; b.className = 'acc'; b.setAttribute('aria-pressed', 'false');
     b.title = p.historia; var i = document.createElement('i'); i.style.setProperty('--c', p.t.accent);
@@ -28,24 +26,13 @@
     $('pal-list').appendChild(b); return b;
   });
   function aplicaPaleta(p, guardar) {
-    var t = p.t, s = root.style;
-    var map = { '--bg': t.bg, '--panel': t.panel, '--panel2': t.panel2, '--line': t.line, '--line2': t.line2, '--txt': t.text, '--txt2': t.text2, '--mute': t.mute,
-      '--accent': t.accent, '--accent-ink': t.on, '--pos': t.pos, '--neg': t.neg, '--warn': t.warn, '--info': t.info };
-    for (var k in map) s.setProperty(k, map[k]);
-    var rgb = { '--bg-rgb': t.bg, '--panel-rgb': t.panel, '--txt-rgb': t.text, '--line-rgb': t.line, '--accent-rgb': t.accent, '--pos-rgb': t.pos, '--neg-rgb': t.neg, '--warn-rgb': t.warn };
-    for (var r in rgb) s.setProperty(r, hexRgb(rgb[r]).join(','));
-    var g = Math.max(0, Math.min(1, +t.glow || .5));
-    s.setProperty('--glow', g.toFixed(3)); s.setProperty('--glow-hi', Math.min(1, g * 1.6).toFixed(3));
-    s.setProperty('--glow-lo', (g * .5).toFixed(3)); s.setProperty('--glow-xlo', (g * .25).toFixed(3));
+    A.pintaPaleta(p);
     palBtns.forEach(function (b, i) { var on = PAL[i] === p; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); });
-    $('pal-nome').textContent = p.nome; $('pal-dot').style.setProperty('--c', t.accent); $('pal-foot').textContent = 'Paleta ' + p.nome;
-    var mt = document.querySelector('meta[name="theme-color"]'); if (mt) mt.setAttribute('content', t.bg);
+    $('pal-nome').textContent = p.nome; $('pal-dot').style.setProperty('--c', p.t.accent); $('pal-foot').textContent = 'Paleta ' + p.nome;
     if (guardar) A.store.set('pulse.paleta', p.id);
     A.emit('paleta', p);
   }
-  /* ?paleta= na query ou no hash vence o localStorage, que vence o padrão (Osso: o dono trocou o padrão do Elétrico para o Osso em 12/11, D-3) */
-  var qPal = (location.search + '&' + location.hash).match(/[?&#]paleta=([a-z-]+)/);
-  var pal0 = (qPal && byId(qPal[1])) || byId(A.store.get('pulse.paleta')) || byId('osso') || PAL[0];
+  var pal0 = A.paletaInicial();
   if (pal0) aplicaPaleta(pal0, false);
 
   /* ================= menus da topbar ================= */
@@ -138,21 +125,10 @@
   });
 
   /* ================= ticket: confirmar um sinal (sizing com prévia de risco) =================
-     Port literal do modal do painel clássico: mesmo cálculo de tamanho (risco% da banca, R efetivo =
-     min(stop, liquidação), taxa nos dois lados), mesmos avisos (liquida antes do stop, estoura o teto de
-     exposição) e mesma trava de duplo clique. O risco digitado aqui só dimensiona ESTE trade; não grava
-     config. */
-  var busy = false;
-  function calc(s, lev, riscoPct) {
-    var e = A.estado || {}, cfg = e.config || {};
-    var banca = e.banca ? e.banca.atual : 0;
-    var taxa = parseFloat(cfg.taxa_por_lado) || 0.0005;
-    var sd = s.preco ? Math.abs(s.preco - s.stop_sugerido) / s.preco : 0.03;
-    var l = lev || 1, risco = (riscoPct || 1) / 100;
-    var sdEf = Math.min(sd, 0.9 / l);
-    var valor = Math.max(1, Math.round(banca * risco / Math.max((sdEf + 2 * taxa) * l, 0.0001)));
-    return { valor: valor, sd: sd, sdEf: sdEf, taxa: taxa, banca: banca, risco: risco, l: l };
-  }
+     Port literal do modal do painel clássico: mesmos avisos (liquida antes do stop, estoura o teto de
+     exposição) e mesma trava de duplo clique. O cálculo (tamanho pelo risco, R efetivo, perda no pior caso,
+     exposição) mora em app/comum.js (A.ticket), o MESMO que o app do celular usa. */
+  var busy = false, calc = A.ticket.calc;
   async function operarSinal(s) {
     var e = A.estado || {}, cfg = e.config || {};
     var lev0 = +cfg.alavancagem_padrao || 10, risco0 = (parseFloat(cfg.risco_por_trade) || 0.01) * 100;
@@ -166,21 +142,17 @@
     var valorFinal = 0, levFinal = 0;
     function previa(box) {
       var v = +box.querySelector('#tk-valor').value || 0, l = +box.querySelector('#tk-lev').value || 1;
-      var c = calc(s, l, +box.querySelector('#tk-risco').value);
-      var liq = 0.9 / l, liqAntes = liq < c.sd, sdEf = Math.min(c.sd, liq);
-      var perdaBruta = v * l * (sdEf + 2 * c.taxa), perda = Math.min(perdaBruta, v), perdaPct = c.banca ? perda / c.banca * 100 : 0;
-      var rg = (A.estado || {}).risco || {};
-      var wr = (((A.estado || {}).metricas || {}).por_conviccao || []).find(function (x) { var p = String(x.faixa).split('-').map(Number); return s.conviccao >= p[0] && s.conviccao < p[1]; });
+      var P = A.ticket.previa(s, v, l, +box.querySelector('#tk-risco').value), c = P.c;
       var h = '<div class="r"><span>Stop sugerido</span><span>' + F.px(s.stop_sugerido) + ' (' + F.f2(c.sd * 100) + '%)</span></div>' +
-        '<div class="r"><span>R efetivo (min stop/liq.)</span><span class="' + (liqAntes ? 'warn' : '') + '">' + F.f2(sdEf * 100) + '%</span></div>' +
-        '<div class="r"><span>Nocional</span><span>' + F.brl(v * l) + '</span></div>' +
-        '<div class="r"><span>Perda no pior caso (c/ taxa)</span><span class="neg">' + F.brl(perda) + ' · ' + F.f2(perdaPct) + '% da banca' + (perdaBruta >= v ? ' · margem inteira' : '') + '</span></div>';
-      var nOrd = ((A.estado || {}).ordens || []).length;
-      if (rg.risco_aberto_max_rs) { var nt = rg.risco_aberto_rs + perda, tt = rg.risco_aberto_max_rs; h += '<div class="r"><span>Exposição após este trade</span><span class="' + (nt > tt ? 'neg' : '') + '">' + F.brl(nt) + ' / ' + F.brl(tt) + (nt > tt ? ' · estoura o teto' : '') + '</span></div>' + (nOrd ? '<div class="mute" style="font-size:11.5px">Sem contar ' + nOrd + (nOrd === 1 ? ' ordem descansando' : ' ordens descansando') + ': o backend conta, então pode recusar mesmo abaixo do teto.</div>' : ''); }
+        '<div class="r"><span>R efetivo (min stop/liq.)</span><span class="' + (P.liqAntes ? 'warn' : '') + '">' + F.f2(P.sdEf * 100) + '%</span></div>' +
+        '<div class="r"><span>Nocional</span><span>' + F.brl(P.nocional) + '</span></div>' +
+        '<div class="r"><span>Perda no pior caso (c/ taxa)</span><span class="neg">' + F.brl(P.perda) + ' · ' + F.f2(P.perdaPct) + '% da banca' + (P.margemInteira ? ' · margem inteira' : '') + '</span></div>';
+      var nOrd = P.nOrd, x = P.expo;
+      if (x) { h += '<div class="r"><span>Exposição após este trade</span><span class="' + (x.estoura ? 'neg' : '') + '">' + F.brl(x.nt) + ' / ' + F.brl(x.tt) + (x.estoura ? ' · estoura o teto' : '') + '</span></div>' + (nOrd ? '<div class="mute" style="font-size:11.5px">Sem contar ' + nOrd + (nOrd === 1 ? ' ordem descansando' : ' ordens descansando') + ': o backend conta, então pode recusar mesmo abaixo do teto.</div>' : ''); }
       h += '<div class="r"><span>Tamanho p/ arriscar ' + F.f2(c.risco * 100) + '%</span><span><b>' + F.brl(c.valor) + '</b> <button type="button" class="btn ghost sm" id="tk-usar">usar</button></span></div>';
-      if (liqAntes) h += '<div class="aviso neg">Alavancagem alta para esse stop: a liquidação vem antes do stop e o backend recusa o trade. Baixe para ≤ ' + Math.floor(0.9 / c.sd) + 'x.</div>';
-      if (wr) h += '<div class="mute" style="font-size:11.5px">Win rate histórico nesta faixa de convicção: <b>' + wr.win_rate + '%</b> (' + wr.n + ' trades). Referência, não garantia.</div>';
-      if (rg.trava_dia) h += '<div class="aviso neg">Trava diária ativa: o backend vai recusar.</div>';
+      if (P.liqAntes) h += '<div class="aviso neg">Alavancagem alta para esse stop: a liquidação vem antes do stop e o backend recusa o trade. Baixe para ≤ ' + P.levMax + 'x.</div>';
+      if (P.wr) h += '<div class="mute" style="font-size:11.5px">Win rate histórico nesta faixa de convicção: <b>' + P.wr.win_rate + '%</b> (' + P.wr.n + ' trades). Referência, não garantia.</div>';
+      if (P.trava) h += '<div class="aviso neg">Trava diária ativa: o backend vai recusar.</div>';
       box.querySelector('#tk-prev').innerHTML = h;
       box.querySelector('#tk-usar').addEventListener('click', function () { box.querySelector('#tk-valor').value = c.valor; previa(box); });
     }
@@ -195,7 +167,7 @@
         valorFinal = +box.querySelector('#tk-valor').value; levFinal = +box.querySelector('#tk-lev').value;
         if (!(valorFinal > 0) || !(levFinal >= 1)) { A.toast('Valor e alavancagem precisam ser positivos', 'warn'); return false; }
         /* mesma regra do simulador.abrir (geometria degenerada): mandar seria só colher a recusa */
-        if (0.9 / levFinal < calc(s, levFinal, +box.querySelector('#tk-risco').value).sd) { A.toast('A essa alavancagem a liquidação vem antes do stop: baixe para ≤ ' + Math.floor(0.9 / calc(s, levFinal, 1).sd) + 'x', 'warn'); return false; }
+        if (A.ticket.liqAntes(calc(s, levFinal, +box.querySelector('#tk-risco').value).sd, levFinal)) { A.toast('A essa alavancagem a liquidação vem antes do stop: baixe para ≤ ' + A.ticket.levMax(calc(s, levFinal, 1).sd) + 'x', 'warn'); return false; }
       }
     });
     if (!ok || busy) return null;
@@ -219,44 +191,7 @@
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
   A.dialogo = dialogo; A.operarSinal = operarSinal; A.pularSinal = pularSinal; A.fecharPosicao = fecharPosicao;
-
-  /* status do sinal: o MESMO julgamento do clássico (statusEntrada), lógica intocada */
-  A.statusEntrada = function (s, pa) {
-    if (!pa) return { txt: 'aguardando preço ao vivo', cls: 'neutro' };
-    var d = s.direcao === 'LONG' ? 1 : -1, favor = (pa - s.preco) / s.preco * 100 * d;
-    var stopDist = Math.abs(s.preco - s.stop_sugerido) / s.preco * 100 || 1;
-    var t = A.ts(s.ts), ageMin = t ? (Date.now() - t) / 60000 : 0;
-    var tfMin = { '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440 }[s.tf] || 15;
-    if (favor <= -stopDist) return { txt: 'invalidado: já teria batido o stop', cls: 'short' };
-    if (favor >= stopDist * 0.8) return { txt: 'já correu: movimento já aconteceu', cls: 'warn' };
-    if (ageMin / tfMin >= 4) return { txt: 'expirou: sinal antigo, reavalie', cls: 'warn' };
-    if (favor <= -stopDist * 0.4) return { txt: 'janela apertada: preço andou contra', cls: 'warn' };
-    return { txt: 'ainda dá pra entrar', cls: 'long' };
-  };
-
-  /* sparkline SVG a partir de uma série (string; a linha da tabela é template) */
-  A.spark = function (vals, cls) {
-    var v = (vals || []).filter(function (x) { return typeof x === 'number' && isFinite(x); });
-    if (v.length < 2) return '<span class="mute">—</span>';
-    var w = 72, h = 22, lo = Math.min.apply(null, v), hi = Math.max.apply(null, v), sp = (hi - lo) || 1;
-    var X = function (i) { return (i * (w - 4) / (v.length - 1) + 2).toFixed(1); }, Y = function (x) { return ((1 - (x - lo) / sp) * (h - 6) + 3).toFixed(1); };
-    var d = v.map(function (x, i) { return (i ? 'L' : 'M') + X(i) + ' ' + Y(x); }).join(' ');
-    var c = cls || (v[v.length - 1] > v[0] ? 'pos' : v[v.length - 1] < v[0] ? 'neg' : 'flat');
-    return '<svg class="spark ' + c + '" viewBox="0 0 ' + w + ' ' + h + '" aria-hidden="true"><path d="' + d + '"/><circle cx="' + X(v.length - 1) + '" cy="' + Y(v[v.length - 1]) + '" r="2"/></svg>';
-  };
-
-  /* contador: conta na PRIMEIRA carga; nos polls seguintes só troca o texto com um flash curto */
-  A.contar = function (el, valor, render) {
-    if (!el) return;
-    var ant = el._v;
-    el._v = valor;
-    if (ant === undefined && !A.RM && hasGsap()) {
-      var o = { v: 0 }; gsap.to(o, { v: valor, duration: 1.4, ease: 'power3.out', onUpdate: function () { el.innerHTML = render(o.v); } });
-      return;
-    }
-    el.innerHTML = render(valor);
-    if (ant !== undefined && ant !== valor && !A.RM) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
-  };
+  /* A.statusEntrada, A.spark e A.contar moram em app/comum.js (compartilhados com o app do celular) */
 
   /* ================= páginas em construção (texto do mock, só o que não é número) ================= */
   var LOCK = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
