@@ -218,7 +218,8 @@ def test_doze_paletas_completas_e_osso_e_o_padrao():
     for pid, t in p.items():
         assert set(t) == campos, pid
     assert "osso" in p
-    assert re.search(r"byId\('osso'\)", _ler(WEB, "app", "casca.js"))
+    # a escolha da paleta inicial mora no comum.js, dividida entre o desktop e o app do celular
+    assert re.search(r"byId\('osso'\)", _ler(WEB, "app", "comum.js"))
 
 
 PARES = [("text", "panel"), ("text2", "panel"), ("mute", "panel"), ("mute", "panel2"),
