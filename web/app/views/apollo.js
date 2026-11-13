@@ -96,6 +96,8 @@
   '.v-apollo .jr .amt{font-family:var(--f-mono);font-weight:600;white-space:nowrap}' +
   '.v-apollo .aud{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-family:var(--f-mono);font-size:11.5px}' +
   '.v-apollo .aud li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;padding:6px 0;border-bottom:1px solid rgba(var(--line-rgb),.5)}' +
+  /* valor de config sem espaço (a lista `ativos`, 24 pares colados por vírgula) alargava a página para 1.664 px e o celular reduzia o zoom da tela inteira */
+  '.v-apollo .aud li>*{min-width:0;overflow-wrap:anywhere}' +
   '.v-apollo .aud .o{color:var(--mute);font-size:10.5px}' +
   '@media (max-width:1100px){.v-apollo .row-main{grid-template-columns:1fr}.v-apollo .hero{grid-template-columns:1fr 1fr}.v-apollo .hero-r{grid-column:2}}' +
   '@media (max-width:700px){.v-apollo .hero{grid-template-columns:1fr;min-height:480px;align-content:end}.v-apollo .hero-r{grid-column:1;padding-top:0}.v-apollo .cfg-r{grid-template-columns:1fr}.v-apollo .cfg-v{justify-items:stretch}.v-apollo .cfg-v .cur,.v-apollo .cfg-v .ro{text-align:left}}' +

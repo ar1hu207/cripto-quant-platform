@@ -140,14 +140,14 @@
 
   /* ---------- gráfico + RSI ---------- */
   function tema() { return { txt: A.cor('mute'), line: A.rgba('line', .55), pos: A.cor('pos'), neg: A.cor('neg'), acc: A.cor('accent'), warn: A.cor('warn'), info: A.cor('info'), txt2: A.cor('txt2') }; }
-  function opts(el, T, h) { return { width: el.clientWidth || 600, height: h, layout: { background: { color: 'transparent' }, textColor: T.txt, fontFamily: 'Fira Code, monospace', fontSize: 11 }, grid: { vertLines: { color: T.line }, horzLines: { color: T.line } }, timeScale: { timeVisible: true, borderColor: T.line }, rightPriceScale: { borderColor: T.line, minimumWidth: 72 } }; }
+  function opts(el, T, h, fmtP) { var L = A.lwcLocal(fmtP); return { width: el.clientWidth || 600, height: h, localization: L.localization, layout: { background: { color: 'transparent' }, textColor: T.txt, fontFamily: 'Fira Code, monospace', fontSize: 11 }, grid: { vertLines: { color: T.line }, horzLines: { color: T.line } }, timeScale: { timeVisible: true, borderColor: T.line, tickMarkFormatter: L.tick }, rightPriceScale: { borderColor: T.line, minimumWidth: 72 } }; }
   function monta() {
     var el = $('an-chart'), er = $('an-rsi'), T = tema();
-    S.ch = LightweightCharts.createChart(el, opts(el, T, el.clientHeight || 380));
+    S.ch = LightweightCharts.createChart(el, opts(el, T, el.clientHeight || 380, function (v) { return F.fix(v, S && S.prec != null ? S.prec : F.pxCasas(v)); }));
     S.v = S.ch.addCandlestickSeries({ upColor: T.pos, downColor: T.neg, borderVisible: false, wickUpColor: T.pos, wickDownColor: T.neg });
     var ln = function (c, w, st) { return S.ch.addLineSeries({ color: c, lineWidth: w, lineStyle: st || 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }); };
     S.ser = { e20: ln(T.acc, 2), e50: ln(T.warn, 2), bu: ln(T.txt2, 1), bm: ln(T.txt2, 1, 2), bl: ln(T.txt2, 1), du: ln(T.info, 1, 1), dl: ln(T.info, 1, 1) };
-    S.chR = LightweightCharts.createChart(er, Object.assign(opts(er, T, er.clientHeight || 110), { timeScale: { visible: false, borderColor: T.line } }));
+    S.chR = LightweightCharts.createChart(er, Object.assign(opts(er, T, er.clientHeight || 110, F.f1), { timeScale: { visible: false, borderColor: T.line } }));
     S.rsi = S.chR.addLineSeries({ color: T.warn, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true });
     [70, 30].forEach(function (v) { S.rsi.createPriceLine({ price: v, color: T.txt2, lineWidth: 1, lineStyle: 2, axisLabelVisible: false }); });
     S.ch.timeScale().subscribeVisibleLogicalRangeChange(function (r) { if (r && S && S.chR) S.chR.timeScale().setVisibleLogicalRange(r); });
@@ -170,7 +170,7 @@
       if (!S || meu !== S.seq) return;
       var c = r[0] || [], an = r[1]; S.c = c; S.an = an;
       $('an-msg').hidden = !!c.length; if (!c.length) $('an-msg').textContent = 'sem velas';
-      if (c.length) { var u = Math.abs(c[c.length - 1].close) || 1, pr = u >= 1000 ? 2 : u >= 10 ? 3 : u >= 1 ? 4 : u >= 0.01 ? 5 : 7; S.v.applyOptions({ priceFormat: { type: 'price', precision: pr, minMove: Math.pow(10, -pr) } }); }
+      if (c.length) { var pr = S.prec = F.pxCasas(c[c.length - 1].close); S.v.applyOptions({ priceFormat: { type: 'price', precision: pr, minMove: Math.pow(10, -pr) } }); }
       S.v.setData(c); camadas(); S.ch.timeScale().fitContent(); painel();
     } catch (err) { if (S && meu === S.seq) { $('an-msg').hidden = false; $('an-msg').textContent = 'não consegui ler o /candles (' + A.erroTxt(err) + ')'; } }
   }
@@ -200,11 +200,11 @@
       '<div><div class="at-par">' + A.esc(F.par(a)) + '</div><div class="at-px">' + (px != null ? F.px(px) : '—') + (x.ch != null ? ' <span class="' + F.cls(x.ch) + '">' + F.pct(x.ch, 1) + ' 24 h</span>' : '') + '</div></div></div>' +
       '<div class="mute" style="font-size:11px;margin-top:6px">' + (cv != null ? 'convicção do sinal na fila' : 'sem sinal na fila: o motor não pontua este par agora') + '</div>';
     h += '<div class="sec">por quê · leitura do motor no ' + A.esc(S.tf) + '</div>';
-    if (an.leitura) h += '<p class="leitura">' + A.esc(an.leitura) + '</p>';
+    if (an.leitura) h += '<p class="leitura">' + A.esc(F.decBR(an.leitura)) + '</p>';
     var it = [];
     if (sn.ema20 != null) it.push(['EMA 20 ' + (sn.ema20 > sn.ema50 ? '>' : '<') + ' EMA 50', F.px(sn.ema20) + ' / ' + F.px(sn.ema50), sn.ema20 > sn.ema50 ? 'long' : 'short', sn.ema20 > sn.ema50 ? 'alta' : 'baixa']);
-    if (sn.adx != null) it.push(['ADX ' + sn.adx, sn.adx >= (+((e.config || {}).adx_min) || 25) ? 'acima do portão (' + ((e.config || {}).adx_min) + ')' : 'abaixo do portão (' + ((e.config || {}).adx_min) + ')', sn.adx >= (+((e.config || {}).adx_min) || 25) ? 'info' : 'neutro', sn.adx >= (+((e.config || {}).adx_min) || 25) ? 'tendência' : 'fraca']);
-    if (sn.rsi != null) it.push(['RSI ' + sn.rsi, sn.rsi > 70 ? 'sobrecomprado' : sn.rsi < 30 ? 'sobrevendido' : 'zona neutra', sn.rsi > 70 || sn.rsi < 30 ? 'warn' : 'neutro', sn.rsi > 70 ? 'alto' : sn.rsi < 30 ? 'baixo' : 'neutro']);
+    if (sn.adx != null) it.push(['ADX ' + F.f1(+sn.adx), sn.adx >= (+((e.config || {}).adx_min) || 25) ? 'acima do portão (' + ((e.config || {}).adx_min) + ')' : 'abaixo do portão (' + ((e.config || {}).adx_min) + ')', sn.adx >= (+((e.config || {}).adx_min) || 25) ? 'info' : 'neutro', sn.adx >= (+((e.config || {}).adx_min) || 25) ? 'tendência' : 'fraca']);
+    if (sn.rsi != null) it.push(['RSI ' + F.f1(+sn.rsi), sn.rsi > 70 ? 'sobrecomprado' : sn.rsi < 30 ? 'sobrevendido' : 'zona neutra', sn.rsi > 70 || sn.rsi < 30 ? 'warn' : 'neutro', sn.rsi > 70 ? 'alto' : sn.rsi < 30 ? 'baixo' : 'neutro']);
     if (S.bk) it.push(['Fluxo taker ' + F.f0(S.bk.fluxo_comprador) + '% comprador', 'book ±1%: ' + F.f0(S.bk.pressao_compra) + '% compra · grande: ' + S.bk.lado_grande, S.bk.fluxo_comprador >= 50 ? 'long' : 'short', S.bk.fluxo_comprador >= 50 ? 'compra' : 'venda']);
     if (S.sm && S.sm.funding_pct != null) it.push(['Funding ' + F.pct(S.sm.funding_pct, 4), S.sm.leitura_funding || '', S.sm.funding_pct < 0 ? 'short' : 'neutro', S.sm.funding_pct < 0 ? 'negativo' : 'positivo']);
     if (x.td) it.push(['Tendência 1d ' + x.td, x.t1 ? (x.t1 === x.td ? 'alinhada com o 1h' : '1h em ' + x.t1) : '', x.td === 'alta' ? 'long' : x.td === 'baixa' ? 'short' : 'neutro', x.td]);

@@ -123,8 +123,18 @@
   '@media (max-width:1300px){.v-painel .build{grid-template-columns:repeat(3,minmax(0,1fr))}}' +
   '@media (max-width:1100px){.v-painel .row-hero{grid-template-columns:1fr}.v-painel .side-stack{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}.v-painel .dd-stats{grid-template-columns:repeat(3,minmax(0,1fr))}}' +
   '@media (max-width:760px){.v-painel .build{grid-template-columns:1fr}.v-painel .hero{min-height:400px}.v-painel .gauge-card{grid-template-columns:1fr;justify-items:center}}' +
-  '@media (max-width:640px){.v-painel .dd-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.v-painel .dd-bars{grid-template-columns:repeat(7,minmax(0,1fr))}.v-painel .dd-b{grid-template-rows:auto 44px auto}.v-painel .dd-b .t{height:44px}.v-painel .dd-b .v{font-size:9px}.v-painel .dd-cal{--cell:26px}}' +
+  '@media (max-width:640px){.v-painel .dd-stat .k,.v-painel .dd-stat .s{white-space:normal}.v-painel .dd-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.v-painel .dd-bars{grid-template-columns:repeat(7,minmax(0,1fr))}.v-painel .dd-b{grid-template-rows:auto 44px auto}.v-painel .dd-b .t{height:44px}.v-painel .dd-b .v{font-size:9px}.v-painel .dd-cal{--cell:26px}}' +
   '@media (prefers-reduced-motion:reduce){.v-painel .chart .end-halo{animation:none}}' +
+  '.v-painel .pc-list{display:grid;gap:10px}' +
+  '.v-painel .pc{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel2);display:grid;gap:10px}' +
+  '.v-painel .pc-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}' +
+  '.v-painel .pc-pnl{margin-left:auto;font-family:var(--f-mono);font-weight:600;font-size:16px;text-align:right;line-height:1.15}' +
+  '.v-painel .pc-pnl small{display:block;font-size:11px;font-weight:500}' +
+  '.v-painel .pc-kv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 10px;margin:0}' +
+  '.v-painel .pc-kv dt{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}' +
+  '.v-painel .pc-kv dd{margin:2px 0 0;font-family:var(--f-mono);font-size:12.5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}' +
+  '.v-painel .pc-saida{font-size:11.5px;color:var(--warn);border:1px solid rgba(var(--warn-rgb),.35);border-radius:8px;padding:5px 8px}' +
+  '.v-painel .pc .btn{justify-self:start}' +
   /* o Fechar fica preso na borda direita: a tabela rola por baixo dele, mas o botão nunca some */
   '.v-painel #pn-pos tr:not(.saida)>td:last-child,.v-painel #pn-pos th:last-child{position:sticky;right:0;background:var(--panel);box-shadow:-10px 0 10px -6px rgba(var(--bg-rgb),.9)}' +
   '</style>';
@@ -132,7 +142,7 @@
   var html = css + '<div class="v-painel">' +
     '<section class="kpis" aria-label="Conta">' +
       '<div class="kpi"><div class="kpi-lbl">Equity</div><div class="kpi-val" id="pn-eq">—</div><div class="kpi-sub" id="pn-eq-s">—</div></div>' +
-      '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">P&amp;L do dia</div><div class="kpi-val" id="pn-dia">—</div><div class="kpi-sub">equity de agora vs início do dia</div></div>' +
+      '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">P&amp;L do dia</div><div class="kpi-val" id="pn-dia">—</div><div class="kpi-sub" id="pn-dia-s" title="P&amp;L do dia = equity de agora − equity do primeiro retrato do dia (a mesma base da trava). São duas partes: o que FECHOU hoje (inclusive a parte de ontem de um trade que atravessou a meia-noite) e quanto o P&amp;L das posições abertas andou desde 00h.">—</div></div>' +
       '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">P&amp;L do mês</div><div class="kpi-val" id="pn-mes">—</div><div class="kpi-sub" id="pn-mes-s">—</div></div>' +
       '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">Win rate</div><div class="kpi-val" id="pn-wr">—</div><div class="kpi-sub" id="pn-wr-s">—</div></div>' +
     '</section>' +
@@ -182,6 +192,12 @@
     A.contar($('pn-eq'), eq, function (v) { return cur(v); });
     $('pn-eq-s').textContent = 'início do dia ' + F.brl(base) + ' · saldo realizado ' + F.brl(e.banca && e.banca.atual);
     var d = $('pn-dia'); d.className = 'kpi-val ' + F.cls(pd);
+    /* [dia] O P&L do dia é o do backend (equity agora − 1º retrato do dia, a base da trava). Ele não bate com
+       o "hoje" do Dia a dia, que é só o FECHADO, e a tela não dizia por quê: um trade aberto ontem que fecha
+       hoje entra inteiro no fechado, mas a parte dele que andou até 00h já estava no equity de ontem. A
+       identidade é exata: pnl_dia = realizado_hoje + (P&L aberto agora − P&L aberto às 00h). */
+    var real = rg.realizado_hoje || 0, dAb = Math.round((pd - real) * 100) / 100;
+    $('pn-dia-s').innerHTML = 'fechado hoje <span class="' + F.cls(real) + '">' + F.money(real) + '</span> · aberto <span class="' + F.cls(dAb) + '">' + F.money(dAb) + '</span> desde 00h';
     A.contar(d, pd, function (v) { return cur(v, true) + '<span class="pct">' + (base > 0 ? F.pct(pd / base * 100) : '') + '</span>'; });
     /* mês: equity de agora contra o último ponto da curva ANTES do dia 1. Sem ponto antes (curva nasceu
        neste mês, ou reset), compara com o primeiro ponto e o rótulo diz desde quando. */
@@ -206,7 +222,7 @@
     $('pn-mes-s').innerHTML = sub + '<br>DD atual <span class="' + (ddA < 0 ? 'neg' : '') + '">' + F.pct(ddA, 1) + '</span> <span title="o DD atual sai da curva amostrada do /estado (~125 pontos): aproximado">≈</span> · máx. ' + F.pct(-(m.max_dd_mtm_pct || 0), 1);
     var wr = $('pn-wr');
     if (m.n_trades) {
-      A.contar(wr, m.win_rate || 0, function (v) { return F.f0(v) + '<span class="pct txt2">%</span>'; });
+      A.contar(wr, m.win_rate || 0, function (v) { return F.f0(v) + '<span class="txt2" style="font-size:.55em;font-weight:500;margin-left:1px">%</span>'; });
       var payoff = m.perda_media ? Math.abs(m.ganho_medio / m.perda_media) : 0;
       $('pn-wr-s').textContent = 'payoff ' + F.f2(payoff) + ' · ' + m.n_trades + ' trades (toda a banca)';
     } else { wr.innerHTML = '<span class="txt2">—</span>'; $('pn-wr-s').textContent = 'nenhum trade fechado ainda'; }
@@ -225,7 +241,14 @@
     var W = Math.max(300, svg.clientWidth || wrap.clientWidth - 20), H = 210, pad = { l: 66, r: 16, t: 18, b: 24 }, n = h.length;
     var vs = h.map(function (x) { return x.equity_total; }), lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
     var span = hi - lo || Math.max(1, hi * 0.01); lo -= span * 0.12; hi += span * 0.12;
-    var x = function (i) { return pad.l + i * (W - pad.l - pad.r) / (n - 1); };
+    /* [curva] eixo X por TEMPO, não por índice. O /estado amostra a série por posição, e a série tem 15 s
+       nas últimas 48 h e 5 min antes (poda do P2-11): ~80% dos pontos caem nos 2 últimos dias. Por índice,
+       2 dias ocupavam 3/4 do gráfico, os 9 anteriores se espremiam no primeiro quarto e o eixo repetia
+       datas ("12/11 · 12/11"). A Carteira já desenhava por tempo; agora as duas contam a mesma história. */
+    var tms = h.map(function (p) { var d = A.ts(p.ts); return d ? d.getTime() : NaN; });
+    for (var q = 0; q < n; q++) if (isNaN(tms[q])) tms[q] = q ? tms[q - 1] : 0;
+    var t0 = tms[0], tN = tms[n - 1], dur = (tN - t0) || 1;
+    var x = function (i) { return pad.l + (tms[i] - t0) / dur * (W - pad.l - pad.r); };
     var y = function (v) { return pad.t + (1 - (v - lo) / (hi - lo)) * (H - pad.t - pad.b); };
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
     var defs = svgEl('defs', {});
@@ -236,9 +259,15 @@
       svg.appendChild(svgEl('line', { x1: pad.l, x2: W - pad.r, y1: y(v).toFixed(1), y2: y(v).toFixed(1), 'class': 'grid' }));
       var t = svgEl('text', { x: pad.l - 8, y: (y(v) + 3.5).toFixed(1), 'class': 'ax', 'text-anchor': 'end' }); t.textContent = (hi - lo) < 20 ? F.f2(v) : F.f0(v); svg.appendChild(t);
     }
-    [0, Math.round((n - 1) / 4), Math.round((n - 1) / 2), Math.round((n - 1) * 3 / 4), n - 1].forEach(function (i, k) {
-      var t2 = svgEl('text', { x: x(i).toFixed(1), y: H - 6, 'class': 'ax', 'text-anchor': k === 0 ? 'start' : k === 4 ? 'end' : 'middle' }); t2.textContent = A.ddmm(h[i].ts); svg.appendChild(t2);
-    });
+    /* marcas em instantes igualmente espaçados; com menos de 2 dias de curva a marca leva a hora */
+    var nm = W < 480 ? 3 : 5, curto = dur < 2 * 86400000, usados = {};
+    for (var k = 0; k < nm; k++) {
+      var tk = t0 + dur * k / (nm - 1), dk = new Date(tk), txt = ('0' + dk.getDate()).slice(-2) + '/' + ('0' + (dk.getMonth() + 1)).slice(-2);
+      /* a data/hora sai no relógio de SP (A.ts ancora em −03:00); getDate() local só serve se o aparelho estiver em SP */
+      try { txt = new Intl.DateTimeFormat('pt-BR', curto ? { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } : { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' }).format(dk); } catch (e2) {}
+      if (usados[txt]) continue; usados[txt] = 1;
+      var t2 = svgEl('text', { x: (pad.l + (tk - t0) / dur * (W - pad.l - pad.r)).toFixed(1), y: H - 6, 'class': 'ax', 'text-anchor': k === 0 ? 'start' : k === nm - 1 ? 'end' : 'middle' }); t2.textContent = txt; svg.appendChild(t2);
+    }
     var d = vs.map(function (v2, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v2).toFixed(1); }).join(' ');
     var area = svgEl('path', { d: d + ' L' + x(n - 1).toFixed(1) + ' ' + (H - pad.b) + ' L' + x(0).toFixed(1) + ' ' + (H - pad.b) + ' Z', 'class': 'area' });
     var eq = svgEl('path', { d: d, 'class': 'ln-eq' });
@@ -259,7 +288,8 @@
   function tipCurva(ev) {
     var g = S && S.geo; if (!g) return;
     var svg = $('pn-eq-svg'), tip = $('pn-tip'), r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (g.W / r.width);
-    var i = Math.max(0, Math.min(g.n - 1, Math.round((px - g.pad.l) / ((g.W - g.pad.l - g.pad.r) / (g.n - 1)))));
+    /* ponto mais próximo no eixo de TEMPO (o espaçamento entre pontos não é uniforme) */
+    var i = 0, best = Infinity; for (var j = 0; j < g.n; j++) { var dj = Math.abs(g.x(j) - px); if (dj < best) { best = dj; i = j; } }
     var p = g.h[i], X = g.x(i);
     g.xh.setAttribute('x1', X); g.xh.setAttribute('x2', X); g.xh.style.opacity = 1;
     g.hd.setAttribute('cx', X); g.hd.setAttribute('cy', g.y(p.equity_total)); g.hd.style.opacity = 1;
@@ -325,9 +355,9 @@
     }
     $('pn-g-v').textContent = m.n_trades ? F.f0(wr) + '%' : '—';
     $('pn-gauge-lbl').setAttribute('aria-label', m.n_trades ? 'Win rate de ' + F.f0(wr) + '% em ' + m.n_trades + ' trades' : 'Sem trades fechados');
-    var payoff = m.perda_media ? Math.abs(m.ganho_medio / m.perda_media) : 0;
+    var payoff = m.perda_media ? Math.abs(m.ganho_medio / m.perda_media) : 0, xr = A.expR(m);
     var rows = [['Payoff', m.n_trades ? F.f2(payoff) : '—', ''], ['Trades', String(m.n_trades || 0), ''],
-      ['Expectativa', m.n_trades ? (m.expectancia_r >= 0 ? '+' : '−') + F.f2(Math.abs(m.expectancia_r || 0)) + 'R' : '—', F.cls(m.expectancia_r)],
+      ['Expectativa' + (xr.n ? ' <span class="mute" style="font-size:10.5px">(' + xr.n + ')</span>' : ''), xr.txt, F.cls(xr.v)],
       ['Pior sequência', S.piorSeq == null ? '…' : S.piorSeq + (S.piorSeq === 1 ? ' perda' : ' perdas'), S.piorSeq ? 'neg' : '']];
     $('pn-g-meta').innerHTML = rows.map(function (r) { return '<div class="row"><span>' + r[0] + '</span><span class="' + r[2] + '">' + r[1] + '</span></div>'; }).join('') +
       (S.piorSeqN ? '<div class="row"><span class="mute" style="font-size:10.5px">sequência nos últimos ' + S.piorSeqN + ' trades</span><span></span></div>' : '');
@@ -396,6 +426,22 @@
     $('pn-pos-n').innerHTML = l.length + (l.length ? ' · <span class="' + F.cls(tot) + '">' + F.money(tot) + '</span>' : '');
     var el = $('pn-pos');
     if (!l.length) { el.innerHTML = '<div class="empty">Nenhuma posição aberta.</div>'; return; }
+    /* [celular] Na tabela de 10 colunas o Fechar (preso à direita) cobria a coluna de P&L, que é o número
+       que importa: em 390 px sobravam Par, Lado, Lev e Entrada. Abaixo de 640 px cada posição vira um
+       cartão com o P&L em destaque. O poll redesenha a cada 3 s, então girar o aparelho troca o formato. */
+    if (window.matchMedia && matchMedia('(max-width: 640px)').matches) {
+      el.innerHTML = '<div class="pc-list">' + l.map(function (p) {
+        var roe = p.valor_reais ? p.pnl / p.valor_reais * 100 : 0, sd = S.saidas[p.id];
+        var mov = p.stop_abertura != null && Math.abs(p.stop - p.stop_abertura) > 1e-12;
+        return '<div class="pc"><div class="pc-top"><span class="mono strong">' + A.esc(F.par(p.ativo)) + '</span><span class="chip ' + (p.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(p.direcao) + ' ' + A.esc(p.alavancagem) + 'x</span>' +
+          '<span class="pc-pnl ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '<small>' + F.pct(roe, 1) + ' ROE</small></span></div>' +
+          '<dl class="pc-kv"><div><dt>entrada</dt><dd>' + F.px(p.entrada) + '</dd></div><div><dt>atual</dt><dd>' + F.px(p.preco_atual) + '</dd></div><div><dt>stop' + (mov ? ' · trailing' : '') + '</dt><dd class="neg">' + F.px(p.stop) + '</dd></div>' +
+          '<div><dt>margem</dt><dd>' + F.brl(p.valor_reais) + '</dd></div><div><dt>idade</dt><dd>' + A.idade(p.aberto_em) + '</dd></div><div><dt>evolução</dt><dd>' + A.spark(S.pnlHist[p.id]) + '</dd></div></dl>' +
+          (sd && sd.acao ? '<div class="pc-saida">' + A.esc(sd.acao) + '</div>' : '') +
+          '<button type="button" class="btn danger sm" data-fechar="' + p.id + '">Fechar a mercado</button></div>';
+      }).join('') + '</div>';
+      return;
+    }
     el.innerHTML = '<div class="tablewrap"><table class="tbl"><thead><tr><th>Par</th><th>Lado</th><th>Lev</th><th class="num">Entrada</th><th class="num">Atual</th><th class="num">P&amp;L · ROE</th><th class="num">Stop</th><th>Idade</th><th>Evolução</th><th></th></tr></thead><tbody>' +
       l.map(function (p) {
         var roe = p.valor_reais ? p.pnl / p.valor_reais * 100 : 0, sd = S.saidas[p.id];
@@ -487,7 +533,7 @@
     var rg = e.risco || {};
     dias.forEach(function (x) { x.trava = x.k === hojeK && !!rg.trava_dia; });
     var N = dias.length, last = dias[N - 1];
-    $('pn-dd-sub').textContent = 'P&L fechado por dia · ' + A.ddmm(ini) + ' → ' + A.ddmm(hojeK) + (noTeto ? ' · cobertura dos 500 trades mais recentes' : '') + ' · fonte /trades';
+    $('pn-dd-sub').textContent = 'P&L fechado por dia (hoje: só o que já fechou; o P&L do dia lá em cima soma o aberto) · ' + A.ddmm(ini) + ' → ' + A.ddmm(hojeK) + (noTeto ? ' · cobertura dos 500 trades mais recentes' : '') + ' · fonte /trades';
     var com = dias.filter(function (x) { return x.n; });
     if (!com.length) { $('pn-dd-streak').textContent = 'sem trade no período'; $('pn-dd-body').innerHTML = '<div class="empty">Nenhum trade fechado entre ' + A.ddmm(ini) + ' e hoje. O calendário aparece com o primeiro fechamento.</div>'; return; }
     /* sequência atual: dias com trade de mesmo sinal, contando de trás; dia sem trade é pulado */
@@ -518,7 +564,7 @@
     var bars = L14.map(function (x, i) {
       var hh = x.pnl === 0 ? 0 : Math.max(3, Math.round(Math.abs(x.pnl) / mx14 * 50));
       var b = x.pnl === 0 ? '' : '<i class="' + (x.pnl > 0 ? 'pos' : 'neg') + '" style="height:' + hh + '%"></i>';
-      return '<div class="dd-b' + (i === L14.length - 1 ? ' today' : '') + '"><span class="v ' + (x.pnl > 0 ? 'pos' : x.pnl < 0 ? 'neg' : 'mute') + '">' + (x.n ? F.money(x.pnl).replace('R$ ', '') : '·') + '</span><div class="t">' + b + '</div><span class="d">' + A.ddmm(x.k) + '</span></div>';
+      return '<div class="dd-b' + (i === L14.length - 1 ? ' today' : '') + '"><span class="v ' + (x.pnl > 0 ? 'pos' : x.pnl < 0 ? 'neg' : 'mute') + '">' + (x.n ? F.money(x.pnl).replace(/R\$\s/, '') : '·') + '</span><div class="t">' + b + '</div><span class="d">' + A.ddmm(x.k) + '</span></div>';
     }).join('');
     /* totais: últimas 4 semanas (seg→dom) e os meses do período; mês que começa antes da cobertura é parcial */
     var wk = {}, ord = [];
@@ -565,7 +611,8 @@
       S = { root: root, estado: null, pnlHist: {}, saidas: {}, timers: [], offs: [], piorSeq: null, gaugeV: null };
       S.offs.push(A.on('estado', render));
       S.stopTerreno = terreno();
-      var svg = $('pn-eq-svg'); svg.addEventListener('mousemove', tipCurva); svg.addEventListener('mouseleave', tipFora);
+      /* pointer, não mouse: no celular o toque também mostra o valor do ponto */
+      var svg = $('pn-eq-svg'); svg.addEventListener('pointermove', tipCurva); svg.addEventListener('pointerdown', tipCurva); svg.addEventListener('pointerleave', tipFora);
       var cells = $('pn-dd'); cells.addEventListener('mouseover', ddTip); cells.addEventListener('focusin', ddTip);
       cells.addEventListener('mouseleave', function () { $('pn-dd-tip').hidden = true; }); cells.addEventListener('focusout', function () { var t = $('pn-dd-tip'); if (t) t.hidden = true; });
       root.addEventListener('click', function (ev) {

@@ -71,7 +71,7 @@
   '.v-carteira .mt .k{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
   '.v-carteira .mt .v{font-family:var(--f-mono);font-size:16px;font-weight:600;margin-top:3px}' +
   '@media (max-width:1100px){.v-carteira .mapa{grid-template-columns:1fr}.v-carteira .ct-contas{grid-template-columns:1fr}.v-carteira .mt{grid-template-columns:repeat(2,minmax(0,1fr))}}' +
-  '@media (max-width:640px){.v-carteira .bolhas{height:320px}.v-carteira .aloc{justify-content:center}.v-carteira .exp div{grid-template-columns:96px minmax(0,1fr) auto}.v-carteira .dca-form{grid-template-columns:1fr 1fr}.v-carteira .dca-g{grid-template-columns:1fr 1fr}}' +
+  '@media (max-width:640px){.v-carteira .mt .k{white-space:normal}.v-carteira .bolhas{height:320px}.v-carteira .aloc{justify-content:center}.v-carteira .exp div{grid-template-columns:96px minmax(0,1fr) auto}.v-carteira .dca-form{grid-template-columns:1fr 1fr}.v-carteira .dca-g{grid-template-columns:1fr 1fr}}' +
   '</style>';
 
   var html = css + '<div class="v-carteira">' +
@@ -284,11 +284,18 @@
   function metricas(e) {
     var m = e.metricas || {};
     $('ct-mt-t').textContent = (m.n_trades || 0) + ' trades fechados · toda a vida da banca';
-    var it = [['Trades', m.n_trades || 0, ''], ['Win rate', m.n_trades ? F.f0(m.win_rate) + '%' : '—', ''], ['P&L total', F.money(m.pnl_total), F.cls(m.pnl_total)], ['Taxas pagas', F.brl(m.taxa_total), ''],
-      ['Profit factor', m.n_trades ? F.f2(m.profit_factor) : '—', ''], ['Ganho médio', F.money(m.ganho_medio), 'pos'], ['Perda média', F.money(m.perda_media), 'neg'], ['Expectativa', m.n_trades ? F.money(m.expectancia) : '—', F.cls(m.expectancia)],
-      ['Expectativa (R)', m.n_trades ? F.f2(m.expectancia_r) + 'R' : '—', F.cls(m.expectancia_r)], ['SQN (R)', m.n_trades ? F.f2(m.sqn_r) : '—', ''], ['Sharpe', m.n_trades ? F.f2(m.sharpe) : '—', ''], ['Sortino', m.n_trades ? F.f2(m.sortino) : '—', ''],
-      ['Drawdown máx.', F.money(-(m.max_drawdown || 0)) + ' · ' + F.f2(m.max_drawdown_pct) + '%', 'neg'], ['DD marcado a mercado', F.f2(m.max_dd_mtm_pct) + '%', 'neg'], ['Calmar', m.n_trades ? F.f2(m.calmar) : '—', ''], ['Sem P&L gravado', m.n_sem_pnl || 0, '']];
-    $('ct-mt').innerHTML = it.map(function (x) { return '<div><div class="k">' + x[0] + '</div><div class="v ' + x[2] + '">' + x[1] + '</div></div>'; }).join('');
+    /* [métricas] Rótulo diz o que a conta é, e o title diz a fórmula. Antes: "Calmar" era P&L ÷ DD em R$
+       (sem anualizar: é o fator de recuperação); "Expectativa (R)" e "SQN (R)" liam a série enviesada pelo
+       trailing e diziam "0,00R" sem dado; o DD vinha "−R$ 704 · 6,70%", com sinais trocados entre si; e o
+       profit factor sem perda nenhuma aparecia como "999,00". */
+    var tem = !!m.n_trades, xr = A.expR(m), dd = m.max_drawdown || 0;
+    var it = [['Trades', m.n_trades || 0, ''], ['Win rate', tem ? F.f0(m.win_rate) + '%' : '—', ''], ['P&L total', F.money(m.pnl_total), F.cls(m.pnl_total)], ['Taxas pagas', F.brl(m.taxa_total), ''],
+      ['Profit factor', !tem ? '—' : m.profit_factor >= 999 ? '∞' : F.f2(m.profit_factor), '', 'soma dos ganhos ÷ soma das perdas'], ['Ganho médio', F.money(m.ganho_medio), 'pos'], ['Perda média', F.money(m.perda_media), 'neg'], ['Expectativa', tem ? F.money(m.expectancia) : '—', F.cls(m.expectancia), 'P&L médio por trade'],
+      ['Expectativa (R)', xr.txt + (xr.n ? ' <small class="mute">' + xr.n + ' tr.</small>' : ''), F.cls(xr.v), 'P&L ÷ risco até o stop gravado NA ABERTURA, média por trade. Só trades com esse risco gravado entram.'], ['SQN (R)', xr.n ? F.f2(xr.sqn) : '—', '', 'média ÷ desvio dos R-múltiplos × √min(n,100)'],
+      ['Sharpe', tem ? F.f2(m.sharpe) : '—', '', 'retornos DIÁRIOS da curva de equity, anualizado (√365). Com poucos dias é ruído.'], ['Sortino', tem ? F.f2(m.sortino) : '—', '', 'por trade: média ÷ desvio só das perdas × √min(n,100)'],
+      ['DD máx. fechado', dd ? F.money(-dd) + ' · ' + F.pct(-(m.max_drawdown_pct || 0), 1) : '—', dd ? 'neg' : '', 'maior queda da curva REALIZADA (banca inicial + P&L fechado), do pico'], ['DD máx. c/ aberto', m.max_dd_mtm_pct ? F.pct(-m.max_dd_mtm_pct, 1) : '—', m.max_dd_mtm_pct ? 'neg' : '', 'maior queda da curva de equity, com o P&L das posições abertas (marcado a mercado)'],
+      ['Lucro ÷ DD máx.', tem && dd ? F.f2(m.calmar) : '—', '', 'P&L total ÷ DD máximo fechado em R$ (fator de recuperação; não é o Calmar anualizado)'], ['Sem P&L gravado', m.n_sem_pnl || 0, '']];
+    $('ct-mt').innerHTML = it.map(function (x) { return '<div' + (x[3] ? ' title="' + A.esc(x[3]) + '"' : '') + '><div class="k">' + x[0] + '</div><div class="v ' + x[2] + '">' + x[1] + '</div></div>'; }).join('');
     var pc = m.por_conviccao || [];
     $('ct-conv').innerHTML = pc.length ? '<div class="sub" style="margin-bottom:6px">Win rate por faixa de convicção</div><div class="tablewrap"><table class="tbl"><thead><tr><th>Faixa</th><th class="num">Trades</th><th class="num">Win rate</th><th class="num">P&amp;L</th><th>Barra</th></tr></thead><tbody>' +
       pc.map(function (x) { return '<tr><td class="mono">' + A.esc(x.faixa) + '</td><td class="mono num">' + x.n + '</td><td class="mono num">' + F.f0(x.win_rate) + '%</td><td class="mono num ' + F.cls(x.pnl) + '">' + F.money(x.pnl) + '</td><td style="min-width:120px"><div class="bar"><i style="--w:' + Math.max(0, Math.min(100, x.win_rate)) + '%"></i></div></td></tr>'; }).join('') + '</tbody></table></div><div class="mute" style="font-size:11px;margin-top:6px">O [Q-13] mediu: a convicção não prevê acerto. A tabela mostra, não promete.</div>' : '';

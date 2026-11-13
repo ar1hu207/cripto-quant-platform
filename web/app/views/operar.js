@@ -143,12 +143,13 @@
     return { bg: A.cor('panel'), txt: A.cor('mute'), line: A.rgba('line', .55), pos: A.cor('pos'), neg: A.cor('neg'), acc: A.cor('accent'), warn: A.cor('warn'), info: A.cor('info'), txt2: A.cor('txt2') };
   }
   function montaGrafico() {
-    var el = $('op-chart'), T = tema();
+    /* o eixo usa a precisão do PAR (pela última vela), não a de cada marca: senão saíam "1,0652" e "0,99750" lado a lado */
+    var el = $('op-chart'), T = tema(), L = A.lwcLocal(function (v) { return F.fix(v, S && S.prec != null ? S.prec : F.pxCasas(v)); });
     S.chart = LightweightCharts.createChart(el, {
-      width: el.clientWidth || 600, height: el.clientHeight || 420,
+      width: el.clientWidth || 600, height: el.clientHeight || 420, localization: L.localization,
       layout: { background: { color: 'transparent' }, textColor: T.txt, fontFamily: 'Fira Code, monospace', fontSize: 11 },
       grid: { vertLines: { color: T.line }, horzLines: { color: T.line } },
-      timeScale: { timeVisible: true, borderColor: T.line }, rightPriceScale: { borderColor: T.line }, crosshair: { mode: 1 }
+      timeScale: { timeVisible: true, borderColor: T.line, tickMarkFormatter: L.tick }, rightPriceScale: { borderColor: T.line }, crosshair: { mode: 1 }
     });
     S.velas = S.chart.addCandlestickSeries({ upColor: T.pos, downColor: T.neg, borderVisible: false, wickUpColor: T.pos, wickDownColor: T.neg });
     var ln = function (c, w, st) { return S.chart.addLineSeries({ color: c, lineWidth: w, lineStyle: st || 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }); };
@@ -182,7 +183,7 @@
       var c = await A.api('/candles?ativo=' + encodeURIComponent(ativo) + '&tf=' + tf + '&limite=200');
       if (!S || meu !== S.seqVelas) return;
       S.c = c || [];
-      if (S.c.length) { var ult = Math.abs(S.c[S.c.length - 1].close) || 1, pr = ult >= 1000 ? 2 : ult >= 10 ? 3 : ult >= 1 ? 4 : ult >= 0.01 ? 5 : 7; S.velas.applyOptions({ priceFormat: { type: 'price', precision: pr, minMove: Math.pow(10, -pr) } }); }
+      if (S.c.length) { var pr = S.prec = F.pxCasas(S.c[S.c.length - 1].close); S.velas.applyOptions({ priceFormat: { type: 'price', precision: pr, minMove: Math.pow(10, -pr) } }); }
       S.velas.setData(S.c); S.velasEm = Date.now();
       msg.hidden = !!S.c.length; if (!S.c.length) msg.textContent = 'sem velas para ' + F.par(ativo) + ' em ' + tf;
       if (S.refit) { S.chart.timeScale().fitContent(); S.velas.priceScale().applyOptions({ autoScale: true }); S.refit = false; }
@@ -223,10 +224,12 @@
   }
   function marcadores() {
     if (!S || !S.velas) return;
-    var e = S.estado || {}, T = tema(), seg = TF_SEG[S.tf] || 900, mk = [];
+    /* no celular o rótulo da seta ("LONG", "SHORT aberta") encavala com o vizinho e vira "LONGLONGLO":
+       a seta e a cor já dizem o lado, então lá o texto sai */
+    var e = S.estado || {}, T = tema(), seg = TF_SEG[S.tf] || 900, mk = [], estreito = $('op-chart').clientWidth < 560;
     var snap = function (dt) { var d = A.ts(dt); return d ? Math.floor(d.getTime() / 1000 / seg) * seg : null; };
-    (e.trades || []).filter(function (t) { return t.ativo === S.ativo && t.aberto_em; }).forEach(function (t) { var tm = snap(t.aberto_em); if (tm) mk.push({ time: tm, position: t.direcao === 'LONG' ? 'belowBar' : 'aboveBar', color: t.direcao === 'LONG' ? T.pos : T.neg, shape: t.direcao === 'LONG' ? 'arrowUp' : 'arrowDown', text: t.direcao }); });
-    (e.posicoes || []).filter(function (p) { return p.ativo === S.ativo && p.aberto_em; }).forEach(function (p) { var tm = snap(p.aberto_em); if (tm) mk.push({ time: tm, position: p.direcao === 'LONG' ? 'belowBar' : 'aboveBar', color: T.warn, shape: p.direcao === 'LONG' ? 'arrowUp' : 'arrowDown', text: p.direcao + ' aberta' }); });
+    (e.trades || []).filter(function (t) { return t.ativo === S.ativo && t.aberto_em; }).forEach(function (t) { var tm = snap(t.aberto_em); if (tm) mk.push({ time: tm, position: t.direcao === 'LONG' ? 'belowBar' : 'aboveBar', color: t.direcao === 'LONG' ? T.pos : T.neg, shape: t.direcao === 'LONG' ? 'arrowUp' : 'arrowDown', text: estreito ? '' : t.direcao }); });
+    (e.posicoes || []).filter(function (p) { return p.ativo === S.ativo && p.aberto_em; }).forEach(function (p) { var tm = snap(p.aberto_em); if (tm) mk.push({ time: tm, position: p.direcao === 'LONG' ? 'belowBar' : 'aboveBar', color: T.warn, shape: p.direcao === 'LONG' ? 'arrowUp' : 'arrowDown', text: estreito ? 'aberta' : p.direcao + ' aberta' }); });
     var t0 = S.c.length ? S.c[0].time : 0; mk = mk.filter(function (m) { return m.time >= t0; }).sort(function (a, b) { return a.time - b.time; });
     try { S.velas.setMarkers(mk); } catch (err) {}
   }
@@ -243,7 +246,7 @@
     var v = $('op-var');
     if (S.c.length > 1) { var ch = (S.c[S.c.length - 1].close / S.c[0].open - 1) * 100; v.className = 'mono ' + F.cls(ch); v.textContent = F.pct(ch) + ' nas ' + S.c.length + ' velas'; } else v.textContent = '';
     var at = atr(S.c, 14);
-    $('op-sub').textContent = S.tf + ' · ' + S.c.length + ' velas' + (at ? ' · ATR(14) ' + F.px(at) + ' (' + F.f2(at / (px || 1) * 100) + '%)' : '') + ' · horário do eixo em UTC, como no clássico';
+    $('op-sub').textContent = S.tf + ' · ' + S.c.length + ' velas' + (at ? ' · ATR(14) ' + F.px(at) + ' (' + F.f2(at / (px || 1) * 100) + '%)' : '') + ' · eixo em hora de São Paulo';
     Array.prototype.forEach.call($('op-tf').children, function (b) { b.setAttribute('aria-pressed', String(b.dataset.tf === S.tf)); });
   }
   function analise() {
@@ -251,7 +254,7 @@
     if (!s || s.ativo !== S.ativo || !S.anal) { el.innerHTML = ''; return; }
     var a = S.anal, sn = a.snapshot || {}, st = A.statusEntrada(s, S.precos[s.ativo] || sn.preco);
     el.innerHTML = '<div class="anal"><div class="sg-top"><b>Análise do sinal</b><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(s.direcao) + '</span><span class="chip neutro">' + A.esc(s.tf) + ' · ' + A.esc(s.tipo || '') + '</span><span class="chip ' + st.cls + '">' + st.txt + '</span><button type="button" class="btn ghost sm" data-fecha-anal style="margin-left:auto">fechar</button></div>' +
-      '<p>' + A.esc(a.leitura || '') + '</p><div class="g"><div><span>RSI</span>' + A.esc(sn.rsi) + '</div><div><span>ADX</span>' + A.esc(sn.adx) + '</div><div><span>EMA 20</span>' + F.px(sn.ema20) + '</div><div><span>EMA 50</span>' + F.px(sn.ema50) + '</div><div><span>Bollinger</span>' + F.px(sn.bb_lo) + '–' + F.px(sn.bb_up) + '</div></div>' +
+      '<p>' + A.esc(F.decBR(a.leitura)) + '</p><div class="g"><div><span>RSI</span>' + (sn.rsi != null ? F.f1(+sn.rsi) : '—') + '</div><div><span>ADX</span>' + (sn.adx != null ? F.f1(+sn.adx) : '—') + '</div><div><span>EMA 20</span>' + F.px(sn.ema20) + '</div><div><span>EMA 50</span>' + F.px(sn.ema50) + '</div><div><span>Bollinger</span>' + F.px(sn.bb_lo) + '–' + F.px(sn.bb_up) + '</div></div>' +
       '<div class="sg-act" style="margin-top:10px"><button type="button" class="btn primary sm" data-conf="' + s.id + '">Confirmar com prévia de risco</button><button type="button" class="btn ghost sm" data-pular="' + s.id + '">Pular</button></div>' +
       (S.tf !== s.tf ? '<div class="mute" style="font-size:11px;margin-top:8px">O sinal nasceu no ' + A.esc(s.tf) + '; a leitura acima é do ' + S.tf + '.</div>' : '') + '</div>';
   }
@@ -264,10 +267,10 @@
       if (!S || S.ativo !== ativo) return;
       if (!b) { $('op-book').innerHTML = '<div class="empty">Book indisponível para ' + A.esc(F.par(ativo)) + '.</div>'; return; }
       var lado = b.lado_grande === 'COMPRA' ? 'pos' : b.lado_grande === 'VENDA' ? 'neg' : '';
-      var k = function (v) { return 'R$ ' + F.f0((v || 0) / 1000) + 'k'; };
-      $('op-book').innerHTML = '<div class="bk-row"><span>Pressão no book (±1%)</span><span><span class="pos">' + F.f2(b.pressao_compra) + '% compra</span> · <span class="neg">' + F.f2(100 - b.pressao_compra) + '% venda</span></span></div>' +
+      var k = function (v) { return 'R$\u00a0' + F.f0((v || 0) / 1000) + 'k'; };
+      $('op-book').innerHTML = '<div class="bk-row"><span>Pressão no book (±1%)</span><span><span class="pos">' + F.f1(b.pressao_compra) + '% compra</span> · <span class="neg">' + F.f1(100 - b.pressao_compra) + '% venda</span></span></div>' +
         '<div class="bk-bar" aria-hidden="true"><i style="width:' + Math.max(0, Math.min(100, b.pressao_compra)) + '%"></i><b></b></div>' +
-        '<div class="bk-row"><span>Fluxo taker</span><span class="' + (b.fluxo_comprador >= 50 ? 'pos' : 'neg') + '">' + F.f2(b.fluxo_comprador) + '% comprando</span></div>' +
+        '<div class="bk-row"><span>Fluxo taker</span><span class="' + (b.fluxo_comprador >= 50 ? 'pos' : 'neg') + '">' + F.f1(b.fluxo_comprador) + '% comprando</span></div>' +
         '<div class="bk-row"><span>Dinheiro grande</span><span class="' + lado + '">' + A.esc(b.lado_grande) + ' <span class="txt2">(C ' + k(b.grande_compra) + ' · V ' + k(b.grande_venda) + ')</span></span></div>' +
         '<div class="bk-sep"></div>' +
         '<div class="bk-row"><span>Parede de compra</span><span>' + F.px(b.parede_compra && b.parede_compra.preco) + ' · ' + k(b.parede_compra && b.parede_compra.valor) + '</span></div>' +
