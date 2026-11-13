@@ -180,10 +180,12 @@
   }
 
   /* ---- fetch autenticado ---- */
-  async function apiFetch(path, opts) {
-    opts = opts || {};
+  /* `base` existe para o laboratório Micro [MICRO-1], que é um só e mora na conta A: com a B
+     selecionada, ele tem de falar com BASE e não com BASE/testeB. Sem base, é a conta da tela. */
+  async function apiFetch(path, opts, base) {
+    opts = opts || {}; var url = (base == null ? API : base) + path;
     var mk = function () { var h = Object.assign({}, opts.headers || {}); if (cred) h.Authorization = cred; return Object.assign({}, opts, { headers: h }); };
-    var r = await fetch(API + path, mk());
+    var r = await fetch(url, mk());
     if (r.status === 429) {
       /* o poll para (senão ele renova o próprio bloqueio), mas volta sozinho: antes ele só voltava
          com troca de aba, e a tela congelava dizendo "ao vivo" (o LED lê o /health, que é público) */
@@ -195,14 +197,14 @@
     }
     if (r.status === 401) {
       parar(); store.del('cbAuth'); cred = '';
-      if (await gateAbre()) r = await fetch(API + path, mk());
+      if (await gateAbre()) r = await fetch(url, mk());
     }
     return r;
   }
   /* GET (sem body) ou POST JSON. Erro HTTP vira exceção com o texto do backend. */
-  async function api(path, body) {
+  async function api(path, body, base) {
     var o = body !== undefined ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {};
-    var r = await apiFetch(path, o);
+    var r = await apiFetch(path, o, base);
     if (!r.ok) { var t = await r.text().catch(function () { return ''; }); var e = new Error(t || ('HTTP ' + r.status)); e.status = r.status; throw e; }
     return r.json();
   }
@@ -309,7 +311,7 @@
   function rgba(nome, a) { return 'rgba(' + cor(nome + '-rgb') + ',' + a + ')'; }
 
   window.APX = {
-    STATIC: STATIC, RM: RM, CONTA: CONTA, API: API, store: store, fmt: fmt, esc: esc,
+    STATIC: STATIC, RM: RM, CONTA: CONTA, API: API, BASE: BASE, store: store, fmt: fmt, esc: esc,
     ts: ts, dia: dia, ddmm: ddmm, hhmm: hhmm, idade: idade, hoje: hoje,
     on: on, off: off, emit: emit, toast: toast,
     api: api, apiFetch: apiFetch, erroTxt: erroTxt, saude: saude,

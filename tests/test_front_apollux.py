@@ -16,7 +16,7 @@ import pytest
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = os.path.join(RAIZ, "web")
 VIEWS = os.path.join(WEB, "app", "views")
-ROTAS_COM_VIEW = ["painel", "operar", "apollo", "analise", "carteira", "pesquisa"]
+ROTAS_COM_VIEW = ["painel", "operar", "apollo", "analise", "carteira", "pesquisa", "micro"]
 ROTAS_EM_BREVE = ["acoes", "fundamentos", "noticias", "mobile"]
 
 
@@ -148,7 +148,7 @@ def test_trava_diaria_nao_tem_controle_no_editor_de_config():
         assert chave in fora.group(1)
 
 
-def test_as_dez_rotas_estao_na_navegacao():
+def test_as_rotas_estao_na_navegacao():
     html = _ler(WEB, "index.html")
     rotas = re.findall(r'data-route="([a-z]+)"', html)
     assert rotas == ROTAS_COM_VIEW + ROTAS_EM_BREVE
