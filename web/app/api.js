@@ -32,21 +32,34 @@
   /* ---- formatação (pt-BR; números em mono tabular na tela) ---- */
   var f2 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   var f0 = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
+  var f1 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   var MENOS = '−';
   function n(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
+  /* casas de um preço: ~5-6 algarismos significativos, que é o tick da Binance Futures nessas faixas */
+  function pxCasas(v) { var a = Math.abs(n(v)); return a >= 10000 ? 1 : a >= 1000 ? 2 : a >= 10 ? 3 : a >= 1 ? 4 : a >= 0.01 ? 5 : 7; }
   var fmt = {
     f2: function (v) { return f2.format(n(v)); },
     f0: function (v) { return f0.format(n(v)); },
-    brl: function (v) { v = n(v); return (v < 0 ? MENOS : '') + 'R$ ' + f2.format(Math.abs(v)); },
+    f1: function (v) { return f1.format(n(v)); },
+    /* número com d casas fixas (eixo do gráfico: todas as marcas com a mesma precisão) */
+    fix: function (v, d) { return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }).format(n(v)); },
+    /* múltiplo de R com sinal: +0,12R · −0,40R */
+    r: function (v) { v = n(v); return (v > 0 ? '+' : v < 0 ? MENOS : '') + f2.format(Math.abs(v)) + 'R'; },
+    /* R$ e o número nunca se separam na quebra de linha (\u00a0): no celular saía "+R$" numa linha e "138,51" na outra */
+    brl: function (v) { v = n(v); return (v < 0 ? MENOS : '') + 'R$\u00a0' + f2.format(Math.abs(v)); },
     /* dinheiro com sinal explícito: P&L */
-    money: function (v) { v = n(v); return (v > 0 ? '+' : v < 0 ? MENOS : '') + 'R$ ' + f2.format(Math.abs(v)); },
+    money: function (v) { v = n(v); return (v > 0 ? '+' : v < 0 ? MENOS : '') + 'R$\u00a0' + f2.format(Math.abs(v)); },
     pct: function (v, d) { v = n(v); var f = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: d == null ? 2 : d, maximumFractionDigits: d == null ? 2 : d }); return (v > 0 ? '+' : v < 0 ? MENOS : '') + f.format(Math.abs(v)) + '%'; },
-    /* preço: casas conforme a grandeza (0,1621 · 15,31 · 69.110) */
+    /* preço: casas conforme a grandeza, as MESMAS do eixo do gráfico (pxCasas). Antes o texto tinha uma
+       casa a menos que o gráfico: XRP a 1,0242 virava "1,024" no cabeçalho e "1.0242" no eixo, e o
+       stop de DOGE a 0,06281 virava "0,0628", o que esconde 1 tick inteiro de distância. */
     px: function (v) {
-      v = n(v); var a = Math.abs(v), d = a >= 1000 ? 1 : a >= 100 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 4 : 6;
-      if (a >= 10000) d = 0;
+      v = n(v); var d = pxCasas(v);
       return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d }).format(v);
     },
+    pxCasas: function (v) { return pxCasas(v); },
+    /* texto do backend (leitura do motor) vem com ponto decimal ("ADX 20.1"): na tela tudo é vírgula */
+    decBR: function (s) { return String(s == null ? '' : s).replace(/(\d)\.(\d)/g, '$1,$2'); },
     par: function (a) { return String(a || '').replace('/USDT', 'USDT').replace(':USDT', ''); },
     base: function (a) { return String(a || '').split('/')[0]; },
     cls: function (v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : ''; }
@@ -264,6 +277,33 @@
     }));
   }
 
+  /* Expectativa em R: a série sobre `risco_abertura` (denominador gravado na abertura e que não se move) é a
+     honesta; a `expectancia_r` antiga divide pelo stop depois do trailing e sai enviesada para PARECER
+     melhor (db.metricas, [F-2]). A tela mostrava a antiga. Sem trade com risco gravado, "—" e não "+0,00R":
+     zero é medição, ausência não é. */
+  function expR(m) {
+    m = m || {};
+    if (m.n_r_ab) return { v: m.expectancia_r_ab, sqn: m.sqn_r_ab, n: m.n_r_ab, txt: fmt.r(m.expectancia_r_ab) };
+    return { v: 0, sqn: null, n: 0, txt: '—' };
+  }
+
+  /* Lightweight-Charts em pt-BR e no relógio de São Paulo. Sem isso o gráfico era o único lugar da tela
+     com ponto decimal ("1.0232" ao lado de "1,023") e com hora UTC (3 h adiantada em relação ao
+     resto do app, que é todo em hora de SP). O tempo das velas continua epoch UTC: só o RÓTULO muda.
+     Uso: createChart(el, Object.assign(opts, { localization: L.localization })) e
+     timeScale.tickMarkFormatter = L.tick. */
+  function lwcLocal(precoFmt) {
+    var tz = 'America/Sao_Paulo', mk = function (o) { try { return new Intl.DateTimeFormat('pt-BR', Object.assign({ timeZone: tz }, o)); } catch (e) { return new Intl.DateTimeFormat('pt-BR', o); } };
+    var fHora = mk({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }), fDia = mk({ day: '2-digit', month: '2-digit' }),
+      fMes = mk({ month: 'short' }), fAno = mk({ year: 'numeric' }), fTudo = mk({ day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    var dt = function (t) { return typeof t === 'number' ? new Date(t * 1000) : (t && t.year ? new Date(Date.UTC(t.year, t.month - 1, t.day, 12)) : new Date(t)); };
+    return {
+      localization: { locale: 'pt-BR', priceFormatter: precoFmt || fmt.px, timeFormatter: function (t) { return fTudo.format(dt(t)).replace(',', ''); } },
+      /* tickMarkType: 0 ano · 1 mês · 2 dia · 3 hora · 4 hora com segundos */
+      tick: function (t, tipo) { var d = dt(t); return tipo === 0 ? fAno.format(d) : tipo === 1 ? fMes.format(d).replace('.', '') : tipo === 2 ? fDia.format(d) : fHora.format(d); }
+    };
+  }
+
   /* Cores das paletas para quem só aceita string (canvas, lightweight-charts): lidas do :root na hora. */
   function cor(nome) { return getComputedStyle(root).getPropertyValue('--' + nome).trim(); }
   function rgba(nome, a) { return 'rgba(' + cor(nome + '-rgb') + ',' + a + ')'; }
@@ -275,7 +315,7 @@
     api: api, apiFetch: apiFetch, erroTxt: erroTxt, saude: saude,
     carregar: carregar, iniciar: iniciar, parar: parar, sair: sair, trocaConta: trocaConta,
     get estado() { return estado; }, get online() { return online; },
-    lib: lib, cor: cor, rgba: rgba,
+    lib: lib, cor: cor, rgba: rgba, lwcLocal: lwcLocal, expR: expR,
     _gateEntrar: gateEntrar, _gateAbre: gateAbre
   };
 })();
