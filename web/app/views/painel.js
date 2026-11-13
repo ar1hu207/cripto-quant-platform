@@ -235,7 +235,7 @@
     var chave = h.length + ':' + (h.length ? h[h.length - 1].ts + h[h.length - 1].equity_total : '');
     if (!animar && S.curvaChave === chave && S.curvaW === svg.clientWidth) return;
     S.curvaChave = chave; S.curvaW = svg.clientWidth;
-    $('pn-range').textContent = h.length ? A.ddmm(h[0].ts) + ' → ' + A.ddmm(h[h.length - 1].ts) + ' · ' + h.length + ' pontos amostrados · terreno decorativo ao fundo' : 'sem pontos ainda';
+    $('pn-range').textContent = h.length ? A.ddmm(h[0].ts) + ' → ' + A.ddmm(h[h.length - 1].ts) + ' · ' + h.length + ' pontos amostrados' : 'sem pontos ainda';
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     if (h.length < 2) { S.geo = null; return; }
     var W = Math.max(300, svg.clientWidth || wrap.clientWidth - 20), H = 210, pad = { l: 66, r: 16, t: 18, b: 24 }, n = h.length;
@@ -301,37 +301,78 @@
   }
   function tipFora() { var g = S && S.geo; if (g) { g.xh.style.opacity = 0; g.hd.style.opacity = 0; } var t = $('pn-tip'); if (t) t.hidden = true; }
 
-  /* ---------- terreno de partículas (decorativo; para fora da tela, com a aba escondida e no destroy) ---------- */
-  function terreno() {
+  /* ---------- constelação (decorativa; para fora da tela, com a aba escondida e no destroy) ----------
+     Rede de pontos sobre a curva: de tempo em tempo um "pensamento" percorre as arestas e termina num nó.
+     A etiqueta do fim só existe quando há dado real para ela (sinal na fila ou posição aberta, vindos do
+     /estado); sem isso o percurso termina mudo. Nenhum nome ou número aqui é inventado. */
+  function constelacao() {
     var cv = $('pn-terrain'), hero = $('pn-hero'), ctx = cv.getContext('2d');
-    var small = window.matchMedia && matchMedia('(max-width: 640px)').matches;
-    var COLS = small ? 30 : 50, ROWS = small ? 18 : 30, pts = [];
-    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) pts.push({ x: (c / (COLS - 1)) * 2 - 1, z: (r / (ROWS - 1)) * 2 - 1 });
-    var T = { cw: 0, ch: 0, t: 0, last: 0, raf: 0, mx: 0, my: 0, tmx: 0, tmy: 0, visivel: true, acc: [77, 163, 255], glowK: 1 };
-    function lerTokens() { var a = A.cor('accent-rgb').split(',').map(Number); if (a.length === 3) T.acc = a; T.glowK = (parseFloat(A.cor('glow')) || .45) / .5; }
-    function size() { var dpr = Math.min(2, window.devicePixelRatio || 1); T.cw = hero.clientWidth; T.ch = hero.clientHeight; cv.width = Math.max(1, Math.round(T.cw * dpr)); cv.height = Math.max(1, Math.round(T.ch * dpr)); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
-    function alt(x, z, tm, amp) { var r2 = x * x * 1.1 + z * z * 1.8, peak = Math.exp(-r2 * 2.4), ridge = Math.exp(-Math.pow(x * .7 + z * .35, 2) * 7) * .2; var w = .07 * Math.sin(x * 6 + tm * .7) * Math.cos(z * 5 - tm * .5) + .045 * Math.sin((x - z) * 9 + tm * .9); return (peak + ridge) * amp + w; }
+    var PASSO = 230, ESFRIA = 2200, MARCA = 2600;
+    var T = { cw: 0, ch: 0, t: 0, last: 0, raf: 0, visivel: true, acc: [77, 163, 255], nos: [], ar: {}, andando: [], marcas: [], prox: 0, seed: 7, k: 0 };
+    function rnd() { T.seed |= 0; T.seed = T.seed + 0x6D2B79F5 | 0; var x = Math.imul(T.seed ^ T.seed >>> 15, 1 | T.seed); x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x; return ((x ^ x >>> 14) >>> 0) / 4294967296; }
+    function c01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+    function rgba(a) { return 'rgba(' + T.acc[0] + ',' + T.acc[1] + ',' + T.acc[2] + ',' + a.toFixed(3) + ')'; }
+    function lerTokens() { var a = A.cor('accent-rgb').split(',').map(Number); if (a.length === 3) T.acc = a; }
+    /* a rede fica ACIMA do gráfico (210 px de SVG + folga); em hero baixo demais ela ocupa o que houver */
+    function zona() { var topo = 58, base = T.ch - 236; if (base - topo < 80) base = T.ch - 12; return { topo: topo, alt: Math.max(20, base - topo) }; }
+    function monta() {
+      var N = T.cw < 640 ? 60 : 120, z = zona(), asp = T.cw / Math.max(1, z.alt), i;
+      T.seed = 7; T.nos = []; T.ar = {}; T.andando = []; T.marcas = [];
+      for (i = 0; i < N; i++) T.nos.push({ fx: rnd(), fy: rnd(), ph: rnd() * 6.28, sz: .8 + rnd() * 1.2, q: -1e9, viz: [] });
+      T.nos.forEach(function (a, i) {
+        T.nos.map(function (b, j) { return { j: j, d: Math.hypot((a.fx - b.fx) * asp, a.fy - b.fy) }; })
+          .filter(function (o) { return o.j !== i; }).sort(function (p, q) { return p.d - q.d; }).slice(0, 3)
+          .forEach(function (o) { var lo = Math.min(i, o.j), hi = Math.max(i, o.j); T.ar[lo + '-' + hi] = { a: lo, b: hi, q: -1e9 }; });
+      });
+      Object.keys(T.ar).forEach(function (k) { var e = T.ar[k]; T.nos[e.a].viz.push(e.b); T.nos[e.b].viz.push(e.a); });
+    }
+    function size() { var dpr = Math.min(2, window.devicePixelRatio || 1); T.cw = hero.clientWidth; T.ch = hero.clientHeight; cv.width = Math.max(1, Math.round(T.cw * dpr)); cv.height = Math.max(1, Math.round(T.ch * dpr)); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); monta(); }
+    /* o que o percurso "decidiu": roda pelos sinais da fila e pelas posições abertas do /estado, nessa ordem */
+    function etiqueta() {
+      var e = (S && S.estado) || {}, l = (e.pendentes || []).map(function (s) { return F.par(s.ativo) + ' · ' + String(s.direcao || '').toLowerCase() + ' · ' + Math.round(s.conviccao || 0); })
+        .concat((e.posicoes || []).map(function (p) { return F.par(p.ativo) + ' · ' + String(p.direcao || '').toLowerCase() + ' · aberta'; }));
+      return l.length ? l[T.k++ % l.length] : '';
+    }
+    function ponto(x, y, r, a) { ctx.fillStyle = rgba(a); ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill(); }
+    function reta(x1, y1, x2, y2, a, w) { ctx.strokeStyle = rgba(a); ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
     function draw() {
-      T.mx += (T.tmx - T.mx) * .05; T.my += (T.tmy - T.my) * .05;
+      var t = T.t * 1000, z = zona(), nos = T.nos, k;
       ctx.clearRect(0, 0, T.cw, T.ch);
-      var t = T.t, amp = .8 + .12 * Math.sin(t * .5), ang = t * .12 + T.mx * .5, tilt = .72 + T.my * .12;
-      var ca = Math.cos(ang), sa = Math.sin(ang), ct = Math.cos(tilt), st = Math.sin(tilt);
-      var Sz = Math.min(T.cw * .46, T.ch * .6), cx = T.cw * .5, cy = T.ch * .55, D = 3.4, R = T.acc[0], G = T.acc[1], B = T.acc[2], top = 1.2 * amp;
-      for (var i = 0; i < pts.length; i++) {
-        var p = pts[i], yy = alt(p.x, p.z, t, amp), x1 = p.x * ca - p.z * sa, z1 = p.x * sa + p.z * ca;
-        var y2 = yy * ct - z1 * st, z2 = yy * st + z1 * ct, sc = D / (D + z2), sx = cx + x1 * sc * Sz, sy = cy - (y2 - .1) * sc * Sz;
-        var hh = Math.max(0, Math.min(1, yy / top)), a = .12 + hh * .8, rad = (.7 + hh * 1.5) * sc;
-        if (hh > .55) { ctx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + Math.min(1, (hh - .55) * .28 * T.glowK).toFixed(3) + ')'; ctx.beginPath(); ctx.arc(sx, sy, rad * 3.2, 0, 6.2832); ctx.fill(); }
-        ctx.fillStyle = 'rgba(' + R + ',' + G + ',' + B + ',' + a.toFixed(3) + ')'; ctx.beginPath(); ctx.arc(sx, sy, rad, 0, 6.2832); ctx.fill();
+      nos.forEach(function (n) { n.x = 30 + n.fx * (T.cw - 60) + Math.sin(t * .0005 + n.ph) * 7; n.y = z.topo + n.fy * z.alt + Math.cos(t * .0004 + n.ph * 1.7) * 7; });
+      if (t > T.prox && T.andando.length < 3 && nos.length) {
+        T.prox = t + 600 + rnd() * 900;
+        var cur = Math.floor(rnd() * nos.length), cam = [cur], len = 5 + Math.floor(rnd() * 4);
+        while (cam.length < len) { var op = nos[cur].viz.filter(function (j) { return cam.indexOf(j) < 0; }); if (!op.length) break; cur = op[Math.floor(rnd() * op.length)]; cam.push(cur); }
+        if (cam.length >= 3) { nos[cam[0]].q = t; T.andando.push({ cam: cam, t0: t, feito: 0 }); }
       }
+      for (k in T.ar) { var e = T.ar[k]; reta(nos[e.a].x, nos[e.a].y, nos[e.b].x, nos[e.b].y, .06 + .6 * c01(1 - (t - e.q) / ESFRIA), 1); }
+      T.andando = T.andando.filter(function (w) {
+        var kk = Math.floor((t - w.t0) / PASSO), f = ((t - w.t0) % PASSO) / PASSO, fim = w.cam.length - 1;
+        while (w.feito < Math.min(kk, fim)) { var a = w.cam[w.feito], b = w.cam[w.feito + 1]; T.ar[Math.min(a, b) + '-' + Math.max(a, b)].q = t; nos[b].q = t; w.feito++; }
+        if (kk >= fim) { T.marcas.push({ n: w.cam[fim], t: t, txt: etiqueta() }); return false; }
+        var p = nos[w.cam[kk]], q = nos[w.cam[kk + 1]], x = p.x + (q.x - p.x) * f, y = p.y + (q.y - p.y) * f;
+        reta(p.x, p.y, x, y, .8, 1.2);
+        ctx.save(); ctx.shadowColor = rgba(.9); ctx.shadowBlur = 10; ponto(x, y, 2.4, 1); ctx.restore();
+        return true;
+      });
+      nos.forEach(function (n) { var h = c01(1 - (t - n.q) / ESFRIA); ponto(n.x, n.y, n.sz + h * 1.6, .3 + .7 * h); });
+      T.marcas = T.marcas.filter(function (m) {
+        var p = (t - m.t) / MARCA; if (p >= 1) return false;
+        var n = nos[m.n], a = Math.min(1, p * 6) * c01((1 - p) * 3);
+        ctx.strokeStyle = rgba((1 - p) * .7); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(n.x, n.y, 5 + p * 18, 0, 6.2832); ctx.stroke();
+        ponto(n.x, n.y, 3.2, a);
+        if (m.txt) {
+          var dir = n.x > T.cw - 200;
+          ctx.font = '11px ' + (A.cor('f-mono') || 'ui-monospace,Consolas,monospace'); ctx.textBaseline = 'middle'; ctx.textAlign = dir ? 'right' : 'left';
+          ctx.fillStyle = rgba(a * .95); ctx.fillText(m.txt, dir ? n.x - 14 : n.x + 14, n.y - 12);
+        }
+        return true;
+      });
     }
     function rodando() { return !A.RM && T.visivel && !document.hidden && S && !S.morto; }
     function frame(now) { T.raf = 0; if (!rodando()) return; var dt = T.last ? Math.min(.05, (now - T.last) / 1000) : .016; T.last = now; T.t += dt; draw(); T.raf = requestAnimationFrame(frame); }
     function liga() { if (rodando() && !T.raf) { T.last = 0; T.raf = requestAnimationFrame(frame); } }
     function desliga() { if (T.raf) cancelAnimationFrame(T.raf); T.raf = 0; }
-    var mv = function (e) { var b = hero.getBoundingClientRect(); T.tmx = ((e.clientX - b.left) / b.width - .5) * 2; T.tmy = ((e.clientY - b.top) / b.height - .5) * 2; };
-    var ml = function () { T.tmx = 0; T.tmy = 0; };
-    hero.addEventListener('mousemove', mv); hero.addEventListener('mouseleave', ml);
     var vis = function () { if (document.hidden) desliga(); else liga(); };
     document.addEventListener('visibilitychange', vis);
     var io = window.IntersectionObserver ? new IntersectionObserver(function (es) { T.visivel = es[es.length - 1].isIntersecting; if (T.visivel) liga(); else desliga(); }) : null;
@@ -340,7 +381,7 @@
     if (ro) ro.observe(hero);
     var offPal = A.on('paleta', function () { lerTokens(); draw(); });
     lerTokens(); size(); draw(); liga();
-    return function () { desliga(); clearTimeout(rt); if (io) io.disconnect(); if (ro) ro.disconnect(); offPal(); document.removeEventListener('visibilitychange', vis); hero.removeEventListener('mousemove', mv); hero.removeEventListener('mouseleave', ml); };
+    return function () { desliga(); clearTimeout(rt); if (io) io.disconnect(); if (ro) ro.disconnect(); offPal(); document.removeEventListener('visibilitychange', vis); };
   }
 
   /* ---------- win rate, Apollo, trava ---------- */
@@ -610,7 +651,7 @@
     init: function (root) {
       S = { root: root, estado: null, pnlHist: {}, saidas: {}, timers: [], offs: [], piorSeq: null, gaugeV: null };
       S.offs.push(A.on('estado', render));
-      S.stopTerreno = terreno();
+      S.stopTerreno = constelacao();
       /* pointer, não mouse: no celular o toque também mostra o valor do ponto */
       var svg = $('pn-eq-svg'); svg.addEventListener('pointermove', tipCurva); svg.addEventListener('pointerdown', tipCurva); svg.addEventListener('pointerleave', tipFora);
       var cells = $('pn-dd'); cells.addEventListener('mouseover', ddTip); cells.addEventListener('focusin', ddTip);
