@@ -51,7 +51,6 @@ de propósito — não conserte esses imports (`legado/README.md`).
 | `autotrader.py` | modo automático (config `auto_trade`, desligado por padrão) |
 | `simulador.executar` | **[EX-1] ponto único de entrada**: despacha por `exec_modo`. `abrir()` (mercado) segue intacto ao lado |
 | `dca.py` | acumulação periódica, sem alavancagem, banca conceitualmente separada |
-| `micro.py` | **[MICRO-1]** laboratório de microtrades (vista Micro): OFI no `bookTicker`, banca e `micro.db` próprios, não toca o bot |
 | `alertas.py` | Telegram **opcional**: sem token na config é no-op |
 | `logbot.py` | `from logbot import log` → grava em **`plataforma.log`** (10 MB × 5, teto no código) |
 | `pesquisa/validacao.py` | walk-forward + DSR + bootstrap — a régua que barra ideia ruim |

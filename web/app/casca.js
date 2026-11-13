@@ -213,7 +213,7 @@
       nota: 'a mesma hierarquia do desktop, empilhada: risco e P&L na primeira dobra',
       sketch: '<div class="wf"><div class="wf-row"><div class="wf-b">fechamento do dia · ligado</div><div class="wf-b">trava diária · sempre ligado</div><div class="wf-b">oportunidade · limiar de convicção</div><div class="wf-b">ordens · preenchida ou expirada</div><div class="wf-b">horário silencioso</div></div></div>' }
   };
-  var TIT = { painel: 'Painel', operar: 'Operar', apollo: 'Apollo', analise: 'Análise', carteira: 'Carteira', pesquisa: 'Pesquisa', micro: 'Microtrades', acoes: 'Ações BR', fundamentos: 'Fundamentos (LLM)', noticias: 'Notícias', mobile: 'Mobile & Push' };
+  var TIT = { painel: 'Painel', operar: 'Operar', apollo: 'Apollo', analise: 'Análise', carteira: 'Carteira', pesquisa: 'Pesquisa', acoes: 'Ações BR', fundamentos: 'Fundamentos (LLM)', noticias: 'Notícias', mobile: 'Mobile & Push' };
   function ucHtml(route, c) {
     var lis = c.itens.map(function (it) { return '<li><span><b>' + it[0] + '</b> · ' + it[1] + '</span></li>'; }).join('');
     return '<section class="card uc" aria-label="' + TIT[route] + ', em construção"><div class="uc-info"><span class="uc-tag">' + LOCK + 'em construção · fase <b>' + c.fase + '</b></span>' +
