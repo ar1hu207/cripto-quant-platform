@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -916,6 +917,41 @@ def _amostrar(seq, alvo=125):
     return [seq[i] for i in idx]
 
 
+def _amostrar_tempo(serie, alvo=125):
+    """Reduz a curva de equity a ~alvo pontos igualmente espaçados no TEMPO.
+
+    O `_amostrar` acima é uniforme em POSIÇÃO, e a série não é uniforme no tempo: a poda
+    do [P2-11] guarda 15 s nas últimas 48 h e 5 min antes. Com 11 dias de banca, ~80% das
+    linhas estão nos 2 últimos dias, então ~100 dos 125 pontos caíam ali e os 9 dias
+    anteriores ficavam com 1 ponto a cada ~10 h. O gráfico escondia os vales desses dias, o
+    "DD atual" do painel media o pico numa curva sem os picos, e o P&L do mês pela curva
+    pegava um ponto "antes do dia 1" que podia ser de horas antes (o painel documenta esse
+    erro, de R$ 80).
+
+    Um balde por fatia de tempo e, de cada balde, o ÚLTIMO ponto (o critério da poda: o
+    último ponto da janela é o valor daquele instante). O primeiro e o último ponto da série
+    entram sempre. Mesmo teto do `_amostrar` (franquia de saída, CLAUDE.md §2) e mesmo
+    formato: o front não precisa mudar por causa disto. A versão-sintoma seria subir o
+    `alvo` até o passado ficar visível — pagando em franquia o que é erro de amostragem.
+    Se algum `ts` não parsear, devolve o `_amostrar`: pior, mas não errado.
+    """
+    n = len(serie)
+    if n <= alvo:
+        return serie
+    try:
+        t = [datetime.fromisoformat(str(p["ts"])[:19]).timestamp() for p in serie]
+    except (ValueError, KeyError, TypeError):
+        return _amostrar(serie, alvo)
+    t0, span = t[0], t[-1] - t[0]
+    if span <= 0:
+        return _amostrar(serie, alvo)
+    ultimo = {}
+    for i, ti in enumerate(t):                     # em ordem: o último índice de cada balde vence
+        ultimo[min(alvo - 2, max(0, int((ti - t0) / span * (alvo - 1))))] = i
+    idx = sorted(set(ultimo.values()) | {0, n - 1})
+    return [serie[i] for i in idx]
+
+
 @app.get("/estado")
 def estado():
     """Tudo que a UI precisa num request só."""
@@ -939,7 +975,8 @@ def estado():
         # seja o "gráfico da banca" mostrava ~2h e nunca a trajetória — que é a única
         # leitura que ele existe para dar. O formato do payload não muda (ts/banca/
         # equity_total, em ordem cronológica), então o front não muda junto.
-        "equity_hist": _amostrar(db.serie_equity()),
+        # Amostrada por TEMPO, não por posição: ver `_amostrar_tempo`.
+        "equity_hist": _amostrar_tempo(db.serie_equity()),
         "metricas": db.metricas(),
         "risco": simulador.guarda_risco(),
         "dca": dca.listar(),
