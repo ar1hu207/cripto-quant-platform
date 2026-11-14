@@ -332,7 +332,10 @@ def auto_executar(saidas=None):
             # conta nos tetos (`simulador._pendentes`), entao tratar pendente como "ainda tem
             # espaco" faria o bot colocar mais ordens do que o teto permite e depois apanhar
             # delas uma a uma no preenchimento.
-            tipo, ident = simulador.executar(s["id"], valor, lev)
+            # `exige_auto`: o `auto_trade` lido no topo deste ciclo pode ter sido desligado pelo
+            # `/panico` enquanto o laço estava na rede; quem confere de novo é o simulador, sob o
+            # mesmo lock em que o pânico desliga.
+            tipo, ident = simulador.executar(s["id"], valor, lev, exige_auto=True)
             pid = ident if tipo == "posicao" else None
             res["abertos"].append({"ativo": s["ativo"], "direcao": s["direcao"], "tf": s.get("tf"),
                                    "valor": valor, "lev": lev, "conviccao": s["conviccao"] or 0,
@@ -345,8 +348,8 @@ def auto_executar(saidas=None):
                             (s["ativo"], s["id"]))
         except ValueError as e:
             res["rejeitados"].append({"ativo": s["ativo"], "erro": str(e)})
-            if "teto" in str(e) or "trava" in str(e):     # teto/trava: nao adianta tentar mais nesse ciclo
-                break
+            if "teto" in str(e) or "trava" in str(e) or "desligado" in str(e):
+                break                                     # teto/trava/pânico: o ciclo acabou
         except Exception as e:                            # rede/etc: pula o candidato, não derruba o ciclo
             res["rejeitados"].append({"ativo": s["ativo"], "erro": f"falha: {e}"})
             log(f"auto-trader abrir erro {s['ativo']}: {e}", "error")

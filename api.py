@@ -1249,12 +1249,18 @@ def panico(pular_pendentes: bool = False):
     padrão: é decisão de produto (a fila pendente é combustível para religar por engano,
     mas o auto-trader já só opera sinal com até `auto_freshness_min` minutos, então ela
     envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
-    db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
-    _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
-    # [EX-1] Ordem post-only pendente é posição esperando o preço: sem cancelar aqui, ela enchia
-    # no ciclo seguinte e o pânico deixava o sistema com posição aberta. Logo depois de desligar
-    # o bot e antes de fechar, pela mesma razão de ordem: matar a fonte primeiro.
-    canceladas = _cancelar_ordens("panico")
+    # Desligar e cancelar acontecem SOB o lock de abertura. "Antes de fechar" não bastava: um
+    # ciclo do bot que já tinha lido `auto_trade=1` e estava buscando preço na rede abria a
+    # posição DEPOIS deste ponto, e o pânico não volta para fechá-la. Com o lock, a entrada do
+    # bot ou terminou antes (e a posição dela está na lista que se fecha abaixo) ou confere o
+    # `auto_trade` depois, dentro do mesmo lock, e desiste (`simulador._checar_tetos`). O mesmo
+    # vale para ordem enchendo: `_abrir_da_ordem` só enche ordem ainda 'pendente', sob este lock.
+    with simulador._abrir_lock:
+        db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
+        _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
+        # [EX-1] Ordem post-only pendente é posição esperando o preço: sem cancelar aqui, ela
+        # enchia no ciclo seguinte e o pânico deixava o sistema com posição aberta.
+        canceladas = _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
     n, total = 0, 0.0

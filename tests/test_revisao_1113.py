@@ -112,3 +112,106 @@ def test_tp_plano_gravado_com_fracao_ruim_nao_credita(banco, sem_rede):
     assert _banca() == antes
     with db.conectar() as c:
         assert c.execute("SELECT valor_reais FROM posicoes WHERE id=?", (pid,)).fetchone()[0] == 100.0
+
+
+# ================================================================= entrada
+def _sem_tetos():
+    db.set_config("exposicao_max", "0")       # o catalogo aceita: "0 = sem teto"
+    db.set_config("risco_aberto_max", "0")
+
+
+@pytest.mark.parametrize("abre", [simulador.abrir, simulador.colocar_ordem])
+def test_entrada_margem_nunca_passa_da_banca_mesmo_sem_teto(banco, sem_rede, abre):
+    """`exposicao_max=0` desliga o teto de CONFIGURACAO, nao a aritmetica: margem e dinheiro que
+    a conta tem de ter. Banca 1000, margem pedida 5000."""
+    _sem_tetos()
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    with pytest.raises(ValueError, match="teto de margem"):
+        abre(sid, 5000.0, 2)
+    assert _status(sid) == "novo"             # recusa por teto nao consome o sinal
+    assert _n("posicoes") == 0 and _n("ordens") == 0
+
+
+@pytest.mark.parametrize("abre", [simulador.abrir, simulador.colocar_ordem])
+def test_entrada_margem_somada_as_abertas_nao_passa_da_banca(banco, sem_rede, abre):
+    _sem_tetos()
+    semear_posicao(ativo="ETH/USDT", valor_reais=700.0, alavancagem=1, stop=None)
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    with pytest.raises(ValueError, match="teto de margem"):
+        abre(sid, 400.0, 2)                   # 700 + 400 > 1000
+    assert _status(sid) == "novo"
+
+
+@pytest.mark.parametrize("abre", [simulador.abrir, simulador.colocar_ordem])
+@pytest.mark.parametrize("lev", [0.5, 126, 500])
+def test_entrada_alavancagem_fora_do_que_a_corretora_oferece(banco, sem_rede, abre, lev):
+    """Stop a 0,05% da entrada: a geometria stop x liquidacao deixava 500x passar (0,9/0,0005 =
+    1800x). 0,5x nem existe como alavancagem. A faixa e a fisica da corretora (1x a 125x), nao
+    uma politica de risco: quem aperta mais que isso e a config do dono."""
+    sid = semear_sinal(preco=100.0, stop=99.95)
+    with pytest.raises(ValueError, match="alavancagem"):
+        abre(sid, 50.0, lev)
+    assert _status(sid) == "novo"
+    assert _n("posicoes") == 0 and _n("ordens") == 0
+
+
+def test_entrada_alavancagem_na_borda_continua_valendo(banco, sem_rede):
+    sid = semear_sinal(preco=100.0, stop=99.95)
+    assert simulador.abrir(sid, 50.0, 125) > 0
+    sid = semear_sinal(ativo="ETH/USDT", preco=100.0, stop=95.0)
+    assert simulador.abrir(sid, 50.0, 1) > 0
+
+
+# ================================================================== panico
+def test_panico_no_meio_do_ciclo_do_bot_nao_deixa_posicao(cliente, sem_rede, monkeypatch):
+    """O bot leu `auto_trade=1`, escolheu o sinal e foi buscar o preco na rede. Nesse intervalo
+    o dono aperta o panico. Quando a rede responde, o bot NAO pode abrir: o panico ja passou e
+    nao volta para fechar o que nasceu depois dele."""
+    db.set_config("auto_trade", "1")
+    db.set_config("tendencia_filtro", "off")
+    db.set_config("exigir_fluxo", "0")
+    sid = semear_sinal(preco=100.0, stop=95.0, conviccao=90)
+    apertou = {"n": 0}
+
+    def preco_lento(ativo):
+        if not apertou["n"]:                  # o panico chega enquanto o bot esta na rede
+            apertou["n"] += 1
+            assert cliente.post("/panico").json()["auto_desligado"] is True
+        return 100.0
+
+    monkeypatch.setattr(simulador, "preco_ao_vivo", preco_lento)
+    res = autotrader.auto_executar([])
+    assert apertou["n"] == 1, "o cenario nao exercitou a corrida"
+    assert res["abertos"] == []
+    assert _n("posicoes", "WHERE status='aberta'") == 0
+    assert _n("ordens", "WHERE status='pendente'") == 0
+    assert _status(sid) == "novo"             # a recusa nao consome o sinal
+
+
+def test_panico_idem_no_caminho_post_only(cliente, sem_rede, monkeypatch):
+    db.set_config("auto_trade", "1")
+    db.set_config("tendencia_filtro", "off")
+    db.set_config("exigir_fluxo", "0")
+    db.set_config("exec_modo", "post_only")
+    semear_sinal(preco=100.0, stop=95.0, conviccao=90)
+    apertou = {"n": 0}
+
+    def preco_lento(ativo):
+        if not apertou["n"]:
+            apertou["n"] += 1
+            cliente.post("/panico")
+        return 100.0
+
+    monkeypatch.setattr(simulador, "preco_ao_vivo", preco_lento)
+    autotrader.auto_executar([])
+    assert apertou["n"] == 1
+    assert _n("ordens", "WHERE status='pendente'") == 0
+
+
+def test_entrada_manual_nao_depende_do_bot_estar_ligado(banco, sem_rede):
+    """A trava nova vale so para quem abre EM NOME do bot: o dono confirma sinal a mao com o
+    auto-trader desligado, que e o estado normal do fluxo manual."""
+    assert db.get_config()["auto_trade"] == "0"
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    tipo, pid = simulador.executar(sid, 50.0, 2)
+    assert tipo == "posicao" and pid > 0

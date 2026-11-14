@@ -259,9 +259,73 @@ def _positivo(x):
         return False
 
 
-def abrir(sinal_id, valor_reais, alavancagem):
-    if not _positivo(valor_reais) or not _positivo(alavancagem):   # valida parâmetros (degenerada, ÷0, NaN)
+# Faixa de alavancagem que EXISTE: 1x é posição sem alavancagem e 125x é o máximo que a Binance
+# Futures oferece em qualquer par. Não é política de risco (essa é a config do dono, que aperta
+# bem antes: o catálogo limita `alavancagem_padrao` e `auto_lev_max` a 50x); é o limite físico,
+# e mora aqui pelo mesmo motivo do [P1-12]: `abrir()` e `colocar_ordem()` são os únicos pontos
+# por onde TODO fluxo passa. A geometria stop × liquidação sozinha não cobre isto: com stop a
+# 0,05% da entrada ela deixa passar 1.800x, e 0,5x nem alavancagem é.
+LEV_MIN, LEV_MAX = 1.0, 125.0
+
+
+def _validar_entrada(valor_reais, alavancagem):
+    """Os parâmetros que o chamador escolhe, validados no ponto por onde todo fluxo passa."""
+    if not _positivo(valor_reais) or not _positivo(alavancagem):   # degenerada, ÷0, NaN
         raise ValueError("valor de entrada e alavancagem devem ser > 0")
+    if not LEV_MIN <= float(alavancagem) <= LEV_MAX:
+        raise ValueError(f"alavancagem {float(alavancagem):g}x fora da faixa que a corretora "
+                         f"oferece ({LEV_MIN:g}x a {LEV_MAX:g}x)")
+
+
+def _auto_ligado(con):
+    r = con.execute("SELECT valor FROM config WHERE chave='auto_trade'").fetchone()
+    return bool(r) and str(r["valor"]).strip().lower() in ("1", "true")
+
+
+def _checar_tetos(con, g, valor_reais, risco_novo, exp_max, exige_auto=False):
+    """Os tetos de uma entrada nova, para os DOIS caminhos (mercado e post-only). Levanta
+    ValueError com o motivo; não devolve nada.
+
+    Roda DENTRO do `_abrir_lock` e na transação do claim, e ANTES dele: recusa por teto não
+    pode consumir o sinal (CLAUDE.md §2). Era o mesmo bloco escrito duas vezes, em `abrir()` e
+    em `colocar_ordem()`; uma regra nova de teto tinha de ser lembrada nos dois, e a regra da
+    banca abaixo é exatamente o tipo de coisa que entraria num só.
+
+    [EX-1] Ordem pendente conta como se já fosse posição: doze ordens que enchem no mesmo
+    minuto são doze posições, e um teto que só olha o que já abriu autoriza a exposição que
+    ele mesmo proíbe.
+
+    `exige_auto` é para quem abre EM NOME do bot: o `auto_trade` é relido aqui, dentro do lock,
+    porque o `/panico` o desliga sob este mesmo lock. Sem a releitura, um ciclo do bot que já
+    tinha lido `auto_trade=1` e estava na rede abria posição DEPOIS do pânico, e o pânico não
+    volta para fechar o que nasceu depois dele.
+    """
+    if exige_auto and not _auto_ligado(con):
+        raise ValueError("auto-trader desligado durante o ciclo — entrada do bot cancelada")
+    abertas = ([dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
+                                             "FROM posicoes WHERE status='aberta'")]
+               + _pendentes(con))
+    banca_atual = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
+    if g["risco_aberto_max_rs"] is not None:              # teto de risco-até-o-stop (recalc dentro do lock)
+        risco_ja = sum(_risco_posicao(p["valor_reais"], p["alavancagem"], p["entrada"], p["stop"])
+                       for p in abertas)
+        if risco_ja + risco_novo > g["risco_aberto_max_rs"]:
+            raise ValueError(f"teto de risco aberto — exposição passaria o limite "
+                             f"(R${risco_ja:.2f} + R${risco_novo:.2f} > R${g['risco_aberto_max_rs']:.2f})")
+    margem_ab = sum((p["valor_reais"] or 0) for p in abertas)
+    if exp_max > 0 and margem_ab + valor_reais > banca_atual * exp_max:   # teto de MARGEM configurado
+        raise ValueError(f"teto de margem — exposição (R${margem_ab + valor_reais:.2f}) passaria "
+                         f"{exp_max * 100:.0f}% da banca (R${banca_atual * exp_max:.2f})")
+    # `exposicao_max=0` desliga o teto de CONFIGURAÇÃO ("0 = sem teto"), não a aritmética: margem
+    # é dinheiro que a conta tem de ter. Sem esta linha, com o teto desligado dava para abrir
+    # R$5.000 de margem numa banca de R$1.000. Com o teto ligado (≤ 100%) ela nunca morde.
+    if margem_ab + valor_reais > banca_atual:
+        raise ValueError(f"teto de margem — a margem somada (R${margem_ab + valor_reais:.2f}) "
+                         f"passaria a banca inteira (R${banca_atual:.2f})")
+
+
+def abrir(sinal_id, valor_reais, alavancagem, exige_auto=False):
+    _validar_entrada(valor_reais, alavancagem)
     g = guarda_risco()
     if g["trava_dia"]:                                    # defesa: não abre com trava diária ativa
         raise ValueError("trava diária ativa — limite de perda do dia atingido")
@@ -308,25 +372,7 @@ def abrir(sinal_id, valor_reais, alavancagem):
     risco_ab = _risco_posicao(valor_reais, alavancagem, preco, stop)
     with _abrir_lock:                                     # serializa aberturas (worker + API) — sem TOCTOU no teto
         with db.conectar() as con:
-            # [EX-1] Ordem pendente conta nos tetos como se ja fosse posicao. APERTA a guarda, e
-            # de proposito: doze ordens pendentes que enchem no mesmo minuto sao doze posicoes, e
-            # um teto que so olha o que ja abriu autoriza uma exposicao que ele proprio proibe.
-            # Enquanto `exec_modo=mercado` a consulta devolve vazio e nada muda.
-            abertas = ([dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
-                                                     "FROM posicoes WHERE status='aberta'")]
-                       + _pendentes(con))
-            banca_atual = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
-            if g["risco_aberto_max_rs"] is not None:      # teto de risco-até-o-stop (recalc dentro do lock)
-                risco_ja = sum(_risco_posicao(p["valor_reais"], p["alavancagem"], p["entrada"], p["stop"])
-                               for p in abertas)
-                if risco_ja + risco_ab > g["risco_aberto_max_rs"]:
-                    raise ValueError(f"teto de risco aberto — exposição passaria o limite "
-                                     f"(R${risco_ja:.2f} + R${risco_ab:.2f} > R${g['risco_aberto_max_rs']:.2f})")
-            if exp_max > 0:                               # teto de MARGEM (exposição nominal vs banca)
-                margem_ab = sum((p["valor_reais"] or 0) for p in abertas)
-                if margem_ab + valor_reais > banca_atual * exp_max:
-                    raise ValueError(f"teto de margem — exposição (R${margem_ab + valor_reais:.2f}) passaria "
-                                     f"{exp_max * 100:.0f}% da banca (R${banca_atual * exp_max:.2f})")
+            _checar_tetos(con, g, valor_reais, risco_ab, exp_max, exige_auto)
             # CLAIM ATÔMICO do sinal, na mesma transação da inserção e antes dela: quem
             # ganhar o UPDATE (rowcount 1) abre a posição; o segundo pedido vê rowcount 0 e
             # é recusado. O pré-check lá em cima é conveniência — a exclusão mútua é AQUI.
@@ -359,7 +405,7 @@ def _pendentes(con):
                                  "FROM ordens WHERE status='pendente'")]
 
 
-def colocar_ordem(sinal_id, valor_reais, alavancagem):
+def colocar_ordem(sinal_id, valor_reais, alavancagem, exige_auto=False):
     """[EX-1] O caminho post-only: o sinal vira uma ordem que DESCANSA, nao uma posicao.
 
     Roda as MESMAS guardas do `abrir()`, na mesma ordem, com uma diferenca: a entrada avaliada
@@ -373,8 +419,7 @@ def colocar_ordem(sinal_id, valor_reais, alavancagem):
     [CX-1] mediu, e o [CX-3] mostrou que a alternativa -- esperar e mandar a mercado -- nao
     paga (Sharpe 0,960 contra 0,955 do taker de hoje).
     """
-    if not _positivo(valor_reais) or not _positivo(alavancagem):
-        raise ValueError("valor de entrada e alavancagem devem ser > 0")
+    _validar_entrada(valor_reais, alavancagem)
     g = guarda_risco()
     if g["trava_dia"]:
         raise ValueError("trava diaria ativa - limite de perda do dia atingido")
@@ -400,26 +445,10 @@ def colocar_ordem(sinal_id, valor_reais, alavancagem):
                          "stop a %.2f%%" % (alavancagem, ld * 100, sd * 100))
     exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
     agora = pd.Timestamp.now()
+    r_novo = _risco_posicao(valor_reais, alavancagem, limite, stop)   # sobre o preco do FILL
     with _abrir_lock:
         with db.conectar() as con:
-            abertas = ([dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
-                                                     "FROM posicoes WHERE status='aberta'")]
-                       + _pendentes(con))
-            banca_atual = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
-            if g["risco_aberto_max_rs"] is not None:
-                risco_ab = sum(_risco_posicao(x["valor_reais"], x["alavancagem"], x["entrada"], x["stop"])
-                               for x in abertas)
-                r_novo = _risco_posicao(valor_reais, alavancagem, limite, stop)
-                if risco_ab + r_novo > g["risco_aberto_max_rs"]:
-                    raise ValueError("teto de risco aberto - exposicao passaria o limite "
-                                     "(R$%.2f + R$%.2f > R$%.2f)"
-                                     % (risco_ab, r_novo, g["risco_aberto_max_rs"]))
-            if exp_max > 0:
-                margem_ab = sum((x["valor_reais"] or 0) for x in abertas)
-                if margem_ab + valor_reais > banca_atual * exp_max:
-                    raise ValueError("teto de margem - exposicao (R$%.2f) passaria %.0f%% da banca "
-                                     "(R$%.2f)" % (margem_ab + valor_reais, exp_max * 100,
-                                                   banca_atual * exp_max))
+            _checar_tetos(con, g, valor_reais, r_novo, exp_max, exige_auto)
             if con.execute("UPDATE sinais SET status='confirmado' "
                            "WHERE id=? AND status='novo'", (sinal_id,)).rowcount != 1:
                 raise ValueError("sinal ja confirmado, pulado ou expirado")
@@ -522,17 +551,21 @@ def _abrir_da_ordem(o, taxa_maker):
     return pid
 
 
-def executar(sinal_id, valor_reais, alavancagem):
+def executar(sinal_id, valor_reais, alavancagem, exige_auto=False):
     """[EX-1] PONTO UNICO de entrada: despacha pelo `exec_modo` da config.
 
     Devolve `("posicao", id)` ou `("ordem", id)`. O `abrir()` continua existindo intacto e
-    continua sendo o caminho a mercado -- nao virou wrapper nem mudou de assinatura, porque e
-    ele que as provas do M1 e a suite exercitam, e trocar o significado dele por baixo seria
-    mexer no risco pela porta dos fundos.
+    continua sendo o caminho a mercado -- nao virou wrapper, porque e ele que as provas do M1 e
+    a suite exercitam, e trocar o significado dele por baixo seria mexer no risco pela porta
+    dos fundos.
+
+    `exige_auto=True` e de quem abre EM NOME do bot (`autotrader.auto_executar`): a entrada so
+    acontece se `auto_trade` ainda estiver ligado no instante do claim (ver `_checar_tetos`).
+    O fluxo manual nao passa a bandeira: o dono confirma sinal com o bot desligado.
     """
     if str(db.get_config().get("exec_modo", "mercado")) == "post_only":
-        return "ordem", colocar_ordem(sinal_id, valor_reais, alavancagem)
-    return "posicao", abrir(sinal_id, valor_reais, alavancagem)
+        return "ordem", colocar_ordem(sinal_id, valor_reais, alavancagem, exige_auto)
+    return "posicao", abrir(sinal_id, valor_reais, alavancagem, exige_auto)
 
 
 _MUDOU = object()
