@@ -54,6 +54,9 @@
   '.v-painel .fg{height:4px;border-radius:2px;background:rgba(var(--txt-rgb),.08);position:relative;margin-top:-3px}' +
   '.v-painel .fg i{position:absolute;left:0;top:0;bottom:0;width:var(--w);background:linear-gradient(90deg,var(--neg),var(--warn),var(--pos));border-radius:2px}' +
   '.v-painel .mkt-sub{font-family:var(--f-mono);font-size:11px;color:var(--mute);line-height:1.6}' +
+  /* [CLS] com o /estado o sub dos KPIs quebra em 2 linhas (o do mês, com o DD, em 3) e empurrava a tela: reservar desde o "—" */
+  '.v-painel .kpi-sub{line-height:1.45;min-height:2.9em} .v-painel #pn-mes-s{min-height:4.35em}' +
+  '.v-painel .dd-res{min-height:607px;display:grid;gap:14px;align-content:start}' +
   '.v-painel .dd{display:grid;gap:14px}' +
   '.v-painel .dd-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}' +
   '.v-painel .dd-stat{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel2);min-width:0}' +
@@ -154,15 +157,17 @@
       '<div class="stack side-stack">' +
         '<article class="card gauge-card"><div class="gauge" role="img" id="pn-gauge-lbl" aria-label="Win rate"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="g-bg" cx="60" cy="60" r="50" stroke-dasharray="235.6 314.2"/><circle class="g-fg" id="pn-gfg" cx="60" cy="60" r="50" stroke-dasharray="0 314.2"/></svg>' +
           '<div class="gauge-val" aria-hidden="true"><div><b id="pn-g-v">—</b><small>win rate</small></div></div></div>' +
-          '<div class="gauge-meta" id="pn-g-meta"></div></article>' +
+          '<div class="gauge-meta" id="pn-g-meta">' + ['Payoff', 'Trades', 'Expectativa', 'Pior sequência'].map(function (k) { return '<div class="row"><span>' + k + '</span><span>—</span></div>'; }).join('') +
+          '<div class="row"><span class="mute" style="font-size:10.5px">sequência nos últimos … trades</span><span></span></div></div></article>' +
         '<article class="card"><div class="card-head"><h2 class="h2">Apollo</h2><span class="robo-state" id="pn-robo-st"></span></div>' +
-          '<dl class="kv" id="pn-robo-kv"></dl><div class="guards" id="pn-guards" style="margin-top:12px" aria-label="Guardas"></div>' +
+          '<dl class="kv" id="pn-robo-kv">' + ['Modo', 'Risco / trade', 'Alavancagem', 'Conv. mínima', 'Última ação'].map(function (k) { return '<dt>' + k + '</dt><dd>—</dd>'; }).join('') + '</dl>' +
+          '<div class="guards" id="pn-guards" style="margin-top:12px" aria-label="Guardas">' + ['teto de risco aberto —', 'trava diária —', 'margem máx. —', 'trailing —'].map(function (k) { return '<span class="guard off">' + k + '</span>'; }).join('') + '</div>' +
           '<div class="robo-act"><button type="button" class="btn ghost" id="pn-auto">—</button><button type="button" class="btn danger" id="pn-panico">Pânico</button><a class="btn ghost" href="#apollo">Configurar</a></div></article>' +
         '<article class="card"><div class="card-head"><h2 class="h2">Mercado</h2><span class="count mute" id="pn-mkt-t">—</span></div><div class="mkt" id="pn-mkt"><div class="skel"></div><div class="skel"></div></div></article>' +
       '</div>' +
     '</section>' +
     '<section class="card dd" id="pn-dd"><div class="card-head" style="margin-bottom:0"><div><h2 class="h2">Dia a dia</h2><div class="sub mono" id="pn-dd-sub">P&amp;L fechado por dia</div></div><span class="count" id="pn-dd-streak">—</span></div>' +
-      '<div id="pn-dd-body"><div class="skel"></div><div class="skel" style="width:60%"></div></div><div class="tip" id="pn-dd-tip" hidden></div></section>' +
+      '<div id="pn-dd-body"><div class="dd-res"><div class="skel"></div><div class="skel" style="width:60%"></div></div></div><div class="tip" id="pn-dd-tip" hidden></div></section>' +
     '<section class="row-2">' +
       '<article class="card"><div class="card-head"><h2 class="h2">Sinais na fila</h2><span class="count" id="pn-sig-n">0</span></div><div id="pn-sinais"></div></article>' +
       '<article class="card"><div class="card-head"><h2 class="h2">Posições abertas</h2><span class="count" id="pn-pos-n">0</span></div><div id="pn-pos"></div></article>' +
@@ -401,7 +406,8 @@
       ['Expectativa' + (xr.n ? ' <span class="mute" style="font-size:10.5px">(' + xr.n + ')</span>' : ''), xr.txt, F.cls(xr.v)],
       ['Pior sequência', S.piorSeq == null ? '…' : S.piorSeq + (S.piorSeq === 1 ? ' perda' : ' perdas'), S.piorSeq ? 'neg' : '']];
     $('pn-g-meta').innerHTML = rows.map(function (r) { return '<div class="row"><span>' + r[0] + '</span><span class="' + r[2] + '">' + r[1] + '</span></div>'; }).join('') +
-      (S.piorSeqN ? '<div class="row"><span class="mute" style="font-size:10.5px">sequência nos últimos ' + S.piorSeqN + ' trades</span><span></span></div>' : '');
+      /* [CLS] enquanto o /trades não chega (piorSeq == null, o mesmo "…" de cima) a linha fica, para o card não encolher e crescer de novo */
+      (S.piorSeqN || S.piorSeq == null ? '<div class="row"><span class="mute" style="font-size:10.5px">sequência nos últimos ' + (S.piorSeqN || '…') + ' trades</span><span></span></div>' : '');
   }
   function robo(e) {
     var cfg = e.config || {}, on = String(cfg.auto_trade) === '1', rg = e.risco || {};
