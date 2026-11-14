@@ -100,7 +100,7 @@ def analisa(ativo, tf):
         out.append(dict(ativo=ativo, tf=tf, tipo=p["tipo"],
                         direcao="LONG" if p["direcao"] == 1 else "SHORT",
                         conviccao=p["conviccao"], motivos=p["motivos"],
-                        preco=round(c, 6), stop_sugerido=round(stop, 6),
+                        preco=mercado.arred_preco(c), stop_sugerido=mercado.arred_preco(stop),
                         adx=p["adx"], n_fatores=p["n_fatores"], vela_ms=vela_ms))
     return out
 

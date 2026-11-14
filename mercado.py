@@ -30,6 +30,20 @@ _tcache = {}                                   # ativo -> (ts, ticker cru do ccx
 _tlock = threading.Lock()                      # o worker e as rotas da API mexem no `_tcache`
 
 
+def arred_preco(x, casas=6):
+    """Arredonda um preço sem destruir moeda de preço baixo.
+
+    Stop e limite eram `round(x, 6)`: seis casas DECIMAIS. Para BTC isso sobra; para uma moeda
+    a 0,00001234 sobram dois algarismos, e o stop de 5% virava 2,76%. Abaixo de 1e-6 o stop do
+    LONG arredondava para ACIMA da entrada e a posição fechava no ciclo seguinte pagando taxa.
+    A lista padrão de 24 ativos não tem moeda assim, mas o `POST /config` aceita qualquer par.
+
+    De 1 para cima fica exatamente como era (`casas` decimais). Abaixo de 1 valem oito
+    algarismos SIGNIFICATIVOS, que é mais do que o tick de qualquer par da Binance."""
+    x = float(x)
+    return round(x, casas) if abs(x) >= 1 else float(f"{x:.8g}")
+
+
 def par_listado(ativo):
     """O par existe na corretora? `None` quando ainda não dá para saber.
 

@@ -16,6 +16,8 @@ from logbot import log
 
 
 _PAR = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,5}$")
+VALOR_MAX = 1e9            # R$ por aporte: sanidade, não política
+FREQ_MAX_DIAS = 3650
 
 
 def criar(ativo, valor_aporte, freq_dias):
@@ -28,10 +30,13 @@ def criar(ativo, valor_aporte, freq_dias):
         v, f = float(valor_aporte), float(freq_dias)
     except (TypeError, ValueError):
         raise ValueError("valor do aporte e frequência precisam ser números")
-    if not (math.isfinite(v) and v > 0):
-        raise ValueError("valor do aporte precisa ser maior que zero")
-    if not (math.isfinite(f) and f >= 1):
-        raise ValueError("frequência mínima é 1 dia")
+    # Teto, além do piso: dois aportes de 1e308 somam `inf` em `total_investido`, o JSON não
+    # serializa `inf` e o `/estado` passava a responder 500 para sempre (sem ele o painel nem
+    # mostra o plano para removê-lo).
+    if not (math.isfinite(v) and 0 < v <= VALOR_MAX):
+        raise ValueError(f"valor do aporte precisa estar entre 0 e {VALOR_MAX:,.0f}".replace(",", "."))
+    if not (math.isfinite(f) and 1 <= f <= FREQ_MAX_DIAS):
+        raise ValueError(f"frequência precisa estar entre 1 e {FREQ_MAX_DIAS} dias")
     # O formato não basta: "XYZ/USDT" casa com a regex e não existe. O plano nascia, falhava no
     # preço a cada ciclo do worker para sempre, e ainda derrubava a cotação em lote dos outros
     # planos (ver `mercado._buscar_tickers`). `None` = a tabela de mercados ainda não foi lida

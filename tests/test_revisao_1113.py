@@ -21,7 +21,7 @@ import dca
 import mercado
 import signal_engine
 import simulador
-from conftest import semear_posicao, semear_sinal
+from conftest import semear_equity, semear_posicao, semear_sinal
 
 
 @pytest.fixture
@@ -500,3 +500,220 @@ def test_leva2_a_suite_nao_escreve_no_log_nem_no_banco_da_raiz():
     raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     assert os.path.dirname(os.path.abspath(logbot.LOG_FILE)) != raiz
     assert os.path.dirname(os.path.abspath(os.environ["DB_PATH"])) != raiz
+
+
+# =================================================================== leva3
+# Furos da rodada adversarial independente (subagente, 2026-11-14), cada um provado antes.
+class _ConComFechamento:
+    """Conexao que, logo depois de ler a banca, deixa "a outra thread" fechar uma posicao."""
+    def __init__(self, con, aoLerBanca):
+        self._c, self._ao = con, aoLerBanca
+
+    def execute(self, sql, *a):
+        r = self._c.execute(sql, *a)
+        if "FROM banca" in sql and self._ao:
+            linhas = r.fetchall()
+            ao, self._ao = self._ao, None
+            ao()
+            return type("Cur", (), {"fetchone": lambda s: linhas[0]})()
+        return r
+
+
+def _fechar_no_meio_da_leitura(monkeypatch, pid, motivo):
+    from contextlib import contextmanager
+    original, feito = db.conectar, {"v": False}
+
+    def fecha():
+        feito["v"] = True
+        monkeypatch.setattr(db, "conectar", original)
+        assert simulador.fechar(pid, motivo, 110.0) == pytest.approx(99.0)
+
+    @contextmanager
+    def conectar():
+        with original() as con:
+            yield _ConComFechamento(con, None if feito["v"] else fecha)
+
+    monkeypatch.setattr(db, "conectar", conectar)
+    return original, feito
+
+
+def test_leva3_trava_nao_dispara_por_leitura_rasgada(banco, sem_rede, monkeypatch):
+    """Um vencedor fecha entre a leitura da banca e a do unreal: nada foi perdido, e a trava
+    (sticky ate a virada) disparava. Agora as leituras saem de um retrato so."""
+    pid = semear_posicao(valor_reais=100, alavancagem=10, entrada=100, stop=95,
+                         preco_atual=110, pnl=99.0)
+    semear_equity(str(pd.Timestamp.now().date()) + " 00:00:01", 1099.0)
+    original, feito = _fechar_no_meio_da_leitura(monkeypatch, pid, "trailing")
+    g = simulador.guarda_risco()
+    monkeypatch.setattr(db, "conectar", original)
+    assert feito["v"], "o cenario nao exercitou a corrida"
+    assert g["trava_dia"] is False and db.get_config()["trava_dia_em"] == ""
+    assert g["pnl_dia"] == pytest.approx(0.0)
+
+
+def test_leva3_snapshot_de_equity_nao_rasga(banco, sem_rede, monkeypatch):
+    import api
+    pid = semear_posicao(valor_reais=100, alavancagem=10, entrada=100, stop=95, preco_atual=110, pnl=99.0)
+    original, feito = _fechar_no_meio_da_leitura(monkeypatch, pid, "manual")
+    banca, equity = api._banca_e_equity()
+    monkeypatch.setattr(db, "conectar", original)
+    assert feito["v"] and equity == pytest.approx(1099.0)
+
+
+def test_leva3_dois_tps_no_mesmo_ciclo_conservam_o_risco_de_abertura(banco, sem_rede, monkeypatch):
+    db.set_config("tp_ativo", "1")
+    db.set_config("trailing_ativo", "0")
+    monkeypatch.setattr(simulador, "_precos_em_lote", lambda ativos: {})
+    niv = [{"preco": p, "r": r, "frac": f, "feito": False, "forca": 2, "fonte": "R"}
+           for p, r, f in ((110.0, 2.0, 0.34), (120.0, 4.0, 0.33), (130.0, 6.0, 0.33))]
+    plano = json.dumps({"niveis": niv, "valor_inicial": 300.0, "r_preco": 5.0})
+    pid = semear_posicao(ativo="X/USDT", valor_reais=300.0, alavancagem=3, stop=95.0)
+    with db.conectar() as c:
+        c.execute("UPDATE posicoes SET stop_abertura=95, risco_abertura=45, tps=? WHERE id=?", (plano, pid))
+    sem_rede(121.0)                                  # passou TP1 e TP2 no mesmo poll
+    simulador.atualizar()
+    with db.conectar() as c:
+        t = [dict(r) for r in c.execute("SELECT motivo_saida,risco_abertura FROM trades ORDER BY id")]
+        resto = c.execute("SELECT risco_abertura FROM posicoes WHERE id=?", (pid,)).fetchone()[0]
+    assert [x["motivo_saida"] for x in t] == ["tp1", "tp2"]
+    assert sum(x["risco_abertura"] for x in t) + resto == pytest.approx(45.0, abs=0.01)
+
+
+@pytest.mark.parametrize("preco", [0.00001234, 0.0000008])
+def test_leva3_stop_de_moeda_de_preco_baixo_mantem_a_distancia(banco, sem_rede, preco):
+    sem_rede(preco)
+    sid = semear_sinal(ativo="PEPE/USDT", preco=preco, stop=preco * 0.95)
+    pid = simulador.abrir(sid, 20, 2)
+    with db.conectar() as c:
+        p = dict(c.execute("SELECT entrada,stop FROM posicoes WHERE id=?", (pid,)).fetchone())
+    assert (p["entrada"] - p["stop"]) / p["entrada"] == pytest.approx(0.05, rel=0.01)
+
+
+def test_leva3_arredondamento_nao_muda_preco_de_1_para_cima():
+    for x in (67123.456789123, 104.50000000000001, 1.0, 33.3333333333):
+        assert mercado.arred_preco(x) == round(x, 6)
+        assert mercado.arred_preco(x, 8) == round(x, 8)
+    assert mercado.arred_preco(0.0000123456789) == pytest.approx(0.0000123456789, rel=1e-7)
+
+
+def test_leva3_bot_usa_o_orcamento_que_ele_mesmo_calculou(banco, sem_rede):
+    db.set_config("auto_trade", "1")
+    db.set_config("tendencia_filtro", "off")
+    db.set_config("exigir_fluxo", "0")
+    db.set_config("risco_aberto_max", "0")
+    with db.conectar() as c:
+        c.execute("UPDATE banca SET atual=1000.337 WHERE id=1")      # teto de margem = 500,1685
+    semear_posicao(ativo="ETH/USDT", valor_reais=400.0, alavancagem=2, entrada=100, stop=99)
+    semear_sinal(ativo="BTC/USDT", preco=100.0, stop=99.0)
+    res = autotrader.auto_executar()                 # orcamento 100,1685: round() dava 100,17
+    assert len(res["abertos"]) == 1, res["rejeitados"]
+
+
+def test_leva3_config_recusa_piso_de_alavancagem_acima_do_teto(cliente):
+    """Cada chave cabia na propria faixa e a dupla invertida entrava; no `_alavancagem` o piso
+    vence o teto de proposito (test_sizing trava), entao o "teto" deixava de ser teto. A recusa
+    e na ENTRADA, e cruza com o valor ja gravado quando so uma das duas vem no corpo."""
+    r = cliente.post("/config", json={"auto_lev_min": "10", "auto_lev_max": "3"})
+    assert r.status_code == 422 and "auto_lev_min" in r.text
+    assert cliente.post("/config", json={"auto_lev_min": "30"}).status_code == 422   # teto gravado: 20
+    assert cliente.post("/config", json={"auto_lev_max": "1"}).status_code == 422    # piso gravado: 2
+    cfg = db.get_config()
+    assert (float(cfg["auto_lev_min"]), float(cfg["auto_lev_max"])) == (2.0, 20.0)   # nada gravado
+    assert cliente.post("/config", json={"auto_lev_min": "3", "auto_lev_max": "3"}).status_code == 200
+    assert cliente.post("/perfil", json={"perfil": "conservador"}).status_code == 200
+
+
+def test_leva3_confirmar_sem_alavancagem_usa_a_config(cliente, sem_rede):
+    db.set_config("alavancagem_padrao", "2")
+    sid = semear_sinal(stop=95.0)
+    r = cliente.post("/confirmar", json={"sinal_id": sid, "valor_reais": 20}).json()
+    assert r["ok"] is True, r
+    with db.conectar() as c:
+        lev = c.execute("SELECT alavancagem FROM posicoes WHERE id=?", (r["posicao_id"],)).fetchone()[0]
+    assert lev == 2.0
+
+
+def test_leva3_precheck_do_confirmar_mede_o_mesmo_risco_que_o_abrir(cliente, sem_rede):
+    semear_posicao(valor_reais=100, alavancagem=10, entrada=100, stop=92)     # risco 80 de 100
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    sem_rede(110.0)                                  # risco real: 100 x 2 x 5% = 10 -> 90 <= 100
+    r = cliente.post("/confirmar", json={"sinal_id": sid, "valor_reais": 100, "alavancagem": 2}).json()
+    assert r["ok"] is True, r
+
+
+def test_leva3_tendencia_vazia_e_falha_e_nao_fica_no_cache(monkeypatch):
+    import tendencia
+    queda = [[i * tendencia.DIA_MS, 0, 0, 0, 200.0 - i, 0] for i in range(120)]
+    respostas = [[], queda]
+    monkeypatch.setattr(tendencia, "_velas_1d",
+                        lambda ativo: respostas.pop(0) if len(respostas) > 1 else respostas[0])
+    monkeypatch.setattr(tendencia, "_cache", {})
+    agora = 121 * tendencia.DIA_MS
+    with pytest.raises(RuntimeError):                # vazio = falha: o bot pula o candidato
+        tendencia.permite("Z/USDT", "LONG", "d1", agora)
+    assert tendencia.permite("Z/USDT", "LONG", "d1", agora + 60_000) is False
+
+
+def test_leva3_perfil_grava_tudo_ou_nada(banco, monkeypatch):
+    antes = db.get_config()
+    auditar, n = db._auditar_config, {"v": 0}
+
+    def trava_na_terceira(c, chave, valor, origem):
+        n["v"] += 1
+        if n["v"] == 3:
+            raise RuntimeError("database is locked")
+        return auditar(c, chave, valor, origem)
+
+    monkeypatch.setattr(db, "_auditar_config", trava_na_terceira)
+    with pytest.raises(RuntimeError):
+        db.set_configs(db.PERFIS_RISCO["conservador"], "teste")
+    monkeypatch.setattr(db, "_auditar_config", auditar)
+    depois = db.get_config()
+    assert {k for k in depois if not db._igual_cfg(antes.get(k), depois[k])} == set()
+    assert _n("config_auditoria") == 0
+
+
+def test_leva3_perfil_inteiro_continua_sendo_aplicado(cliente):
+    r = cliente.post("/perfil", json={"perfil": "conservador"})
+    assert r.status_code == 200 and r.json()["perfil_ativo"] == "conservador"
+
+
+def test_leva3_panico_fecha_todas_mesmo_com_mais_de_200(cliente, sem_rede):
+    for _ in range(205):
+        semear_posicao(valor_reais=1.0)
+    r = cliente.post("/panico").json()
+    assert r["fechadas"] == 205 and _n("posicoes", "WHERE status='aberta'") == 0
+
+
+def test_leva3_dca_gigante_e_recusado_e_o_estado_segue_de_pe(cliente, sem_rede):
+    r = cliente.post("/dca", json={"ativo": "BTC/USDT", "valor_aporte": 1e308, "freq_dias": 1}).json()
+    assert r["ok"] is False and _n("dca") == 0
+    assert cliente.get("/estado").status_code == 200
+
+
+@pytest.mark.parametrize("rota,corpo", [("/fechar", {"id": 2 ** 64}), ("/pular", {"id": 2 ** 64}),
+                                        ("/dca/aportar", {"id": 2 ** 64}), ("/fechar", {"id": 0}),
+                                        ("/confirmar", {"sinal_id": 2 ** 64, "valor_reais": 20, "alavancagem": 2})])
+def test_leva3_id_fora_da_faixa_e_422_e_nao_500(cliente, sem_rede, rota, corpo):
+    assert cliente.post(rota, json=corpo).status_code == 422
+
+
+def test_leva3_testeB_health_publico_so_em_GET(cliente, monkeypatch):
+    import api
+    monkeypatch.setattr(api, "DASH_PASS", "senha-de-teste")
+    visto = []
+    monkeypatch.setattr(api, "_repassar_b", lambda m, c, q, corpo, a, ct:
+                        (visto.append((m, c)) or (200, b"{}", "application/json")))
+    assert cliente.post("/testeB/health", content=b"x" * 100_000).status_code == 401
+    assert visto == []                               # nada foi repassado sem credencial
+    assert cliente.get("/testeB/health").status_code == 200 and visto == [("GET", "health")]
+
+
+def test_leva3_testeB_com_caminho_estranho_nao_e_500(cliente, monkeypatch):
+    import http.client
+
+    def sem_rede_aqui(self):
+        raise OSError("sem rede no teste")
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", sem_rede_aqui)
+    assert cliente.get("/testeB/a%20b").status_code == 502     # era 500 (InvalidURL)

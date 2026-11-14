@@ -205,11 +205,17 @@ def guarda_risco():
     (variação do equity vs INÍCIO DO DIA) bater o limite. (2) Teto de risco aberto: limita
     a soma do risco-até-o-stop das posições abertas. É o 'único alfa garantido'."""
     cfg = db.get_config()
-    banca = db.get_banca()
     lim = _cfg_float(cfg, "limite_perda_dia", 0.05)
     lim_ab = _cfg_float(cfg, "risco_aberto_max", 0.10)
     hoje = str(pd.Timestamp.now().date())
     with db.conectar() as con:
+        # UM retrato só. A banca era lida em outra conexão (`db.get_banca()`), antes desta: um
+        # fechamento com lucro que caísse entre as duas leituras somava a banca VELHA ao unreal já
+        # SEM a posição, o lucro sumia da conta, `pnl_dia` saía negativo e a trava (sticky até a
+        # virada, com push) disparava sem perda nenhuma. O `/estado` chama isto a cada 3 s
+        # enquanto o worker fecha. O BEGIN faz todos os SELECT abaixo lerem o mesmo instante.
+        con.execute("BEGIN")
+        banca = dict(con.execute("SELECT * FROM banca WHERE id=1").fetchone())
         unreal = con.execute("SELECT COALESCE(SUM(pnl),0) FROM posicoes WHERE status='aberta'").fetchone()[0] or 0
         margem = con.execute("SELECT COALESCE(SUM(valor_reais),0) FROM posicoes WHERE status='aberta'").fetchone()[0] or 0
         abertas = [dict(r) for r in con.execute("SELECT valor_reais,alavancagem,entrada,stop "
@@ -341,7 +347,7 @@ def abrir(sinal_id, valor_reais, alavancagem, exige_auto=False):
     # evita abrir já-em-stop e mantém o risco coerente com o que foi dimensionado.
     stop_rel = (abs(sig["preco"] - sig["stop_sugerido"]) / sig["preco"]
                 if sig["preco"] and sig["stop_sugerido"] else 0.0)
-    stop = round(preco * (1 - d * stop_rel), 6) if stop_rel else sig["stop_sugerido"]
+    stop = mercado.arred_preco(preco * (1 - d * stop_rel)) if stop_rel else sig["stop_sugerido"]
     # [P1-12] Geometria stop x liquidação, AQUI e não na rota. O cap do [P1-11] mora em
     # `autotrader._alavancagem`, e o `grep` mostrou que só o auto-trader passa por ele: o
     # `POST /confirmar` recebe a alavancagem do CLIENTE e a repassa. Guarda que se contorna
@@ -434,10 +440,10 @@ def colocar_ordem(sinal_id, valor_reais, alavancagem, exige_auto=False):
     ttl = _cfg_float(cfg, "exec_ordem_ttl_s", 3600.0)
     preco = preco_ao_vivo(sig["ativo"])                        # rede FORA do lock
     d = 1 if sig["direcao"] == "LONG" else -1
-    limite = round(preco * (1 - d * off), 8)                   # descansa do NOSSO lado do livro
+    limite = mercado.arred_preco(preco * (1 - d * off), 8)     # descansa do NOSSO lado do livro
     stop_rel = (abs(sig["preco"] - sig["stop_sugerido"]) / sig["preco"]
                 if sig["preco"] and sig["stop_sugerido"] else 0.0)
-    stop = round(limite * (1 - d * stop_rel), 6) if stop_rel else sig["stop_sugerido"]
+    stop = mercado.arred_preco(limite * (1 - d * stop_rel)) if stop_rel else sig["stop_sugerido"]
     deg = _liq_antes_do_stop(limite, stop, alavancagem, d)     # [P1-12], sobre o preco do fill
     if deg:
         sd, ld = deg
@@ -790,7 +796,7 @@ def _marcar_uma(pos, trail, eventos, cfg=None, precos=None, tp=None):
     # a catraca não muda de unidade, e um stop que anda para trás é um stop que o mercado escolhe.
     novo = _trailing_novo_stop(pos, preco, d, trail)
     if novo is not None and ((d == 1 and novo > pos["stop"]) or (d == -1 and novo < pos["stop"])):
-        pos["stop"] = round(novo, 8)
+        pos["stop"] = mercado.arred_preco(novo, 8)
     liq = _preco_liquidacao(pos["entrada"], d, pos["alavancagem"])
     hit_liq = (d == 1 and preco <= liq) or (d == -1 and preco >= liq)
     hit_stop = pos["stop"] and ((d == 1 and preco <= pos["stop"]) or (d == -1 and preco >= pos["stop"]))
@@ -876,6 +882,11 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
         if resto is None:                                   # outra thread mexeu na posição
             return False
         eventos.append((pos["id"], motivo))
+        # o `pos` em memória acompanha o que o `fechar_parcial` gravou. Sem o risco aqui, um
+        # SEGUNDO TP no mesmo ciclo partia do risco de abertura original e gravava risco a mais
+        # no trade e na posição (soma de 60,30 para uma posição que nasceu com 45,00).
+        if pos.get("risco_abertura") is not None:
+            pos["risco_abertura"] = pos["risco_abertura"] * (1 - frac)
         pos["valor_reais"] = resto
         pos["tps"] = json.dumps(plano)
 

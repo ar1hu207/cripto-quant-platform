@@ -324,7 +324,10 @@ def auto_executar(saidas=None):
                          ativo=s["ativo"])
         if valor <= 0:                                    # banca não comporta: pula
             continue
-        valor = min(valor, round(budget, 2))              # não passa do teto de margem restante
+        # TRUNCA, não arredonda: `round(budget, 2)` subia até meio centavo ACIMA do orçamento, o
+        # `abrir()` recusava por "teto de margem" e o `break` abaixo encerrava o ciclo. O sinal
+        # seguia 'novo' e a recusa se repetia a cada 15 s até ele expirar.
+        valor = min(valor, math.floor(budget * 100) / 100)   # não passa do teto de margem restante
         if valor < min_valor:
             break
         try:

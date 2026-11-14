@@ -515,6 +515,22 @@ def set_config(chave, valor, origem=None):
                   "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor", (chave, valor))
 
 
+def set_configs(pares, origem=None):
+    """Grava VÁRIAS chaves numa transação só, cada uma com a sua linha de auditoria.
+
+    As rotas validam o lote tudo-ou-nada e gravavam chave a chave, cada `set_config` na sua
+    transação: uma falha no meio (banco travado, restart) ou um ciclo do worker lendo entre duas
+    gravações encontrava um perfil HÍBRIDO, com o risco de um perfil e a alavancagem de outro.
+    Aqui ou entram todas, ou nenhuma."""
+    origem = origem or _origem_do_chamador()
+    with conectar() as c:
+        for chave, valor in pares.items():
+            valor = str(valor)
+            _auditar_config(c, chave, valor, origem)
+            c.execute("INSERT INTO config(chave,valor) VALUES(?,?) "
+                      "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor", (chave, valor))
+
+
 def auditoria_config(limite=100, chave=None):
     """[F-15] As mudancas de config, da mais recente para a mais antiga."""
     q = "SELECT * FROM config_auditoria"

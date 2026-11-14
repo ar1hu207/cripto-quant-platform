@@ -64,7 +64,14 @@ def lado(ativo, modo, agora_ms=None):
     dia = int(agora_ms // DIA_MS)
     ent = _cache.get(ativo)
     if not ent or ent[0] != dia:
-        ent = (dia, lados(_velas_1d(ativo), agora_ms))
+        raw = _velas_1d(ativo)
+        # Resposta VAZIA não é "moeda recém-listada": é a corretora não respondendo direito. Ela
+        # virava "tendência indefinida = passa" e ficava no cache até a virada do dia UTC, com o
+        # filtro desligado para aquele ativo por até 24 h. Agora levanta, como toda falha de rede
+        # deste módulo: o auto-trader pula o candidato no ciclo e tenta de novo no próximo.
+        if not raw:
+            raise RuntimeError(f"a corretora devolveu o diário de {ativo} vazio")
+        ent = (dia, lados(raw, agora_ms))
         _cache[ativo] = ent
     return ent[1][modo]
 

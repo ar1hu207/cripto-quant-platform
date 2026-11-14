@@ -17,7 +17,7 @@ import urllib.request
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import ccxt
 import pandas as pd
@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import alvos
 import db
@@ -102,11 +102,20 @@ def _scan_devido(agora=None):
     return True
 
 
-def equity_total():
+def _banca_e_equity():
+    """(banca, equity total) lidos do MESMO instante. Sem o BEGIN cada SELECT via um retrato
+    diferente: um fechamento com lucro entre os dois somava a banca velha ao unreal já sem a
+    posição, e o ponto gravado na curva saía abaixo do real (entrava no drawdown e, se fosse o
+    primeiro do dia, virava a base da trava diária)."""
     with db.conectar() as c:
+        c.execute("BEGIN")
         banca = c.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
         unreal = c.execute("SELECT COALESCE(SUM(pnl),0) FROM posicoes WHERE status='aberta'").fetchone()[0]
-    return banca + (unreal or 0)
+    return banca, banca + (unreal or 0)
+
+
+def equity_total():
+    return _banca_e_equity()[1]
 
 
 def _saidas_decidem(cfg):
@@ -143,9 +152,10 @@ def worker():
             except Exception as e:                      # falha do bot não derruba o snapshot de equity abaixo
                 _health["erros"] += 1
                 log(f"auto-trader erro: {e}", "error")
+            banca_agora, equity_agora = _banca_e_equity()   # as duas do mesmo instante
             with db.conectar() as c:                    # snapshot de equity p/ o gráfico
                 c.execute("INSERT INTO equity(ts,banca,equity_total) VALUES(?,?,?)",
-                          (str(pd.Timestamp.now()), db.get_banca()["atual"], equity_total()))
+                          (str(pd.Timestamp.now()), banca_agora, equity_agora))
             _health["ultimo_ciclo"] = str(pd.Timestamp.now())
             _vigia["ultimo"] = time.monotonic()
             _sd_notify(b"WATCHDOG=1")           # [vigia] só ciclo COMPLETO alimenta o watchdog
@@ -301,7 +311,10 @@ async def auth_basica(request: Request, call_next):
     # do navegador já é respondido lá e nem chega aqui; isto cobre o OPTIONS avulso.
     # /testeB/health é o /health da conta B: público pelo mesmo motivo (o painel o lê antes do
     # login para dizer se o backend está de pé), e não expõe nada além da idade do ciclo.
-    if request.url.path in ("/health", "/testeB/health") or request.method == "OPTIONS":
+    # Só GET: a isenção era por caminho, e um POST anônimo em /testeB/health tinha o corpo lido
+    # em memória e repassado à conta B sem credencial nenhuma.
+    if request.method == "OPTIONS" or (request.method == "GET"
+                                       and request.url.path in ("/health", "/testeB/health")):
         return await call_next(request)
 
     if not DASH_PASS:
@@ -739,6 +752,8 @@ def _validar_lote(body, permitidas=None):
             aceitos[k] = _validar_config(k, v)
         except ValueError as e:
             recusados.append(str(e))
+    if not recusados:
+        recusados = _validar_cruzado(aceitos)
     if recusados:
         log(f"config recusada: {recusados}", "error")
         raise HTTPException(422, {"erro": "configuração recusada — nada foi gravado",
@@ -746,15 +761,46 @@ def _validar_lote(body, permitidas=None):
     return aceitos
 
 
+def _validar_cruzado(aceitos):
+    """Regras entre DUAS chaves, que a validação chave a chave não enxerga.
+
+    Hoje uma só: `auto_lev_min` não pode passar de `auto_lev_max`. Cada uma cabia na sua faixa
+    (1 a 50) e a dupla invertida entrava; em `autotrader._alavancagem` o piso vence o teto de
+    propósito (`tests/test_sizing.py` trava isso, para o erro não virar 1x calado), então o
+    "TETO de alavancagem" do painel deixava de ser teto. Recusar aqui fecha o caso sem mexer
+    naquela decisão. O valor que não veio no corpo é o que está gravado."""
+    if not {"auto_lev_min", "auto_lev_max"} & aceitos.keys():
+        return []
+    try:
+        vigente = db.get_config()
+    except Exception:                       # sem banco não há par para cruzar
+        vigente = {}
+    try:
+        piso = float(aceitos.get("auto_lev_min", vigente.get("auto_lev_min")))
+        teto = float(aceitos.get("auto_lev_max", vigente.get("auto_lev_max")))
+    except (TypeError, ValueError):
+        return []
+    if piso > teto:
+        return [f"'auto_lev_min' ({piso:g}) não pode ser maior que 'auto_lev_max' ({teto:g})"]
+    return []
+
+
 # ---------- modelos ----------
+# Id acima do INTEGER do SQLite estourava OverflowError dentro do driver e virava 500 em quatro
+# rotas. Fora da faixa é 422, com o motivo.
+ID_MAX = 2 ** 63 - 1
+
+
 class ConfirmarReq(BaseModel):
-    sinal_id: int
+    sinal_id: int = Field(ge=1, le=ID_MAX)
     valor_reais: float
-    alavancagem: float = 10.0
+    # None = "a da config". Era `= 10.0`: um /confirmar sem o campo abria a 10x cravado, fosse
+    # qual fosse o `alavancagem_padrao` (CLAUDE.md §1: nunca constante literal no módulo).
+    alavancagem: Optional[float] = None
 
 
 class IdReq(BaseModel):
-    id: int
+    id: int = Field(ge=1, le=ID_MAX)
 
 
 class DcaReq(BaseModel):
@@ -848,7 +894,9 @@ def _repassar_b(metodo, caminho, query, corpo, auth, ctype):
     """[AB-1] A requisição vai para a instância B como veio, e a resposta volta como veio.
     Erro HTTP da B (401, 422...) é devolvido com o status DELA: mascarar como 502 esconderia,
     por exemplo, uma config recusada pelo catálogo."""
-    url = f"{TESTEB_URL}/{caminho}" + (f"?{query}" if query else "")
+    # `caminho` chega DECODIFICADO: um espaço ou caractere de controle nele estourava InvalidURL
+    # (que não é URLError) e a rota respondia 500. Recodificado, a B devolve o 404 dela.
+    url = f"{TESTEB_URL}/{quote(caminho, safe='/')}" + (f"?{query}" if query else "")
     cab = {k: v for k, v in (("Authorization", auth), ("Content-Type", ctype)) if v}
     req = urllib.request.Request(url, data=corpo if metodo == "POST" else None,
                                  headers=cab, method=metodo)
@@ -1168,8 +1216,7 @@ def set_perfil(req: PerfilReq):
         raise HTTPException(422, f"perfil desconhecido: escolha um de {list(db.PERFIS_RISCO)}")
     antes = db.perfil_ativo()
     aceitos = _validar_lote(db.PERFIS_RISCO[req.perfil])
-    for k, v in aceitos.items():
-        db.set_config(k, v, f"POST /perfil:{req.perfil}")
+    db.set_configs(aceitos, f"POST /perfil:{req.perfil}")     # todas as chaves ou nenhuma
     cfg = db.get_config()
     log(f"perfil de risco: {antes} -> {req.perfil} ({aceitos})")
     return {"ok": True, "perfil_ativo": db.perfil_ativo(cfg), "perfil_anterior": antes,
@@ -1292,12 +1339,23 @@ def confirmar(req: ConfirmarReq):
     if g["trava_dia"]:
         return {"ok": False, "erro": f"🛑 Trava diária ativa — perda do dia R${g['pnl_dia']:.2f} "
                 f"atingiu o limite (R${g['limite_rs']:.2f}). Sem novos trades hoje."}
+    lev = (req.alavancagem if req.alavancagem is not None
+           else simulador._cfg_float(db.get_config(), "alavancagem_padrao", 10.0))
     if g["risco_aberto_max_rs"] is not None:
         with db.conectar() as c:
-            sig = c.execute("SELECT ativo,stop_sugerido FROM sinais WHERE id=?", (req.sinal_id,)).fetchone()
+            sig = c.execute("SELECT ativo,direcao,preco,stop_sugerido FROM sinais WHERE id=?",
+                            (req.sinal_id,)).fetchone()
         if sig:
             preco = simulador.preco_ao_vivo(sig["ativo"])
-            r_novo = simulador._risco_posicao(req.valor_reais, req.alavancagem, preco, sig["stop_sugerido"])
+            # O MESMO stop que o `abrir()` vai gravar: recomposto pela distância RELATIVA do
+            # sinal sobre o preço de agora. Este pré-check usava o stop absoluto do sinal contra
+            # o preço ao vivo; com o preço andado a favor ele media um risco maior que o real
+            # (R$27 para um trade de R$10) e recusava o que cabia no teto.
+            stop = sig["stop_sugerido"]
+            if sig["preco"] and stop:
+                d = 1 if sig["direcao"] == "LONG" else -1
+                stop = preco * (1 - d * abs(sig["preco"] - stop) / sig["preco"])
+            r_novo = simulador._risco_posicao(req.valor_reais, lev, preco, stop)
             if g["risco_aberto_rs"] + r_novo > g["risco_aberto_max_rs"]:
                 return {"ok": False, "erro": f"📊 Teto de exposição — risco aberto R${g['risco_aberto_rs']:.2f} "
                         f"+ R${r_novo:.2f} deste trade passa o limite R${g['risco_aberto_max_rs']:.2f}. "
@@ -1308,7 +1366,7 @@ def confirmar(req: ConfirmarReq):
         # `ordem_id` em vez de `posicao_id`, e quem le o painel PRECISA ver essa diferenca --
         # uma ordem pendente nao e uma posicao, e chamar as duas de "aberta" seria mentir sobre
         # exposicao.
-        tipo, ident = simulador.executar(req.sinal_id, req.valor_reais, req.alavancagem)
+        tipo, ident = simulador.executar(req.sinal_id, req.valor_reais, lev)
         if tipo == "ordem":
             return {"ok": True, "tipo": "ordem", "ordem_id": ident,
                     "msg": "ordem post-only colocada — vira posição se o preço vier até ela"}
@@ -1351,7 +1409,8 @@ def panico(pular_pendentes: bool = False):
         # enchia no ciclo seguinte e o pânico deixava o sistema com posição aberta.
         canceladas = _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
-    abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
+    # -1 = sem LIMIT (SQLite). Eram 200: o kill-switch promete TODAS, e com 205 abertas sobravam 5.
+    abertas = db.listar("posicoes", -1, "WHERE status='aberta'")
     n, total, falhas = 0, 0.0, []
     for p in abertas:
         try:
@@ -1422,8 +1481,7 @@ def set_config(body: dict):
     if body and not limpo:                  # só veio a máscara de volta: nada a gravar
         return _config_publica(db.get_config())
     aceitos = _validar_lote(limpo)
-    for k, v in aceitos.items():
-        db.set_config(k, v, "POST /config")
+    db.set_configs(aceitos, "POST /config")
     return _config_publica(db.get_config())
 
 
@@ -1438,8 +1496,7 @@ def set_auto(body: dict):
     """Liga/desliga e ajusta o auto-trader (experimento). Whitelist de chaves E validação
     de valores: a whitelist sozinha deixava passar auto_max_posicoes="banana"."""
     aceitos = _validar_lote(body, AUTO_PERMITIDAS)
-    for k, v in aceitos.items():
-        db.set_config(k, v, "POST /auto")
+    db.set_configs(aceitos, "POST /auto")
     cfg = db.get_config()
     return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},
             "estado": _auto["v"]}
