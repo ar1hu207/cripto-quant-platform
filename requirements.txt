@@ -4,3 +4,4 @@ ccxt==4.5.56
 pandas==3.0.3
 numpy==2.4.6
 pydantic==2.13.4
+pywebpush==2.5.0

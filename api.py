@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -32,6 +33,7 @@ import mercado
 import dca
 import autotrader
 import logbot
+import push
 from logbot import log
 from versao import VERSAO
 
@@ -1314,6 +1316,65 @@ def set_auto(body: dict):
     cfg = db.get_config()
     return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},
             "estado": _auto["v"]}
+
+
+# [PUSH-1] Notificacao nativa no celular. As quatro rotas ficam atras da mesma senha do painel
+# (o middleware `auth_basica` roda antes). A chave PUBLICA sai daqui porque o aparelho precisa
+# dela para se inscrever; a privada nunca sai do `.env`. Na conta B estas rotas chegam pelo
+# repasse `/testeB/push/...`, e cada conta guarda as proprias inscricoes no proprio banco.
+class PushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushInscricaoReq(BaseModel):
+    endpoint: str
+    keys: PushKeys
+
+
+class PushSairReq(BaseModel):
+    endpoint: str
+
+
+class PushTesteReq(BaseModel):
+    endpoint: Optional[str] = None
+
+
+@app.get("/push/chave")
+def push_chave(endpoint: Optional[str] = None):
+    """`inscrito` diz se ESTE aparelho (o `endpoint` dele) recebe desta conta: o mesmo aparelho
+    pode estar inscrito na A e nao na B, e o app precisa saber qual botao mostrar."""
+    ativo, motivo = push.estado()
+    subs = push.inscricoes()
+    return {"ativo": ativo, "chave": push.chave_publica() if ativo else None, "motivo": motivo,
+            "conta": CONTA, "aparelhos": len(subs),
+            "inscrito": bool(endpoint) and any(x["endpoint"] == endpoint for x in subs)}
+
+
+@app.post("/push/inscrever")
+def push_inscrever(req: PushInscricaoReq, request: Request):
+    ativo, motivo = push.estado()
+    if not ativo:
+        return {"ok": False, "erro": motivo}
+    try:
+        n = push.inscrever(req.endpoint, req.keys.p256dh, req.keys.auth,
+                           request.headers.get("user-agent", ""))
+    except ValueError as e:
+        return {"ok": False, "erro": str(e)}
+    log(f"push: aparelho inscrito ({n} no total)")
+    return {"ok": True, "aparelhos": n}
+
+
+@app.post("/push/sair")
+def push_sair(req: PushSairReq):
+    return {"ok": True, "removidas": push.sair(req.endpoint)}
+
+
+@app.post("/push/teste")
+def push_teste(req: PushTesteReq):
+    """Entrega SINCRONA, para o app dizer na hora se chegou ao servico de push."""
+    r = push.enviar_agora(*push.MSG_TESTE, "#painel", "teste", so=req.endpoint)
+    return {**r, "ok": r["ok"] > 0, "enviados": r["ok"]}
 
 
 @app.post("/dca")

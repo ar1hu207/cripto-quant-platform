@@ -105,3 +105,44 @@ def test_o_app_usa_o_mesmo_gate_de_login():
     html = _ler(WEB, "m.html")
     for i in ("gate", "gate-form", "gate-user", "gate-pass", "gate-btn", "gate-msg", "toast"):
         assert f'id="{i}"' in html, i
+
+
+# ---------------------------------------------------------------- [PUSH-1] notificacao nativa
+
+def test_todo_push_vira_notificacao_no_service_worker():
+    """O iOS retira a permissao do app que recebe push e nao mostra nada. O handler mostra
+    notificacao em todo caminho, inclusive com corpo que nao e JSON."""
+    sw = _ler(WEB, "sw.js")
+    m = re.search(r"addEventListener\('push', e => \{(.*?)\n\}\);", sw, re.S)
+    assert m, "sw.js sem handler de push"
+    corpo = m.group(1)
+    assert "e.waitUntil(self.registration.showNotification(" in corpo
+    assert "catch (x)" in corpo                      # JSON quebrado nao derruba o showNotification
+    assert corpo.count("return") == 0                # nenhum caminho sai antes de mostrar
+    assert "addEventListener('notificationclick'" in sw
+
+
+def test_toque_na_notificacao_so_aceita_hash():
+    """A pagina so troca de tela com o que comeca por '#': uma mensagem com 'javascript:' ou URL
+    de fora nao navega para lugar nenhum."""
+    js = _ler(WEB, "app", "m", "app.js")
+    assert "d.tipo === 'abrir' && typeof d.url === 'string' && d.url.charAt(0) === '#'" in js
+
+
+def test_pedido_de_permissao_e_a_primeira_coisa_do_toque():
+    """No iPhone o dialogo de permissao so abre dentro do gesto; um await de rede antes dele o
+    tira do gesto e o iOS nega calado."""
+    js = _ler(WEB, "app", "m", "app.js")
+    m = re.search(r"ativar: async function \(\) \{(.*?)\n    \},", js, re.S)
+    assert m, "ativar() nao encontrado"
+    corpo = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)     # comentario nao e codigo
+    assert corpo.index("Notification.requestPermission()") < corpo.index("await A.api")
+    primeiro_await = re.search(r"await ([\w.]+)", corpo).group(1)
+    assert primeiro_await == "Notification.requestPermission"
+    assert "userVisibleOnly: true" in corpo
+
+
+def test_push_saiu_do_em_construcao():
+    js = _ler(WEB, "app", "m", "app.js")
+    assert "cad('Push no celular'" not in js
+    assert 'id="nt-st"' in js

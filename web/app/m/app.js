@@ -23,6 +23,12 @@
   function p1(v) { return F.f1(+v || 0); }
   /* contagem num título: a Syne desenha o zero como a letra "o" ("Sinais · o"), então o número vai em mono */
   function cnt(n) { return '<span class="mono cnt">' + n + '</span>'; }
+  /* chave pública VAPID (base64url) → bytes, o formato que o pushManager.subscribe aceita */
+  function chaveBytes(b64) {
+    var s = atob((b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), u = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+    return u;
+  }
 
   /* ================= paleta e conta ================= */
   var pal0 = A.paletaInicial(); if (pal0) A.pintaPaleta(pal0);
@@ -644,9 +650,10 @@
         '<a class="m-row" href="#diario"><span class="k" style="color:var(--txt)">Diário<small>dia a dia e journal</small></span>' + ic('chev') + '</a>' +
         '<button type="button" class="m-row" data-acao="conta"><span class="k" style="color:var(--txt)">Conta<small>' + (A.CONTA === 'B' ? 'Conta B · teste A/B' : 'Paper A · produção') + '</small></span>' + ic('chev') + '</button>' +
         '<button type="button" class="m-row" id="mx-scan"><span class="k" style="color:var(--txt)">Escanear o mercado agora<small>varre fora do ciclo do worker</small></span>' + ic('pulso') + '</button></section>' +
+        '<section class="m-card"><h5>Notificações</h5><p class="note" id="nt-st">Verificando este aparelho…</p><div id="nt-acts" style="display:grid;gap:8px"></div></section>' +
         '<section class="m-card"><h5>Paleta</h5><div class="chips" id="mx-pal" role="group" aria-label="Paleta" style="margin:0;padding:2px 0;flex-wrap:wrap"></div><p class="note">Lembrada neste aparelho, a mesma do desktop.</p></section>' +
         '<section class="m-card" style="gap:0;padding:4px 14px"><h5 style="padding:10px 0 2px">Em construção</h5>' +
-        cad('Push no celular', 'fechamento do dia, trava, oportunidade, ordem') + cad('Notícias', 'por ativo, com o impacto nas posições') + cad('Fundamentos (LLM)', 'Pítia, com fonte em cada frase') + cad('Ações BR', 'B3: ações, índice e mini dólar') +
+        cad('Notícias', 'por ativo, com o impacto nas posições') + cad('Fundamentos (LLM)', 'Pítia, com fonte em cada frase') + cad('Ações BR', 'B3: ações, índice e mini dólar') +
         '<div class="m-row"><span class="k">' + ic('pesquisa') + ' Pesquisa<small>veredito, testes e lacrados</small></span><span class="chip">no desktop</span></div></section>' +
         '<section class="m-card" style="gap:0;padding:4px 14px">' +
         '<a class="m-row" href="index.html" id="mx-full"><span class="k" style="color:var(--txt)">Versão completa<small>o painel do computador, com config e reset</small></span>' + ic('chev') + '</a>' +
@@ -668,6 +675,68 @@
       $('mx-full').addEventListener('click', function () { A.store.set('apx.ui', 'desktop'); });
       $('mx-sair').addEventListener('click', function () { A.sair(); });
       this.update(A.estado || {});
+      this.notif();
+    },
+    /* [PUSH-1] Notificação nativa. Quatro estados, nesta ordem: o aparelho não suporta (no iPhone,
+       Safari em aba: só o app instalado recebe), o backend não tem chave, o usuário bloqueou, e
+       ligado/desligado PARA ESTA CONTA -- o mesmo aparelho pode receber da A e não da B. */
+    notif: async function () {
+      var self = this, st = $('nt-st'), box = $('nt-acts'); if (!st) return;
+      var acts = function (h) { box.innerHTML = h; };
+      var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      var app = navigator.standalone === true || !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+        st.innerHTML = ios && !app ? 'No iPhone a notificação só chega no app instalado. No Safari: <b>Compartilhar → Adicionar à Tela de Início</b>, e abra pelo ícone do Apollux.' : 'Este navegador não recebe notificação push.';
+        acts(''); return;
+      }
+      var reg = await Promise.race([navigator.serviceWorker.ready, new Promise(function (r) { setTimeout(function () { r(null); }, 5000); })]);
+      if (tela !== self) return;
+      if (!reg) { st.textContent = 'O app ainda não terminou de instalar neste aparelho. Feche e abra de novo.'; acts(''); return; }
+      var sub = null; try { sub = await reg.pushManager.getSubscription(); } catch (e) { sub = null; }
+      var k = null;
+      try { k = await A.api('/push/chave' + (sub ? '?endpoint=' + encodeURIComponent(sub.endpoint) : '')); }
+      /* 404 = o front já publicou (merge na main) e o backend do dl380 ainda roda o commit de antes */
+      catch (e) { if (tela === self) { st.textContent = e.status === 404 ? 'O backend ainda não tem notificação: falta o deploy no servidor.' : 'Não consegui falar com o backend: ' + A.erroTxt(e); acts(''); } return; }
+      if (tela !== self) return;
+      self.k = k; self.reg = reg; self.sub = sub;
+      var conta = 'conta ' + esc(k.conta || A.CONTA);
+      if (!k.ativo) { st.textContent = 'O backend ainda não está pronto para notificação: ' + k.motivo + '.'; acts(''); return; }
+      if (Notification.permission === 'denied') { st.innerHTML = 'Bloqueadas neste aparelho. Libere em <b>Ajustes → Notificações → Apollux</b> e volte aqui.'; acts(''); return; }
+      if (sub && k.inscrito) {
+        st.innerHTML = 'Ligadas neste aparelho para a <b>' + conta + '</b>: abriu, ordem preenchida, fechou, parcial e trava diária.';
+        acts('<button type="button" class="btn secondary block" id="nt-teste">Mandar um teste</button><button type="button" class="btn ghost block" id="nt-off">Desligar nesta conta</button>');
+        $('nt-teste').onclick = function () { self.teste(); };
+        $('nt-off').onclick = function () { self.desligar(); };
+      } else {
+        st.innerHTML = sub ? 'Desligadas neste aparelho para a <b>' + conta + '</b>.' : 'Receba no celular, como notificação do sistema, quando um trade abre, a ordem enche, a posição fecha ou a trava diária dispara.';
+        acts('<button type="button" class="btn primary block" id="nt-on">' + ic('sino') + 'Ativar notificações' + (sub ? ' da ' + conta : '') + '</button>');
+        $('nt-on').onclick = function () { self.ativar(); };
+      }
+    },
+    ativar: async function () {
+      var b = $('nt-on');
+      /* o pedido de permissão é a PRIMEIRA coisa do toque: o iOS só abre o diálogo dentro do gesto,
+         e um await de rede antes dele faria o pedido sair fora do gesto e ser negado calado */
+      var perm = await Notification.requestPermission();
+      if (perm !== 'granted') { A.toast(perm === 'denied' ? 'Bloqueadas: libere em Ajustes → Notificações → Apollux' : 'Permissão não concedida', 'warn'); return this.notif(); }
+      if (b) b.disabled = true;
+      try {
+        var sub = this.sub || await this.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chaveBytes(this.k.chave) });
+        var r = await A.api('/push/inscrever', sub.toJSON());
+        if (!r.ok) throw new Error(r.erro || 'recusado pelo backend');
+        var t = await A.api('/push/teste', { endpoint: sub.endpoint });
+        A.toast(t.ok ? 'Notificações ligadas · mandei um teste' : 'Ligadas, mas o teste não saiu: ' + (t.motivo || 'falha no serviço de push'), t.ok ? '' : 'warn');
+      } catch (e) { A.toast('Não deu para ativar: ' + A.erroTxt(e), 'neg'); }
+      this.notif();
+    },
+    teste: async function () {
+      try { var t = await A.api('/push/teste', { endpoint: this.sub.endpoint }); A.toast(t.ok ? 'Teste enviado: chega em segundos' : 'O teste não saiu (' + (t.motivo || t.falhas + ' falha') + ')', t.ok ? '' : 'warn'); }
+      catch (e) { A.toast('Erro: ' + A.erroTxt(e), 'neg'); }
+    },
+    desligar: async function () {
+      try { await A.api('/push/sair', { endpoint: this.sub.endpoint }); A.toast('Notificações desta conta desligadas'); }
+      catch (e) { A.toast('Erro: ' + A.erroTxt(e), 'neg'); }
+      this.notif();
     },
     update: function () {
       var h = M.health; $('mx-foot').textContent = 'Apollux · ' + NOME_CONTA + (h ? ' · v' + h.versao + (h.commit ? ' · ' + String(h.commit).slice(0, 7) : '') : '') + ' · paper trading: dinheiro fictício, preço real';
@@ -784,5 +853,11 @@
   /* ================= boot ================= */
   vai();
   A.carregar(); A.iniciar(); saudeLoop();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function () {});
+    /* [PUSH-1] toque numa notificação com o app aberto: o SW manda o hash da tela do aviso */
+    navigator.serviceWorker.addEventListener('message', function (e) {
+      var d = e.data || {}; if (d.tipo === 'abrir' && typeof d.url === 'string' && d.url.charAt(0) === '#') location.hash = d.url;
+    });
+  }
 })();

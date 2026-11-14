@@ -58,3 +58,29 @@ self.addEventListener('fetch', e => {
     e.waitUntil(rede.catch(() => {}));
   }
 });
+
+// [PUSH-1] Notificacao nativa. O backend cifra para este aparelho e entrega pelo servico de push
+// dele (Apple/Google); aqui ela vira notificacao do sistema. TODO push tem que mostrar uma
+// notificacao: o iOS retira a permissao do app que recebe push e fica calado. Por isso nao ha
+// caminho que saia daqui sem showNotification, nem com corpo ilegivel.
+// `tag` agrupa: "pos-12" do aviso de abertura e trocado pelo de fechamento da mesma posicao.
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { corpo: e.data ? e.data.text() : '' }; }
+  const op = { body: d.corpo || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+               lang: 'pt-BR', data: { url: d.url || '#painel' } };
+  if (d.tag) { op.tag = d.tag; op.renotify = true; }
+  e.waitUntil(self.registration.showNotification(d.titulo || 'Apollux', op));
+});
+
+// Toque na notificacao: com o app aberto, foca e manda para a tela do aviso (a pagina troca o
+// hash, sem recarregar); fechado, abre pela raiz, e o index decide celular ou desktop.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '#painel';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    const c = cs.find(x => x.url.startsWith(self.registration.scope));
+    if (c) { c.postMessage({ tipo: 'abrir', url: url }); return c.focus(); }
+    return self.clients.openWindow(new URL('./' + url, self.registration.scope).href);
+  }));
+});

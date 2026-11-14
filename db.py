@@ -109,6 +109,19 @@ CREATE TABLE IF NOT EXISTS dca(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, valor_aporte REAL, freq_dias REAL,
   unidades REAL DEFAULT 0, total_investido REAL DEFAULT 0, n_aportes INTEGER DEFAULT 0,
   ultimo_aporte TEXT, criado_em TEXT, status TEXT DEFAULT 'ativo');  -- acumulacao DCA (sem alavancagem)
+
+-- [PUSH-1] Aparelhos inscritos para notificacao nativa (push.py). `endpoint` e o endereco que o
+-- servico de push do aparelho deu (Apple/Google); p256dh e auth sao as chaves PUBLICAS com que se
+-- cifra para ele. Nada aqui decifra mensagem nem da acesso ao painel: vazar esta tabela permite
+-- no maximo mandar aviso falso para o aparelho, e so com a chave VAPID, que mora no .env.
+CREATE TABLE IF NOT EXISTS push_inscricoes(
+  endpoint TEXT PRIMARY KEY,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  ua TEXT,
+  criado_em TEXT,        -- naive, hora de Sao Paulo (CLAUDE.md §1)
+  ultimo_ok TEXT,
+  falhas INTEGER DEFAULT 0);
 """
 
 # Fonte UNICA da verdade dos parametros do sistema. [P2-16]
