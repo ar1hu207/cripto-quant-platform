@@ -83,7 +83,7 @@ h1,h2,h3{text-wrap:balance}
 .side{position:sticky;top:0;align-self:start;height:100vh;display:flex;flex-direction:column;gap:18px;padding-block:22px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:16px;border-right:1px solid var(--line);background:linear-gradient(180deg,rgba(var(--panel-rgb),.92),rgba(var(--bg-rgb),.86));backdrop-filter:blur(8px);overflow-y:auto}
 .main{min-width:0;padding-block:18px 28px;padding-left:20px;padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
 .brand{display:flex;align-items:center;gap:10px;color:var(--accent);filter:drop-shadow(0 0 10px rgba(var(--accent-rgb),var(--glow)))}
-.brand-glyph{width:32px;height:32px;flex:none}
+.brand-glyph{width:48px;height:32px;flex:none;object-fit:contain}
 .wordmark{font-family:var(--f-display);font-weight:800;font-size:22px;letter-spacing:-.01em;color:var(--txt);line-height:1}
 .nav{display:flex;flex-direction:column;gap:4px}
 .nav-label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:10px 0 4px;padding-left:12px}
@@ -419,7 +419,7 @@ select.inp{font-family:var(--f-ui)}
 <!-- Gate de login: só abre quando o backend devolve 401 (ou no "Sair"). Mesma credencial do clássico. -->
 <div id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gate-h">
   <form class="gate-card" id="gate-form" autocomplete="on">
-    <div class="brand" id="gate-h"><svg class="brand-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/><polyline points="6,17 11,17 13.5,10 17,23 20,14 22,17 26,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="wordmark">Apollux</span></div>
+    <div class="brand" id="gate-h"><img class="brand-glyph" src="icons/marca.png" alt="" width="48" height="32"><span class="wordmark">Apollux</span></div>
     <div class="gate-sub">acesso restrito</div>
     <div class="gate-status" id="gate-status"><span id="gate-status-txt">verificando backend…</span></div>
     <label class="gate-f">Usuário<input class="inp" id="gate-user" name="username" autocomplete="username" value="admin" spellcheck="false" autocapitalize="off" autocorrect="off"></label>
@@ -434,7 +434,7 @@ select.inp{font-family:var(--f-ui)}
 <div class="app">
   <aside class="side">
     <a class="brand" href="#painel" aria-label="Apollux · Painel">
-      <svg class="brand-glyph" viewBox="0 0 32 32" aria-hidden="true"><rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/><polyline points="6,17 11,17 13.5,10 17,23 20,14 22,17 26,17" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <img class="brand-glyph" src="icons/marca.png" alt="" width="48" height="32">
       <span class="wordmark">Apollux</span>
     </a>
     <nav class="nav" aria-label="Módulos">

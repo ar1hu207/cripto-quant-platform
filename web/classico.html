@@ -186,9 +186,8 @@
   .topbar{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap;
     min-height:56px;padding:8px 24px;background:var(--bg-el);border-bottom:1px solid var(--line)}
   .brand{display:flex;align-items:center;gap:9px;margin-right:8px}
-  /* quadrado --accent de raio 4: a marca e o unico lugar onde o azul preenche sem ser acao */
-  .logo{width:26px;height:26px;flex:none;border-radius:var(--r-sm);background:var(--accent);
-    display:grid;place-items:center;font-size:15px}
+  /* a marca e a logo do Apollux (icons/marca.png), a mesma do painel novo e do app */
+  .logo{width:39px;height:26px;flex:none;object-fit:contain}
   .bname{font-size:var(--fs-200);font-weight:700;letter-spacing:-.2px;line-height:var(--lh-head)}
   .brand .sub{font-size:var(--fs-75);color:var(--txt3);font-weight:500}
   .topnav{display:flex;gap:2px}
@@ -594,10 +593,9 @@
   .gate-card.shake{animation:gateShake .4s}
   @keyframes gateShake{10%,90%{transform:translateX(-2px)}30%,70%{transform:translateX(4px)}50%{transform:translateX(-5px)}}
 
-  /* marca: quadrado --accent de raio 4, o mesmo da topbar. Era um gradiente com sombra colorida
+  /* marca: a logo do Apollux, a mesma da topbar. Era um gradiente com sombra colorida
      e anel pulsante -- tres efeitos para dizer uma coisa. */
-  .gate-mark{width:40px;height:40px;margin:0 auto 16px;border-radius:var(--r-sm);
-    background:var(--accent);display:grid;place-items:center;font-size:22px}
+  .gate-mark{display:block;width:60px;height:40px;margin:0 auto 16px;object-fit:contain}
 
   .gate-h{text-align:center;font-size:var(--fs-300);font-weight:700;line-height:var(--lh-head)}
   .gate-h span{color:var(--txt3);font-weight:500}
@@ -658,7 +656,7 @@
      aparece quando o backend devolve 401 -- em dev sem senha ninguem ve isto. -->
 <div id="gate" role="dialog" aria-modal="true" aria-labelledby="gate-h">
   <form class="gate-card" id="gate-form">
-    <div class="gate-mark" aria-hidden="true">🤖</div>
+    <img class="gate-mark" src="icons/marca.png" alt="" width="60" height="40">
     <div>
       <h2 class="gate-h" id="gate-h">Cripto Bot <span>Terminal</span></h2>
       <div class="gate-sub">acesso restrito</div>
@@ -684,7 +682,7 @@
 <!-- Casca do DESIGN.md > Layout grammar: topbar, tab bar e status bar fixa.
      Sai a sidebar de 232px, sai o bento de duas colunas, saem os banners de risco. -->
 <header class="topbar">
-  <div class="brand"><span class="logo" aria-hidden="true">🤖</span>
+  <div class="brand"><img class="logo" src="icons/marca.png" alt="" width="39" height="26">
     <span><span class="bname">Cripto Bot</span> <span class="sub">Terminal</span></span></div>
   <div class="conta-sel" role="group" aria-label="Conta">
     <button type="button" data-conta="A" onclick="trocaConta('A')" title="Produção: as regras de hoje">A · Produção</button>

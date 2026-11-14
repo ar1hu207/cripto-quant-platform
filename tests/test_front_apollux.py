@@ -158,13 +158,47 @@ def test_as_dez_rotas_estao_na_navegacao():
 
 # ---------------------------------------------------------------- PWA
 
-def test_service_worker_casca_v2_e_api_fora_do_cache():
+def test_service_worker_casca_v3_e_api_fora_do_cache():
     sw = _ler(WEB, "sw.js")
-    assert re.search(r"const CASCA = 'casca-v2'", sw)
+    # v3 = logo nova: os icones trocaram sem trocar de nome, o activate apaga o cache que os guardava
+    assert re.search(r"const CASCA = 'casca-v3'", sw)
     # /app/ rede-primeiro: HTML novo com JS velho do cache quebra a tela no dia do deploy
     assert "'/app/'" in sw
     # a API mora em outra origem e responde com a credencial: o SW nao toca nela
     assert "location.origin" in sw or "self.location.origin" in sw
+
+
+def test_a_logo_e_a_mesma_em_todo_lugar():
+    """Logo do Apollux (13/11): uma imagem so, icons/marca.png, no painel, no app do celular e no
+    classico. O glifo antigo (onda de pulso em SVG) e o emoji do classico nao voltam."""
+    for nome in ("index.html", "m.html", "classico.html"):
+        html = _ler(WEB, nome)
+        assert 'src="icons/marca.png"' in html, nome
+        assert "polyline points=\"6,17" not in html, nome
+        # o emoji continua nos botoes do auto-trade do classico; como MARCA ele nao volta
+        assert not re.search(r'class="(logo|gate-mark)"[^>]*>\U0001F916', html), nome
+    assert os.path.isfile(os.path.join(WEB, "icons", "marca.png"))
+
+
+def test_icones_do_app_no_tamanho_e_sem_transparencia():
+    """O iPhone pinta de preto o que for transparente no apple-touch-icon, e o manifesto promete os
+    tamanhos que declara. A marca, ao contrario, e transparente: senta no fundo de qualquer paleta."""
+    import struct
+
+    def ihdr(nome):
+        # cabecalho PNG: 8 bytes de assinatura, depois o IHDR com largura, altura e tipo de cor
+        # (2 = RGB, 6 = RGBA). Le direto para nao pedir Pillow ao CI.
+        with open(os.path.join(WEB, "icons", nome), "rb") as f:
+            b = f.read(26)
+        assert b[:8] == b"\x89PNG\r\n\x1a\n" and b[12:16] == b"IHDR", nome
+        w, h = struct.unpack(">II", b[16:24])
+        return w, h, b[25]
+
+    tamanhos = {"icon-192.png": 192, "icon-512.png": 512, "maskable-512.png": 512,
+                "apple-touch-icon.png": 180, "favicon-32.png": 32}
+    for nome, n in tamanhos.items():
+        assert ihdr(nome) == (n, n, 2), nome
+    assert ihdr("marca.png")[2] == 6
 
 
 def test_manifesto_apollux():
