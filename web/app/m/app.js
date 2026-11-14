@@ -703,9 +703,16 @@
       if (!k.ativo) { st.textContent = 'O backend ainda não está pronto para notificação: ' + k.motivo + '.'; acts(''); return; }
       if (Notification.permission === 'denied') { st.innerHTML = 'Bloqueadas neste aparelho. Libere em <b>Ajustes → Notificações → Apollux</b> e volte aqui.'; acts(''); return; }
       if (sub && k.inscrito) {
-        st.innerHTML = 'Ligadas neste aparelho para a <b>' + conta + '</b>: abriu, ordem preenchida, fechou, parcial e trava diária.';
-        acts('<button type="button" class="btn secondary block" id="nt-teste">Mandar um teste</button><button type="button" class="btn ghost block" id="nt-off">Desligar nesta conta</button>');
+        st.innerHTML = 'Ligadas neste aparelho para a <b>' + conta + '</b>. Escolha o que toca na hora, o que espera o resumo e o que fica calado.';
+        acts(self.prefsHtml() +
+          '<button type="button" class="btn secondary block" id="nt-teste">Mandar um teste</button>' +
+          '<button type="button" class="btn secondary block" id="nt-resumo">Ver um resumo agora</button>' +
+          '<button type="button" class="btn ghost block" id="nt-off">Desligar nesta conta</button>');
+        self.prefsPinta();
+        $('nt-prefs').addEventListener('click', function (ev) { self.prefsToque(ev); });
+        $('nt-sil-de').onchange = $('nt-sil-ate').onchange = function () { self.silencio(); };
         $('nt-teste').onclick = function () { self.teste(); };
+        $('nt-resumo').onclick = function () { self.resumoAgora(); };
         $('nt-off').onclick = function () { self.desligar(); };
       } else {
         st.innerHTML = sub ? 'Desligadas neste aparelho para a <b>' + conta + '</b>.' : 'Receba no celular, como notificação do sistema, quando um trade abre, a ordem enche, a posição fecha ou a trava diária dispara.';
@@ -728,6 +735,66 @@
         A.toast(t.ok ? 'Notificações ligadas · mandei um teste' : 'Ligadas, mas o teste não saiu: ' + (t.motivo || 'falha no serviço de push'), t.ok ? '' : 'warn');
       } catch (e) { A.toast('Não deu para ativar: ' + A.erroTxt(e), 'neg'); }
       this.notif();
+    },
+    /* [PUSH-2] Preferências DESTE aparelho (o backend guarda por inscrição). Cada tipo: na hora,
+       só no resumo, ou desligado. O resumo sai alinhado ao relógio (de 3 em 3 h: 0h, 3h, 6h…) e
+       conta o resultado do dia + os trades do intervalo. No silêncio só a trava atravessa. */
+    prefsHtml: function () {
+      var TIPOS = [['entrada', 'Entradas', 'abriu a mercado ou a ordem encheu'],
+                   ['parcial', 'Parciais', 'TP1, TP2: realizou um pedaço, o resto segue'],
+                   ['fechou', 'Fechamentos', 'saiu inteira: TP final, stop, trailing, manual'],
+                   ['trava', 'Trava diária', 'risco: é a única que atravessa o silêncio']];
+      var MODOS = [['na_hora', 'Na hora'], ['resumo', 'Só no resumo'], ['off', 'Desligado']];
+      var hs = (this.k.catalogo && this.k.catalogo.resumo_h) || [0, 1, 2, 3, 4, 6, 8, 12, 24];
+      var horas = function (id) { var h = ''; for (var i = 0; i < 24; i++) h += '<option value="' + i + '">' + i + 'h</option>'; return '<select id="' + id + '" aria-label="' + (id === 'nt-sil-de' ? 'Silêncio começa' : 'Silêncio termina') + '">' + h + '</select>'; };
+      return '<div id="nt-prefs">' +
+        TIPOS.map(function (t) {
+          return '<div class="nt-pref"><span class="k">' + t[1] + '<small>' + t[2] + '</small></span><div class="seg" role="group" aria-label="' + t[1] + '">' +
+            MODOS.map(function (m) { return '<button type="button" data-t="' + t[0] + '" data-m="' + m[0] + '">' + m[1] + '</button>'; }).join('') + '</div></div>';
+        }).join('') +
+        '<div class="nt-pref"><span class="k">Resumo periódico<small id="nt-res-txt"></small></span><div class="chips" role="group" aria-label="Intervalo do resumo">' +
+          hs.map(function (h) { return '<button type="button" data-h="' + h + '">' + (h ? h + 'h' : 'sem resumo') + '</button>'; }).join('') + '</div></div>' +
+        '<div class="nt-pref"><span class="k">Horário silencioso<small>fora a trava, nada toca; o que acontecer entra no próximo resumo</small></span>' +
+          '<div class="seg" role="group" aria-label="Horário silencioso"><button type="button" data-sil="0">Desligado</button><button type="button" data-sil="1">Ligado</button></div>' +
+          '<div class="nt-sil" id="nt-sil-box">das ' + horas('nt-sil-de') + ' às ' + horas('nt-sil-ate') + '</div></div>' +
+        '</div>';
+    },
+    prefsPinta: function () {
+      var p = this.k.prefs || {}, box = $('nt-prefs'); if (!box) return;
+      box.querySelectorAll('[data-t]').forEach(function (b) { b.setAttribute('aria-pressed', String((p[b.dataset.t] || 'na_hora') === b.dataset.m)); });
+      box.querySelectorAll('[data-h]').forEach(function (b) { b.setAttribute('aria-pressed', String(+b.dataset.h === (p.resumo_h || 0))); });
+      var h = p.resumo_h || 0, hrs = [];
+      for (var i = 0; i < 24 && h; i += h) hrs.push(i + 'h');
+      $('nt-res-txt').textContent = h ? 'sai às ' + (hrs.length > 4 ? hrs.slice(0, 4).join(', ') + '…' : hrs.join(' e ')) + ' · resultado do dia + trades do intervalo' : 'desligado: só os avisos marcados "na hora"';
+      var s = p.silencio;
+      box.querySelectorAll('[data-sil]').forEach(function (b) { b.setAttribute('aria-pressed', String((b.dataset.sil === '1') === !!s)); });
+      $('nt-sil-box').style.opacity = s ? '1' : '.45';
+      $('nt-sil-de').value = String(s ? s.de : 23); $('nt-sil-ate').value = String(s ? s.ate : 7);
+    },
+    prefsToque: function (ev) {
+      var b = ev.target.closest('button'); if (!b) return;
+      if (b.dataset.t) { var o = {}; o[b.dataset.t] = b.dataset.m; return this.salvar(o); }
+      if (b.dataset.h != null) return this.salvar({ resumo_h: +b.dataset.h });
+      if (b.dataset.sil) return this.salvar({ silencio: b.dataset.sil === '1' ? { de: +$('nt-sil-de').value, ate: +$('nt-sil-ate').value } : null });
+    },
+    silencio: function () {
+      var de = +$('nt-sil-de').value, ate = +$('nt-sil-ate').value;
+      if (de === ate) { A.toast('Início e fim do silêncio iguais', 'warn'); return this.prefsPinta(); }
+      this.salvar({ silencio: { de: de, ate: ate } });
+    },
+    salvar: async function (patch) {
+      try {
+        var r = await A.api('/push/prefs', { endpoint: this.sub.endpoint, prefs: patch });
+        if (!r.ok) throw new Error(r.erro || 'recusado pelo backend');
+        this.k.prefs = r.prefs; A.toast('Salvo');
+      } catch (e) {
+        A.toast(e.status === 404 ? 'O backend ainda não tem preferências: falta o deploy no servidor.' : 'Não salvou: ' + A.erroTxt(e), 'neg');
+      }
+      this.prefsPinta();
+    },
+    resumoAgora: async function () {
+      try { var t = await A.api('/push/resumo', { endpoint: this.sub.endpoint }); A.toast(t.ok ? 'Resumo enviado: chega em segundos' : 'O resumo não saiu (' + (t.motivo || t.falhas + ' falha') + ')', t.ok ? '' : 'warn'); }
+      catch (e) { A.toast(e.status === 404 ? 'O backend ainda não tem resumo: falta o deploy no servidor.' : 'Erro: ' + A.erroTxt(e), 'neg'); }
     },
     teste: async function () {
       try { var t = await A.api('/push/teste', { endpoint: this.sub.endpoint }); A.toast(t.ok ? 'Teste enviado: chega em segundos' : 'O teste não saiu (' + (t.motivo || t.falhas + ' falha') + ')', t.ok ? '' : 'warn'); }

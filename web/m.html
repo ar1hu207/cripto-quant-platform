@@ -243,6 +243,14 @@ a.m-row .ic,button.m-row .ic{width:16px;height:16px;color:var(--mute)}
 .seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .seg button{min-height:38px;border-radius:9px;font-size:13px;font-weight:500;color:var(--txt2)}
 .seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);font-weight:600}
+/* [PUSH-2] preferências de notificação: rótulo em cima, controle embaixo (cabe em 320px) */
+.nt-pref{display:grid;gap:6px;padding:10px 0;border-bottom:1px solid rgba(var(--line-rgb),.8)}
+.nt-pref .k{font-size:13.5px;color:var(--txt)}
+.nt-pref .k small{display:block;font-family:var(--f-mono);font-size:10.5px;color:var(--mute)}
+.nt-pref .seg button{min-height:34px;font-size:12px}
+.nt-pref .chips{margin:0;padding:2px 0;flex-wrap:wrap}
+.nt-pref select{min-height:38px;padding:0 10px;border-radius:9px;border:1px solid var(--line2);background:var(--panel)}
+.nt-sil{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt2)}
 .chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 calc(-16px - var(--safe-r)) 0 calc(-16px - var(--safe-l));padding:2px calc(16px + var(--safe-r)) 2px calc(16px + var(--safe-l))}
 .chips::-webkit-scrollbar{display:none}
 .chips button{flex:none;min-height:36px;padding:6px 12px;border-radius:999px;border:1px solid var(--line2);font-family:var(--f-mono);font-size:12px;color:var(--txt2);display:inline-flex;align-items:center;gap:6px}

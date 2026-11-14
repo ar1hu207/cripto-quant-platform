@@ -182,6 +182,7 @@ async def lifespan(app):
     _guarda_conta()                 # [AB-1] antes de abrir banco: conta B no banco da A não sobe
     db.init_db()
     threading.Thread(target=worker, daemon=True).start()
+    push.iniciar()                  # [PUSH-2] o relogio do resumo periodico; sem chave, no-op
     yield
     _worker_on["v"] = False
 
@@ -1340,15 +1341,24 @@ class PushTesteReq(BaseModel):
     endpoint: Optional[str] = None
 
 
+class PushPrefsReq(BaseModel):
+    endpoint: str
+    prefs: dict
+
+
 @app.get("/push/chave")
 def push_chave(endpoint: Optional[str] = None):
     """`inscrito` diz se ESTE aparelho (o `endpoint` dele) recebe desta conta: o mesmo aparelho
     pode estar inscrito na A e nao na B, e o app precisa saber qual botao mostrar."""
     ativo, motivo = push.estado()
     subs = push.inscricoes()
+    meu = next((x for x in subs if endpoint and x["endpoint"] == endpoint), None)
     return {"ativo": ativo, "chave": push.chave_publica() if ativo else None, "motivo": motivo,
-            "conta": CONTA, "aparelhos": len(subs),
-            "inscrito": bool(endpoint) and any(x["endpoint"] == endpoint for x in subs)}
+            "conta": CONTA, "aparelhos": len(subs), "inscrito": meu is not None,
+            # [PUSH-2] as preferencias DESTE aparelho, e o catalogo que o app desenha
+            "prefs": meu["prefs"] if meu else None,
+            "catalogo": {"tipos": list(push.TIPOS), "modos": list(push.MODOS),
+                         "resumo_h": list(push.RESUMO_H)}}
 
 
 @app.post("/push/inscrever")
@@ -1375,6 +1385,27 @@ def push_teste(req: PushTesteReq):
     """Entrega SINCRONA, para o app dizer na hora se chegou ao servico de push."""
     r = push.enviar_agora(*push.MSG_TESTE, "#painel", "teste", so=req.endpoint)
     return {**r, "ok": r["ok"] > 0, "enviados": r["ok"]}
+
+
+@app.post("/push/prefs")
+def push_prefs(req: PushPrefsReq):
+    """[PUSH-2] O que ESTE aparelho recebe: cada tipo na hora / so no resumo / desligado, o
+    intervalo do resumo e o horario silencioso. Valor fora do catalogo e recusado, nao adivinhado."""
+    try:
+        p = push.salvar_prefs(req.endpoint, req.prefs)
+    except ValueError as e:
+        return {"ok": False, "erro": str(e)}
+    if p is None:
+        return {"ok": False, "erro": "este aparelho nao esta inscrito nesta conta"}
+    log(f"push: preferencias de um aparelho mudaram: {req.prefs}")
+    return {"ok": True, "prefs": p}
+
+
+@app.post("/push/resumo")
+def push_resumo(req: PushSairReq):
+    """[PUSH-2] Manda o resumo agora, para ver como ele chega; nao mexe no relogio do agendado."""
+    r = push.enviar_resumo_agora(req.endpoint)
+    return {**r, "ok": r["ok"] > 0}
 
 
 @app.post("/dca")

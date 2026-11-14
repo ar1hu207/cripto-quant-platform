@@ -335,3 +335,199 @@ def test_gerar_chaves_devolve_um_par_que_o_pywebpush_aceita():
     from cryptography.hazmat.primitives import serialization
     assert _b64(v.public_key.public_bytes(serialization.Encoding.X962,
                                           serialization.PublicFormat.UncompressedPoint)) == pub
+
+
+# ---------------------------------------------------------------- [PUSH-2] preferencias e resumo
+# O dono (13/11): "modelavel quanto tempo cada notificacao vai tocar ... opcional os tipos ...
+# de 3 em 3h falando de lucro, de alguns trades ... resultado do dia". Cada aparelho escolhe,
+# por tipo, na hora / so no resumo / desligado; o resumo sai alinhado ao relogio.
+
+def _inscrito(prefs=None, endpoint=APPLE):
+    _, p, _, a = _aparelho()
+    push.inscrever(endpoint, p, a)
+    if prefs:
+        push.salvar_prefs(endpoint, prefs)
+    return endpoint
+
+
+def test_aparelho_antigo_fica_no_padrao_de_antes(banco):
+    """Inscrito antes do [PUSH-2] (prefs NULL) recebe tudo na hora e nenhum resumo."""
+    _inscrito()
+    assert push.inscricoes()[0]["prefs"] == push.PREFS_PADRAO
+    with db.conectar() as c:                              # gravado ilegivel tambem vale o padrao
+        c.execute("UPDATE push_inscricoes SET prefs='{lixo'")
+    assert push.inscricoes()[0]["prefs"] == push.PREFS_PADRAO
+
+
+@pytest.mark.parametrize("ruim", [{"entrada": "talvez"}, {"resumo_h": 5}, {"resumo_h": "3"},
+                                  {"resumo_h": True}, {"silencio": {"de": 23}},
+                                  {"silencio": {"de": 7, "ate": 7}}, {"silencio": {"de": 24, "ate": 7}},
+                                  {"som": "alto"}, ["entrada"]])
+def test_preferencia_fora_do_catalogo_e_recusada(ruim):
+    with pytest.raises(ValueError):
+        push.normalizar_prefs(ruim)
+
+
+def test_preferencias_gravam_mesclam_e_sobrevivem_a_reinscricao(banco):
+    ep = _inscrito({"entrada": "resumo", "resumo_h": 3})
+    p = push.salvar_prefs(ep, {"fechou": "off"})
+    assert p["entrada"] == "resumo" and p["fechou"] == "off" and p["resumo_h"] == 3
+    _, k, _, a = _aparelho()
+    push.inscrever(ep, k, a)                              # o app renova a inscricao sozinho
+    assert push.inscricoes()[0]["prefs"]["fechou"] == "off"
+    assert push.salvar_prefs("https://web.push.apple.com/outro", {"fechou": "off"}) is None
+
+
+def test_quem_quer_o_que_e_quando():
+    t = pd.Timestamp("2026-11-13 02:00")
+    p = dict(push.PREFS_PADRAO, entrada="resumo", parcial="off", silencio={"de": 23, "ate": 7})
+    assert push.quer_agora(p, None, t) is True            # o teste vai sempre
+    assert push.quer_agora(p, "entrada", t.replace(hour=12)) is False   # so no resumo
+    assert push.quer_agora(p, "parcial", t.replace(hour=12)) is False   # desligado
+    assert push.quer_agora(p, "fechou", t.replace(hour=12)) is True
+    assert push.quer_agora(p, "fechou", t) is False       # 2h esta no silencio 23h-7h
+    assert push.quer_agora(p, "trava", t) is True         # a trava atravessa
+    assert push.em_silencio({"silencio": {"de": 13, "ate": 15}}, t.replace(hour=14))
+    assert not push.em_silencio({"silencio": {"de": 13, "ate": 15}}, t.replace(hour=15))
+
+
+def test_cada_aparelho_recebe_so_o_que_escolheu(banco, chaves, servico):
+    google = "https://fcm.googleapis.com/fcm/send/abc"
+    _inscrito({"entrada": "off"}, APPLE)
+    _inscrito(None, google)
+    r = push.enviar_agora(*push.msg_abriu("LONG", "BTC/USDT", 500, 5, 1), tipo="entrada")
+    assert r["ok"] == 1 and [x["url"] for x in servico["recebidos"]] == [google]
+    assert push.enviar_agora("x", "y", tipo="fechou")["ok"] == 2
+
+
+def test_resumo_sai_alinhado_ao_relogio_e_uma_vez_por_bloco():
+    p = dict(push.PREFS_PADRAO, resumo_h=3)
+    t = pd.Timestamp
+    assert push.inicio_do_bloco(t("2026-11-13 16:40"), 3) == t("2026-11-13 15:00")
+    assert not push.resumo_vencido(p, "2026-11-13 14:10:00", t("2026-11-13 14:59"))
+    assert push.resumo_vencido(p, "2026-11-13 14:10:00", t("2026-11-13 15:00"))
+    assert not push.resumo_vencido(p, "2026-11-13 15:00:30", t("2026-11-13 17:59"))
+    assert not push.resumo_vencido(dict(p, resumo_h=0), None, t("2026-11-13 15:00"))
+    calado = dict(p, silencio={"de": 23, "ate": 7})       # o das 3h espera o fim do silencio
+    assert not push.resumo_vencido(calado, "2026-11-13 21:00", t("2026-11-14 03:00"))
+    assert push.resumo_vencido(calado, "2026-11-13 21:00", t("2026-11-14 07:01"))
+
+
+def test_ligar_o_resumo_nao_dispara_um_na_hora(banco):
+    ep = _inscrito()
+    push.salvar_prefs(ep, {"resumo_h": 3})
+    s = push.inscricoes()[0]
+    assert s["ultimo_resumo"] and not push.resumo_vencido(s["prefs"], s["ultimo_resumo"],
+                                                          pd.Timestamp(s["ultimo_resumo"]))
+
+
+def _dia_com_trades(hoje):
+    """Inicio do dia com R$ 1.000; uma posicao aberta as 13h que realizou TP1 as 14h e segue
+    aberta; uma que fechou inteira no stop as 14h30; banca hoje em 1.030 + 5 em aberto."""
+    semear_equity(f"{hoje} 00:00:05", 1000.0)
+    ins_pos = ("INSERT INTO posicoes(ativo,direcao,entrada,valor_reais,alavancagem,stop,preco_atual,"
+               "pnl,aberto_em,status) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    ins_tr = ("INSERT INTO trades(ativo,direcao,pnl_reais,motivo_saida,aberto_em,fechado_em) "
+              "VALUES(?,?,?,?,?,?)")
+    with db.conectar() as c:
+        c.execute("UPDATE banca SET atual=1030 WHERE id=1")
+        c.execute(ins_pos, ("ETH/USDT:USDT", "LONG", 3000, 300, 5, 2900, 3010, 5,
+                            f"{hoje} 13:00:00", "aberta"))
+        c.execute(ins_tr, ("ETH/USDT:USDT", "LONG", 40.0, "tp1", f"{hoje} 13:00:00", f"{hoje} 14:00:00"))
+        c.execute(ins_pos, ("SOL/USDT:USDT", "SHORT", 150, 200, 3, 155, 155, 0,
+                            f"{hoje} 12:50:00", "fechada"))
+        c.execute(ins_tr, ("SOL/USDT:USDT", "SHORT", -10.0, "stop", f"{hoje} 12:50:00", f"{hoje} 14:30:00"))
+
+
+def test_resumo_conta_o_dia_e_os_trades_da_janela(banco):
+    hoje = str(pd.Timestamp.now().date())
+    _dia_com_trades(hoje)
+    agora = pd.Timestamp(f"{hoje} 15:00")
+    titulo, corpo = push.montar_resumo(push.PREFS_PADRAO, pd.Timestamp(f"{hoje} 12:00"), agora)
+    linhas = corpo.split("\n")
+    assert titulo == "Resumo das 15h · dia no verde 💰"
+    # o dia pela regua da trava: 1.035 de equity agora contra 1.000 no inicio
+    assert linhas[0] == "Hoje: +R$ 35,00 · realizado +R$ 30,00 · aberto +R$ 5,00"
+    assert linhas[1:5] == ["↗ Entrou SHORT SOLUSDT · R$ 200,00 a 3x",
+                           "↗ Entrou LONG ETHUSDT · R$ 300,00 a 5x",
+                           "✓ +R$ 40,00 · LONG ETHUSDT · bateu o TP1 (parcial)",
+                           "✕ −R$ 10,00 · SHORT SOLUSDT · bateu o stop"]
+    assert linhas[-1] == "1 posição aberta"
+
+    so_saidas = dict(push.PREFS_PADRAO, entrada="off", parcial="off")
+    _, corpo = push.montar_resumo(so_saidas, pd.Timestamp(f"{hoje} 12:00"), agora)
+    assert corpo.split("\n")[1:-1] == ["✕ −R$ 10,00 · SHORT SOLUSDT · bateu o stop"]
+
+    _, corpo = push.montar_resumo(push.PREFS_PADRAO, pd.Timestamp(f"{hoje} 14:45"), agora)
+    assert "Nenhum trade desde as 14h45" in corpo
+
+
+def test_resumo_de_dia_ruim_nao_comemora_e_fala_da_trava(banco):
+    hoje = str(pd.Timestamp.now().date())
+    semear_equity(f"{hoje} 00:00:05", 1000.0)
+    with db.conectar() as c:
+        c.execute("UPDATE banca SET atual=900 WHERE id=1")
+    db.set_config("trava_dia_em", hoje)
+    titulo, corpo = push.montar_resumo(push.PREFS_PADRAO, pd.Timestamp(f"{hoje} 09:00"),
+                                       pd.Timestamp(f"{hoje} 12:00"))
+    assert titulo == "Resumo das 12h" and corpo.startswith("Hoje: −R$ 100,00")
+    assert corpo.endswith("trava diária acionada 🛑")
+
+
+def test_resumo_que_atravessa_a_meia_noite_fecha_o_dia_de_ontem(banco):
+    ontem, hoje = "2026-11-12", "2026-11-13"
+    semear_equity(f"{ontem} 00:00:05", 1000.0)
+    semear_equity(f"{hoje} 00:00:05", 1080.0)
+    with db.conectar() as c:
+        c.execute("UPDATE banca SET atual=1080 WHERE id=1")
+        c.execute("INSERT INTO trades(ativo,direcao,pnl_reais,motivo_saida,aberto_em,fechado_em) "
+                  "VALUES(?,?,?,?,?,?)", ("BTC/USDT:USDT", "LONG", 80.0, "trailing",
+                                          f"{ontem} 20:00:00", f"{ontem} 22:00:00"))
+    _, corpo = push.montar_resumo(push.PREFS_PADRAO, pd.Timestamp(f"{ontem} 21:00"),
+                                  pd.Timestamp(f"{hoje} 00:00"))
+    assert corpo.split("\n")[1] == "Ontem: +R$ 80,00 em 1 trade"
+
+
+def test_resumo_agendado_sai_uma_vez_por_bloco(banco, chaves, servico):
+    _inscrito({"resumo_h": 3})
+    with db.conectar() as c:
+        c.execute("UPDATE push_inscricoes SET ultimo_resumo='2026-11-13 12:00:00'")
+    assert push.resumos_vencidos(pd.Timestamp("2026-11-13 14:59")) == 0
+    assert push.resumos_vencidos(pd.Timestamp("2026-11-13 15:00:20")) == 1
+    assert push.resumos_vencidos(pd.Timestamp("2026-11-13 15:01:20")) == 0   # o tique seguinte
+    assert len(servico["recebidos"]) == 1
+    assert push.inscricoes()[0]["ultimo_resumo"] == "2026-11-13 15:00:20"
+    servico["status"] = 500                                # Apple fora: nao repete a cada minuto
+    assert push.resumos_vencidos(pd.Timestamp("2026-11-13 18:00:10")) == 1
+    assert push.resumos_vencidos(pd.Timestamp("2026-11-13 18:01:10")) == 0
+
+
+def test_eventos_do_simulador_dizem_o_tipo(banco, sem_rede, monkeypatch):
+    tipos = []
+    monkeypatch.setattr(push, "avisar", lambda *a, **k: tipos.append(k.get("tipo")))
+    sid = semear_sinal(preco=100.0, stop=95.0)
+    pid = simulador.abrir(sid, 50.0, 2)
+    simulador.fechar(pid, "manual")
+    assert tipos == ["entrada", "fechou"]
+
+
+def test_rotas_de_preferencia(cliente, chaves, servico):
+    h = {"Authorization": CRED}
+    for rota in ("/push/prefs", "/push/resumo"):
+        assert cliente.post(rota).status_code == 401, rota
+    _inscrito()
+    k = cliente.get("/push/chave", headers=h, params={"endpoint": APPLE}).json()
+    assert k["prefs"] == push.PREFS_PADRAO and k["catalogo"]["resumo_h"] == list(push.RESUMO_H)
+    r = cliente.post("/push/prefs", headers=h, json={"endpoint": APPLE, "prefs": {
+        "resumo_h": 3, "entrada": "resumo", "silencio": {"de": 23, "ate": 7}}}).json()
+    assert r["ok"] is True and r["prefs"]["resumo_h"] == 3 and r["prefs"]["fechou"] == "na_hora"
+    ruim = cliente.post("/push/prefs", headers=h, json={"endpoint": APPLE, "prefs": {"resumo_h": 5}})
+    assert ruim.json()["ok"] is False
+    assert push.inscricoes()[0]["prefs"]["resumo_h"] == 3          # recusa nao grava nada
+    outro = cliente.post("/push/prefs", headers=h, json={"endpoint": "https://web.push.apple.com/x",
+                                                         "prefs": {"resumo_h": 3}}).json()
+    assert outro["ok"] is False and "inscrito" in outro["erro"]
+    antes = push.inscricoes()[0]["ultimo_resumo"]
+    r = cliente.post("/push/resumo", headers=h, json={"endpoint": APPLE}).json()
+    assert r["ok"] is True and len(servico["recebidos"]) == 1
+    assert push.inscricoes()[0]["ultimo_resumo"] == antes          # o botao nao mexe no relogio

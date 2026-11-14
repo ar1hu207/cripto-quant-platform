@@ -391,7 +391,11 @@ def _migrar(c):
                             # gravadas significam "risco no stop da SAIDA", e reescrever o
                             # significado delas coalharia duas series com o mesmo nome -- que
                             # e pior que o defeito, e e a licao do [P2-40].
-                            ("risco_abertura", "REAL")]}
+                            ("risco_abertura", "REAL")],
+                 # [PUSH-2] o que cada aparelho quer receber (JSON, push.PREFS_PADRAO) e quando
+                 # saiu o ultimo resumo periodico dele. NULL = padrao: tudo na hora, sem resumo,
+                 # que e o comportamento de quem se inscreveu antes destas colunas existirem.
+                 "push_inscricoes": [("prefs", "TEXT"), ("ultimo_resumo", "TEXT")]}
     for tabela, novas in faltantes.items():
         existentes = {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}
         for nome, tipo in novas:
