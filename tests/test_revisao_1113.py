@@ -215,3 +215,29 @@ def test_entrada_manual_nao_depende_do_bot_estar_ligado(banco, sem_rede):
     sid = semear_sinal(preco=100.0, stop=95.0)
     tipo, pid = simulador.executar(sid, 50.0, 2)
     assert tipo == "posicao" and pid > 0
+
+
+# ==================================================================== scan
+def test_scan_dois_ao_mesmo_tempo_nao_duplicam_sinal(banco, monkeypatch):
+    """Worker e `POST /scan` no mesmo instante: cada um via a fila vazia, e os dois gravavam o
+    mesmo sinal. O dedupe e leitura + escrita, entao precisa de exclusao mutua."""
+    db.set_config("ativos", "BTC/USDT")
+    db.set_config("timeframes", "15m")
+    sinal = dict(ativo="BTC/USDT", tf="15m", tipo="tendencia", direcao="LONG", conviccao=80,
+                 motivos="x", preco=100.0, stop_sugerido=95.0, adx=30, n_fatores=3, vela_ms=1)
+    monkeypatch.setattr(signal_engine, "analisa", lambda a, tf: [dict(sinal)])
+    monkeypatch.setattr(signal_engine, "confirmado", lambda s, a, cfg: (True, "confirmado"))
+    monkeypatch.setattr(signal_engine, "marcar_desfechos", lambda *a, **k: 0)
+    gravar = signal_engine._gravar
+
+    def gravar_devagar(*a, **k):              # abre a janela entre o "ja existe?" e o INSERT
+        time.sleep(0.25)
+        return gravar(*a, **k)
+
+    monkeypatch.setattr(signal_engine, "_gravar", gravar_devagar)
+    ts = [threading.Thread(target=signal_engine.scan) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(20)
+    assert _n("sinais", "WHERE status='novo'") == 1
