@@ -90,11 +90,31 @@ def precos(ativos):
     return {a: t["last"] for a, t in _tickers(ativos).items()}
 
 
+def _rotulo_fg(valor):
+    """O rótulo do Fear & Greed, derivado do NÚMERO (faixas próximas das da alternative.me; na
+    borda entre duas faixas o rótulo pode diferir do dela por um ponto).
+
+    Era o `value_classification` da resposta, repassado como veio. É texto de terceiro, e o
+    painel clássico o escrevia em `innerHTML` sem escape: quem controlasse a resposta daquela
+    API punha HTML na página onde mora a credencial do painel, a cada 60 s e sem clique. O
+    número já chega como `int`; o texto passa a ser nosso."""
+    if valor < 25:
+        return "Extreme Fear"
+    if valor < 46:
+        return "Fear"
+    if valor < 55:
+        return "Neutral"
+    if valor < 76:
+        return "Greed"
+    return "Extreme Greed"
+
+
 def fear_greed():
     try:
         with urllib.request.urlopen("https://api.alternative.me/fng/?limit=1", timeout=6) as r:
             d = json.load(r)["data"][0]
-        return {"valor": int(d["value"]), "label": d["value_classification"]}
+        valor = max(0, min(100, int(d["value"])))
+        return {"valor": valor, "label": _rotulo_fg(valor)}
     except Exception:
         return None
 

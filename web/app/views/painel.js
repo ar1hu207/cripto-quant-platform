@@ -555,7 +555,9 @@
   async function diaADia() {
     if (S && !S.sigTr) { var e0 = S.estado || A.estado || {}; S.sigTr = ((e0.metricas || {}).n_trades || 0) + '|' + (((e0.trades || [])[0] || {}).id || '') + '|' + A.hoje(); }
     var tr;
-    try { tr = await A.api('/trades?limite=' + LIM); } catch (err) { if (S) $('pn-dd-body').innerHTML = '<div class="empty">Não consegui ler o /trades agora (' + A.esc(A.erroTxt(err)) + ').</div>'; return; }
+    /* na falha a assinatura volta a nulo: gravada antes do fetch, ela fazia o card ficar em "Não consegui ler"
+       até fechar um trade ou virar o dia, porque o `diaADiaSeMudou` achava que já tinha lido */
+    try { tr = await A.api('/trades?limite=' + LIM); } catch (err) { if (S) S.sigTr = null; if (S) $('pn-dd-body').innerHTML = '<div class="empty">Não consegui ler o /trades agora (' + A.esc(A.erroTxt(err)) + ').</div>'; return; }
     if (!S) return;
     var e = S.estado || A.estado || {};
     tr = (tr || []).filter(function (t) { return t.fechado_em; }).sort(function (a, b) { return a.fechado_em < b.fechado_em ? -1 : 1; });

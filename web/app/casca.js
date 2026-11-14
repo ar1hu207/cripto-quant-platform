@@ -96,6 +96,11 @@
       var r = await A.api('/panico', {});
       A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
       A.carregar();
+      /* O backend não para na posição que falha ao fechar, e a resposta agora diz QUAIS ficaram.
+         Isso não pode ser um toast de 3 s: fica na tela até a pessoa ver. */
+      var fl = r.falhas || [];
+      if (fl.length) await dialogo({ titulo: 'Pânico incompleto', perigo: true, ok: 'Entendi',
+        corpo: '<p><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return A.esc(F.par(f.ativo)); }).join(', ') + '.</p><p>O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p><p class="mute">' + A.esc(fl[0].erro || '') + '</p>' });
     } catch (err) { A.toast('Pânico falhou: ' + A.erroTxt(err), 'neg'); }
   }
   A.panico = panico;
@@ -181,7 +186,9 @@
     finally { busy = false; }
   }
   async function pularSinal(s) {
-    try { await A.api('/pular', { id: s.id }); A.toast('Sinal ' + F.par(s.ativo) + ' pulado'); A.carregar(); }
+    /* o /pular recusa com {ok:false} e HTTP 200 quando o sinal já saiu da fila (o Apollo o abriu
+       um segundo antes): a tela dizia "pulado" para um sinal que tinha virado posição */
+    try { var r = await A.api('/pular', { id: s.id }); if (r && r.ok === false) A.toast(r.erro || 'O sinal não está mais na fila', 'warn'); else A.toast('Sinal ' + F.par(s.ativo) + ' pulado'); A.carregar(); }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
   async function fecharPosicao(p) {
@@ -224,7 +231,10 @@
   /* ================= roteador por hash ================= */
   var viewRoot = $('view-root'), navLinks = Array.prototype.slice.call(document.querySelectorAll('.nav-item[data-route]'));
   var curRoute = null, curView = null, carregando = {};
-  function rota() { var h = location.hash.replace(/^#/, '').split('?')[0]; return TIT[h] ? h : 'painel'; }
+  /* hasOwnProperty: `#constructor` e `#__proto__` existem em todo objeto, e passavam por rota válida;
+     a view atual era destruída e a tela ficava congelada no DOM morto, com o LED dizendo "ao vivo" */
+  var tem = function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); };
+  function rota() { var h = location.hash.replace(/^#/, '').split('?')[0]; return tem(TIT, h) ? h : 'painel'; }
   function carregaView(id) {
     if (window.PULSE_VIEWS[id]) return Promise.resolve(window.PULSE_VIEWS[id]);
     if (carregando[id]) return carregando[id];
@@ -242,6 +252,7 @@
   var seq = 0;
   async function go(route) {
     if (route === curRoute) return;
+    if (dlgRes) dlgRes(false);   /* diálogo não sobrevive à troca de rota: o "Gravar" dele agiria sobre uma view já destruída */
     var meu = ++seq;
     if (curView && typeof curView.destroy === 'function') { try { curView.destroy(); } catch (e) { console.error('view ' + curRoute + ' destroy', e); } }
     curView = null; curRoute = route;
@@ -249,7 +260,7 @@
     document.title = (A.CONTA === 'B' ? '[Conta B] ' : '') + TIT[route] + ' · Apollux';
     widgetRota(route);
     window.scrollTo(0, 0);
-    if (UC[route]) { viewRoot.innerHTML = head(route) + ucHtml(route, UC[route]); entrada(); return; }
+    if (tem(UC, route)) { viewRoot.innerHTML = head(route) + ucHtml(route, UC[route]); entrada(); return; }
     viewRoot.innerHTML = head(route) + '<div class="card"><div class="skel" style="width:40%"></div><div class="skel"></div><div class="skel" style="width:70%"></div></div>';
     var v = await carregaView(route);
     if (meu !== seq) return;

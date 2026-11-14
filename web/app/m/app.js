@@ -164,7 +164,11 @@
     try {
       var r = await A.api('/panico', {});
       A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
-      A.carregar(); return true;
+      A.carregar();
+      /* posição que falhou ao fechar volta nomeada em `falhas`: um toast de 3 s não basta para isso */
+      var fl = r.falhas || [];
+      if (fl.length) await sheet({ titulo: 'Pânico incompleto', perigo: true, cancelar: 'Entendi', corpo: '<p class="note"><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return esc(F.par(f.ativo)); }).join(', ') + '.</p><p class="note">O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p>' });
+      return !fl.length;
     } catch (err) { A.toast('Pânico falhou: ' + A.erroTxt(err), 'neg'); return false; }
   }
   async function fechar(p) {
@@ -179,7 +183,8 @@
     } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); return false; }
   }
   async function pular(s) {
-    try { await A.api('/pular', { id: s.id }); A.toast('Sinal ' + F.par(s.ativo) + ' pulado'); A.carregar(); return true; }
+    /* {ok:false} com HTTP 200 = o sinal já saiu da fila (o Apollo o abriu): não é "pulado" */
+    try { var r = await A.api('/pular', { id: s.id }); if (r && r.ok === false) { A.toast(r.erro || 'O sinal não está mais na fila', 'warn'); A.carregar(); return false; } A.toast('Sinal ' + F.par(s.ativo) + ' pulado'); A.carregar(); return true; }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); return false; }
   }
   async function alternaAuto() {
@@ -881,7 +886,8 @@
   var tela = null, rotaAtual = null, tabs = Array.prototype.slice.call(document.querySelectorAll('#m-tabs [data-tab]'));
   function parse() {
     var h = location.hash.replace(/^#/, '').split('?')[0], p = h.split('/');
-    if (TELAS[p[0]] && (p[0] !== 'pos' && p[0] !== 'sinal' || p[1])) return { id: p[0], arg: p[1], chave: h };
+    /* hasOwnProperty: `#constructor` existe em todo objeto, passava por tela válida e derrubava o boot */
+    if (Object.prototype.hasOwnProperty.call(TELAS, p[0]) && (p[0] !== 'pos' && p[0] !== 'sinal' || p[1])) return { id: p[0], arg: p[1], chave: h };
     return { id: 'painel', chave: 'painel' };
   }
   function vai() {

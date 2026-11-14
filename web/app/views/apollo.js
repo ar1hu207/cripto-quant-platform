@@ -140,6 +140,10 @@
   function mostra(k, v, spec) {
     if (v == null || v === '') return '—';
     if (spec && spec.tipo === 'bool') return String(v) === '1' || String(v).toLowerCase() === 'true' ? 'ligado' : 'desligado';
+    /* Nestas duas chaves 0 NÃO é "o mais apertado": é a guarda DESLIGADA (simulador.guarda_risco e
+       _checar_tetos). A tela mostrava "0,00%", e quem digitava 0 para apertar removia o teto. */
+    if (k === 'risco_aberto_max' && isFinite(+v) && +v === 0) return 'SEM TETO (guarda desligada)';
+    if (k === 'exposicao_max' && isFinite(+v) && +v === 0) return 'SEM TETO configurado (só o limite de 100% da banca)';
     if (PCT[k] && isFinite(+v)) return F.f2(+v * 100) + '%';
     return String(v);
   }
@@ -229,7 +233,7 @@
     $('ap-cfg').innerHTML = grupos.filter(function (g) { return g[1].length; }).map(function (g) {
       return '<div class="cfg-g"><div class="cfg-gt">' + g[0] + '</div>' + g[1].map(function (k) {
         var spec = P[k], v = cfg[k], ro = k === 'ativos';
-        var faixa = spec.tipo === 'float' || spec.tipo === 'int' ? (PCT[k] ? F.f2(spec.min * 100) + '–' + F.f2(spec.max * 100) + '%' : spec.min + '–' + spec.max) : spec.tipo === 'enum' ? spec.opcoes.join(' · ') : spec.tipo;
+        var faixa = spec.tipo === 'float' || spec.tipo === 'int' ? (PCT[k] ? F.f2(spec.min * 100) + '–' + F.f2(spec.max * 100) + '%' : spec.min + '–' + spec.max) : spec.tipo === 'enum' ? spec.opcoes.join(' · ') : spec.tipo === 'lista_num' ? 'até ' + spec.max_itens + ' números, cada um acima de ' + spec.min + ' e até ' + spec.max + ', separados por vírgula' : spec.tipo;
         return '<div class="cfg-r' + (k in S.mudancas ? ' mudou' : '') + '" data-row="' + k + '"><div class="cfg-k"><b>' + A.esc(nome(k)) + (RISCO[k] ? '<span class="tag-r" title="mudar isto mexe em risco: decisão do dono">toca-risco</span>' : '') + '</b>' +
           '<span class="ch">' + k + ' · ' + A.esc(faixa) + ' · padrão ' + A.esc(mostra(k, spec.padrao, spec)) + '</span>' +
           (spec.racional ? '<details><summary>por que este valor</summary><p>' + A.esc(spec.racional) + '</p></details>' : '') + '</div>' +
@@ -303,7 +307,8 @@
     var soma = l.reduce(function (a, t) { return a + (t.pnl_reais || 0); }, 0);
     $('ap-jr-n').innerHTML = l.length + ' de ' + (S.trades || []).length + (l.length ? ' · <span class="' + F.cls(soma) + '">' + F.money(soma) + '</span>' : '');
     $('ap-jr').innerHTML = l.length ? l.slice(0, 80).map(function (t) {
-      var ret = t.ret_pct != null ? F.pct(t.ret_pct) : '';
+      /* o líquido (com taxa e funding), que é o que acompanha o P&L da mesma célula; o bruto só para linha antiga */
+      var ret = t.ret_pct_liq != null ? F.pct(t.ret_pct_liq) : t.ret_pct != null ? F.pct(t.ret_pct) : '';
       return '<li><time>' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</time><div><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span> <span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(t.direcao) + '</span> <span class="chip neutro">' + A.esc(t.motivo_saida || '—') + '</span>' +
         '<div class="d">' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' · ' + A.esc(t.alavancagem) + 'x · margem ' + F.brl(t.valor_reais) + (t.conviccao != null ? ' · conv. ' + Math.round(t.conviccao) : '') + ' · taxa ' + F.brl(t.taxa) + '</div></div>' +
         '<span class="amt ' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '<div class="d" style="text-align:right">' + ret + '</div></span></li>';

@@ -421,3 +421,82 @@ def test_front_o_panico_nao_diz_mais_que_a_ordem_pendente_sobrevive():
         txt = open(os.path.join(web, arq), encoding="utf-8").read()
         assert "NÃO é cancelada" not in txt and "NÃO são canceladas" not in txt, arq
         assert "ordens_canceladas" in txt, arq + ": o resultado do panico tem de dizer quantas cancelou"
+
+
+# =================================================================== leva2
+def test_leva2_rotulo_do_fear_greed_nao_e_texto_de_terceiro(monkeypatch):
+    """O `value_classification` da alternative.me era repassado cru e o painel classico o
+    escrevia em innerHTML: HTML de terceiro na pagina onde mora a credencial."""
+    import io
+
+    def falso(url, timeout=0):
+        corpo = b'{"data":[{"value":"73","value_classification":"<img src=x onerror=alert(1)>"}]}'
+        return io.BytesIO(corpo)
+
+    monkeypatch.setattr(mercado.urllib.request, "urlopen", falso)
+    fg = mercado.fear_greed()
+    assert fg == {"valor": 73, "label": "Greed"}
+    for v, rot in ((0, "Extreme Fear"), (24, "Extreme Fear"), (30, "Fear"), (50, "Neutral"),
+                   (60, "Greed"), (90, "Extreme Greed"), (100, "Extreme Greed")):
+        assert mercado._rotulo_fg(v) == rot
+
+
+def test_leva2_panico_diz_qual_posicao_nao_fechou(cliente, sem_rede, monkeypatch):
+    """A falha de uma posicao nao interrompe as outras, mas tambem nao pode sumir: a resposta
+    dizia so `fechadas`, e a tela anunciava sucesso com uma posicao viva."""
+    boa = semear_posicao(ativo="BTC/USDT")
+    ruim = semear_posicao(ativo="ETH/USDT")
+    fechar = simulador.fechar
+
+    def fechar_com_defeito(pid, motivo, preco_saida=None):
+        if pid == ruim:
+            raise RuntimeError("corretora fora do ar")
+        return fechar(pid, motivo, preco_saida)
+
+    monkeypatch.setattr(simulador, "fechar", fechar_com_defeito)
+    r = cliente.post("/panico").json()
+    assert r["fechadas"] == 1 and r["auto_desligado"] is True
+    assert r["ok"] is False and [f["ativo"] for f in r["falhas"]] == ["ETH/USDT"]
+    with db.conectar() as c:
+        vivas = [x["id"] for x in c.execute("SELECT id FROM posicoes WHERE status='aberta'")]
+    assert vivas == [ruim] and boa not in vivas
+
+
+def test_leva2_panico_sem_falha_continua_ok(cliente, sem_rede):
+    semear_posicao()
+    r = cliente.post("/panico").json()
+    assert r["ok"] is True and r["falhas"] == [] and r["fechadas"] == 1
+
+
+def test_leva2_config_js_servido_pelo_backend_aponta_para_ele_mesmo(cliente):
+    """O `web/config.js` versionado e o do Vercel e aponta para a PRODUCAO. Servido pelo
+    backend, fazia o painel local (localhost:8000) operar a producao."""
+    r = cliente.get("/config.js")
+    assert r.status_code == 200 and "javascript" in r.headers["content-type"]
+    assert r.text.strip() == 'window.API_BASE = "";'
+    assert "ts.net" not in r.text and "http" not in r.text
+
+
+def test_leva2_front_nao_reenvia_post_depois_do_login_nem_some_com_recusa():
+    import os
+    web = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+    ler = lambda *p: open(os.path.join(web, *p), encoding="utf-8").read()   # noqa: E731
+    api_js = ler("app", "api.js")
+    assert "A ação NÃO foi enviada" in api_js            # POST que tomou 401 nao e refeito sozinho
+    assert ".replace(/'/g, '&#39;')" in api_js           # esc() cobre atributo de aspas simples
+    for arq in (("app", "casca.js"), ("app", "m", "app.js")):
+        txt = ler(*arq)
+        assert "r.falhas" in txt, arq                    # panico incompleto aparece
+        assert "hasOwnProperty" in txt, arq              # #constructor nao e rota
+    classico = ler("classico.html")
+    assert "escH(fg.label)" in classico and "${fg.label}" not in classico
+    assert "Nenhuma posição aberta');return" not in classico     # o panico chama o backend sempre
+    assert "modoAtual==='conviccao'||modoAtual==='fixo'" in classico   # nao troca o modo "risco"
+
+
+def test_leva2_a_suite_nao_escreve_no_log_nem_no_banco_da_raiz():
+    import os
+    import logbot
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert os.path.dirname(os.path.abspath(logbot.LOG_FILE)) != raiz
+    assert os.path.dirname(os.path.abspath(os.environ["DB_PATH"])) != raiz

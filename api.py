@@ -792,7 +792,12 @@ else:
 
 @app.get("/config.js")
 def config_js():
-    return FileResponse(os.path.join(WEB, "config.js"), media_type="application/javascript")
+    # O `web/config.js` versionado é o do Vercel e aponta para o backend de PRODUÇÃO. Servi-lo
+    # daqui fazia o painel aberto em http://localhost:8000 falar com a produção (com `/reset` e
+    # `/panico` a um clique), nunca com este processo. Quando é o backend que entrega o front, o
+    # front fala com ele: base vazia = mesma origem, que é o que o próprio arquivo documenta.
+    return Response('window.API_BASE = "";\n', media_type="application/javascript",
+                    headers={"Cache-Control": "no-store"})
 
 
 def _commit_em_producao(raiz=None):
@@ -1347,7 +1352,7 @@ def panico(pular_pendentes: bool = False):
         canceladas = _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
     abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
-    n, total = 0, 0.0
+    n, total, falhas = 0, 0.0, []
     for p in abertas:
         try:
             pnl = simulador.fechar(p["id"], "panico")
@@ -1355,14 +1360,18 @@ def panico(pular_pendentes: bool = False):
                 total += pnl
                 n += 1
         except Exception as e:
+            # A falha de UMA posição não interrompe as outras, mas também não pode sumir: a
+            # resposta dizia só `fechadas: n`, e o painel anunciava o pânico como sucesso com
+            # uma posição ainda viva. Quem ficou aberta volta nomeada em `falhas`.
+            falhas.append({"id": p["id"], "ativo": p["ativo"], "erro": f"{type(e).__name__}: {str(e)[:120]}"})
             log(f"panico erro pos {p['id']}: {e}", "error")
     pulados = 0
     if pular_pendentes:
         with db.conectar() as c:
             pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
-    return {"ok": True, "fechadas": n, "pnl": round(total, 2),
+    return {"ok": not falhas, "fechadas": n, "pnl": round(total, 2),
             "auto_desligado": True, "pendentes_pulados": pulados,
-            "ordens_canceladas": canceladas}
+            "ordens_canceladas": canceladas, "falhas": falhas}
 
 
 def _cancelar_ordens(motivo, con=None):
