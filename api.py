@@ -17,7 +17,9 @@ import urllib.request
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
+import ccxt
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -262,8 +264,22 @@ def _cliente_ip(request: Request) -> str:
     peer = request.client.host if request.client else ""
     xff = request.headers.get("x-forwarded-for", "")
     if peer in LOOPBACK and xff:
-        return xff.split(",")[0].strip()
+        # O ÚLTIMO item, não o primeiro. Há um proxy só na frente (Funnel ou Caddy), e o que ELE
+        # escreve é o último: proxy que anexa entrega "o que o cliente mandou, IP real". Lendo o
+        # primeiro, quem errava a senha trocava de "IP" a cada tentativa e nunca era bloqueado.
+        # Com proxy que sobrescreve o cabeçalho há um item só, e dá no mesmo.
+        return xff.split(",")[-1].strip()
     return peer
+
+
+def _origem_local(origem: str) -> bool:
+    """O cabeçalho Origin aponta para esta própria máquina? "null" (file://, iframe sandbox) e
+    qualquer coisa que não parseie contam como de fora."""
+    try:
+        host = urlparse(origem).hostname
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _registrar_falha(ip: str):
@@ -298,6 +314,18 @@ async def auth_basica(request: Request, call_next):
             return PlainTextResponse(
                 "Backend exposto sem DASH_PASS. Defina DASH_PASS no .env e reinicie o serviço.",
                 status_code=503)
+        # Loopback não basta: o NAVEGADOR do dono também é loopback. Sem senha e com CORS "*",
+        # qualquer página aberta nele mandava `POST /reset`, `/panico` ou `/config` para
+        # 127.0.0.1:8000 e era atendida. Quem denuncia é o Origin, que o navegador manda em todo
+        # POST e em todo GET entre origens, e que o painel local (servido por este processo)
+        # manda apontando para cá. curl e script não mandam Origin, e seguem entrando.
+        # Limite declarado: GET por DNS rebinding chega sem Origin; fecha-se com senha.
+        origem = request.headers.get("origin")
+        if origem is not None and not _origem_local(origem):
+            log(f"origem recusada no modo sem senha: {origem[:120]}", "error")
+            return PlainTextResponse(
+                "Sem DASH_PASS o backend só atende o painel aberto nesta própria máquina.",
+                status_code=403)
         return await call_next(request)
 
     ip = _cliente_ip(request)
@@ -675,6 +703,27 @@ def _validar_config(chave, valor):
     return bruto
 
 
+# Chaves cujo VALOR não sai em resposta nenhuma. O `/estado` devolvia a config inteira a cada
+# poll de 3 s, com o `telegram_token` dentro; o `GET /config` e a auditoria também. Quem tem o
+# token manda mensagem em nome do bot. A tela nunca precisou do valor, só de saber se EXISTE
+# ("configurado" / "não configurado"), e é isso que a máscara preserva: vazio continua vazio.
+SEGREDOS = {"telegram_token"}
+MASCARA = "••••••••"
+
+
+def _config_publica(cfg):
+    """A config como ela pode sair pela API: segredo preenchido vira máscara."""
+    return {k: (MASCARA if k in SEGREDOS and v else v) for k, v in cfg.items()}
+
+
+def _sem_mascara(body):
+    """Tira do corpo o segredo que voltou como máscara: um cliente que reenvia o formulário
+    inteiro devolveria a máscara, e gravá-la apagaria o token de verdade."""
+    if not isinstance(body, dict):
+        return body
+    return {k: v for k, v in body.items() if not (k in SEGREDOS and v == MASCARA)}
+
+
 def _validar_lote(body, permitidas=None):
     """Valida o corpo INTEIRO antes de gravar qualquer coisa. Tudo-ou-nada de propósito:
     meia configuração aplicada (parte nova, parte velha) é um estado que ninguém pediu e
@@ -985,7 +1034,7 @@ def estado():
     return {
         "banca": db.get_banca(),
         "equity_total": round(equity_total(), 2),
-        "config": cfg,
+        "config": _config_publica(cfg),
         # [Q-3] o nome do perfil de risco vigente ('experimento'|'conservador'|
         # 'personalizado'), DERIVADO da config acima — não é chave no banco (db.perfil_ativo).
         # Vem no /estado, e não no /status, apesar do poll de 3s: é uma string curta (~25 B),
@@ -1026,7 +1075,7 @@ def metricas():
 
 @app.get("/config")
 def get_config():
-    return db.get_config()
+    return _config_publica(db.get_config())
 
 
 # [F-15][N-26] A ressalva viaja JUNTO com o dado, e não num README que ninguém abre quando
@@ -1056,6 +1105,11 @@ def config_auditoria(limite: int = Query(100, ge=1, le=500), chave: str = ""):
     mudou, e essa é a única leitura pior do que não ter auditoria nenhuma.
     """
     linhas = db.auditoria_config(limite, chave.strip() or None)
+    for l in linhas:                        # a trilha diz QUE o segredo mudou, não para quanto
+        if l["chave"] in SEGREDOS:
+            for campo in ("valor_antigo", "valor_novo"):
+                if l[campo]:
+                    l[campo] = MASCARA
     return {"nota": NOTA_AUDITORIA, "chave": chave.strip() or None,
             "total": len(linhas), "linhas": linhas}
 
@@ -1139,13 +1193,39 @@ def trades(limite: int = Query(50, ge=1, le=500)):
     return db.listar("trades", limite)
 
 
+# ENTRADA DAS ROTAS DE MERCADO. `ativo` e `tf` iam crus da query para o ccxt: um par mal
+# formado ou um timeframe inventado virava exceção da corretora e 500, com uma ida à rede no
+# caminho. Validar aqui devolve 422 com o motivo, sem sair da máquina. Par bem formado que a
+# corretora não lista ainda vai à rede, e a recusa DELA volta como 502 legível em vez de 500.
+MAX_PARES = 60          # o mesmo teto da chave `ativos` no catálogo
+
+
+def _par(ativo):
+    if not _RE_PAR.match(ativo or ""):
+        raise HTTPException(422, f"ativo '{str(ativo)[:40]}' fora do formato BASE/QUOTE (ex.: BTC/USDT)")
+    return ativo
+
+
+def _tf(tf):
+    if tf not in _TFS:
+        raise HTTPException(422, f"timeframe '{str(tf)[:20]}' inválido: use um de {list(_TFS)}")
+    return tf
+
+
+def _na_corretora(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except ccxt.BaseError as e:
+        raise HTTPException(502, f"a corretora recusou: {type(e).__name__}: {str(e)[:160]}")
+
+
 @app.get("/candles")
 def candles(ativo: str = "BTC/USDT", tf: str = "15m",
             limite: int = Query(200, ge=1, le=1000)):
     # 1000 é o teto do próprio fetch_ohlcv spot: acima disso o ccxt já corta com
     # min(limit, 1000) (ccxt/binance.py) e devolve 200 sem dizer que truncou; abaixo de 1
     # a Binance recusa e a exceção vira 500. Os dois casos deixam de existir aqui na borda.
-    raw = simulador.ex.fetch_ohlcv(ativo, timeframe=tf, limit=limite)
+    raw = _na_corretora(simulador.ex.fetch_ohlcv, _par(ativo), timeframe=_tf(tf), limit=limite)
     return [{"time": int(c[0] // 1000), "open": c[1], "high": c[2],
              "low": c[3], "close": c[4]} for c in raw]
 
@@ -1157,12 +1237,12 @@ def sentimento():
 
 @app.get("/smartmoney")
 def smartmoney(ativo: str = "BTC/USDT"):
-    return mercado.smartmoney(ativo)
+    return _na_corretora(mercado.smartmoney, _par(ativo))
 
 
 @app.get("/book")
 def book(ativo: str = "BTC/USDT"):
-    return mercado.book(ativo)
+    return mercado.book(_par(ativo))
 
 
 @app.get("/saidas")
@@ -1182,13 +1262,16 @@ def saidas():
 def precos(ativos: str = ""):
     """Preço ao vivo de uma lista de ativos (ex: ?ativos=BTC/USDT,ETH/USDT)."""
     lista = [a.strip() for a in ativos.split(",") if a.strip()]
-    return mercado.precos(lista) if lista else {}
+    if len(lista) > MAX_PARES:
+        raise HTTPException(422, f"no máximo {MAX_PARES} ativos por requisição")
+    return mercado.precos([_par(a) for a in lista]) if lista else {}
 
 
 @app.get("/analise")
-def analise(ativo: str = "BTC/USDT", tf: str = "15m", limite: int = 200):
+def analise(ativo: str = "BTC/USDT", tf: str = "15m",
+            limite: int = Query(200, ge=1, le=1000)):      # o mesmo teto do /candles, pelo mesmo motivo
     """Indicadores + leitura do cenário pro modo 'analisar sinal'."""
-    return signal_engine.analise(ativo, tf, limite)
+    return _na_corretora(signal_engine.analise, _par(ativo), _tf(tf), limite)
 
 
 @app.get("/funding")
@@ -1326,10 +1409,13 @@ def set_config(body: dict):
     """Grava configuração VALIDADA. Chave fora do catálogo, tipo errado ou valor fora de
     faixa -> 422 dizendo o que foi recusado, em vez de gravar lixo que só explode depois,
     longe daqui, dentro de guarda_risco()."""
-    aceitos = _validar_lote(body)
+    limpo = _sem_mascara(body)
+    if body and not limpo:                  # só veio a máscara de volta: nada a gravar
+        return _config_publica(db.get_config())
+    aceitos = _validar_lote(limpo)
     for k, v in aceitos.items():
         db.set_config(k, v, "POST /config")
-    return db.get_config()
+    return _config_publica(db.get_config())
 
 
 AUTO_PERMITIDAS = {"auto_trade", "auto_conviccao_min", "auto_max_posicoes", "auto_max_valor_frac",

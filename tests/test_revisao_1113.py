@@ -243,6 +243,103 @@ def test_scan_dois_ao_mesmo_tempo_nao_duplicam_sinal(banco, monkeypatch):
     assert _n("sinais", "WHERE status='novo'") == 1
 
 
+# =================================================================== borda
+@pytest.mark.parametrize("rota", [
+    "/candles?ativo=BTC%2FUSDT&tf=7m",
+    "/candles?ativo=..%2F..%2Fetc&tf=15m",
+    "/candles?ativo=BTC%2FUSDT&tf=15m&limite=0",
+    "/analise?ativo=BTC%2FUSDT&tf=banana",
+    "/analise?ativo=BTC%2FUSDT&tf=15m&limite=100000000",
+    "/analise?ativo=BTC%2FUSDT&tf=15m&limite=-1",
+    "/analise?ativo=%3Cscript%3E&tf=15m",
+    "/book?ativo=btc-usdt",
+    "/smartmoney?ativo=BTC",
+    "/precos?ativos=" + ",".join(f"A{i}/USDT" for i in range(200)),
+    "/precos?ativos=BTC%2FUSDT,lixo",
+])
+def test_borda_rota_de_mercado_valida_antes_de_ir_a_rede(cliente, monkeypatch, rota):
+    """Par, timeframe e limite iam crus para o ccxt: o erro voltava como 500 com a excecao da
+    corretora, e `/analise` aceitava o `limite` que o `/trades` ja recusa. Nenhuma destas
+    requisicoes pode chegar a sair da maquina."""
+    def rede(*a, **k):
+        raise AssertionError("foi a rede com entrada invalida")
+
+    for nome in ("fetch_ohlcv", "fetch_tickers", "fetch_order_book", "fetch_trades"):
+        monkeypatch.setattr(mercado.ex_spot, nome, rede, raising=False)
+    monkeypatch.setattr(mercado.ex_fut, "fetch_funding_rate", rede, raising=False)
+    r = cliente.get(rota)
+    assert r.status_code == 422, (r.status_code, r.text[:200])
+
+
+def test_borda_sem_senha_recusa_requisicao_de_outro_site(cliente):
+    """Modo local, sem DASH_PASS: o backend so atende loopback, mas o NAVEGADOR do dono tambem
+    e loopback. Uma pagina qualquer aberta nele conseguia mandar POST /reset para
+    127.0.0.1:8000. Quem denuncia e o cabecalho Origin, que o navegador sempre manda em POST."""
+    import api
+    assert not api.DASH_PASS, "este teste e do modo sem senha"
+    antes = _banca()
+    r = cliente.post("/reset", json={"confirmar": "RESET"}, headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403, r.text
+    r = cliente.post("/panico", headers={"Origin": "null"})          # iframe sandbox / file://
+    assert r.status_code == 403
+    r = cliente.get("/estado", headers={"Origin": "http://evil.example:8000"})
+    assert r.status_code == 403
+    assert _banca() == antes
+
+
+@pytest.mark.parametrize("origem", ["http://localhost:8000", "http://127.0.0.1:8000",
+                                    "http://[::1]:8000", None])
+def test_borda_sem_senha_o_proprio_painel_local_continua_entrando(cliente, origem):
+    r = cliente.get("/estado", headers={"Origin": origem} if origem else {})
+    assert r.status_code == 200, r.text
+
+
+def test_borda_ip_do_cliente_e_o_que_o_proxy_escreveu_nao_o_que_o_cliente_mandou():
+    """Proxy que ANEXA ao X-Forwarded-For entrega "forjado, real". Ler o primeiro item deixava
+    quem erra a senha trocar de "IP" a cada tentativa e nunca cair no bloqueio."""
+    import api
+
+    class Req:
+        def __init__(self, peer, xff):
+            self.client = type("C", (), {"host": peer})()
+            self.headers = {"x-forwarded-for": xff} if xff else {}
+
+    assert api._cliente_ip(Req("127.0.0.1", "1.2.3.4, 203.0.113.9")) == "203.0.113.9"
+    assert api._cliente_ip(Req("127.0.0.1", "203.0.113.9")) == "203.0.113.9"
+    assert api._cliente_ip(Req("198.51.100.7", "1.2.3.4")) == "198.51.100.7"   # sem proxy nosso
+    assert api._cliente_ip(Req("127.0.0.1", "")) == "127.0.0.1"
+
+
+# ================================================================= segredo
+TOKEN = "123456:AAH-segredo-do-bot"
+
+
+def test_segredo_token_do_telegram_nao_sai_em_nenhuma_resposta(cliente):
+    r = cliente.post("/config", json={"telegram_token": TOKEN, "telegram_chat_id": "42"})
+    assert r.status_code == 200 and TOKEN not in r.text
+    assert db.get_config()["telegram_token"] == TOKEN                 # gravou o de verdade
+    for rota in ("/estado", "/config", "/config/auditoria?limite=500"):
+        corpo = cliente.get(rota).text
+        assert TOKEN not in corpo, rota
+    assert cliente.get("/estado").json()["config"]["telegram_token"]  # a tela ainda sabe que EXISTE
+
+
+def test_segredo_devolver_a_mascara_nao_apaga_o_token(cliente):
+    cliente.post("/config", json={"telegram_token": TOKEN})
+    mascara = cliente.get("/config").json()["telegram_token"]
+    r = cliente.post("/config", json={"telegram_token": mascara, "min_conviccao": "56"})
+    assert r.status_code == 200
+    cfg = db.get_config()
+    assert cfg["telegram_token"] == TOKEN and float(cfg["min_conviccao"]) == 56
+
+
+def test_segredo_vazio_continua_vazio(cliente):
+    assert cliente.get("/estado").json()["config"]["telegram_token"] == ""
+    cliente.post("/config", json={"telegram_token": TOKEN})
+    cliente.post("/config", json={"telegram_token": ""})              # apagar continua possivel
+    assert db.get_config()["telegram_token"] == ""
+
+
 # ================================================================= mercado
 class _ExLote:
     """ccxt de mentira: como o de verdade, recusa o LOTE inteiro se um simbolo nao existe."""
