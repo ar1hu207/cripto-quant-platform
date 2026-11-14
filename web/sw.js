@@ -13,7 +13,9 @@
 // celular na versao de ontem ate a pessoa reinstalar. O cache so responde sem rede, para o
 // app abrir e mostrar o proprio estado de "sem conexao" em vez da tela do sistema.
 // casca-v2 = front Apollux: o activate apaga o cache v1, que guardava o painel antigo como index.
-const CASCA = 'casca-v2';
+// casca-v3 = logo nova: os icones mudaram sem mudar de nome, e o cache-primeiro de /icons/ mostraria
+// o antigo na primeira abertura depois do deploy.
+const CASCA = 'casca-v3';
 
 self.addEventListener('install', () => self.skipWaiting());
 
