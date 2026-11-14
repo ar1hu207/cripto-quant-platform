@@ -69,7 +69,7 @@ self.addEventListener('fetch', e => {
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (x) { d = { corpo: e.data ? e.data.text() : '' }; }
-  const op = { body: d.corpo || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+  const op = { body: d.corpo || '', icon: 'icons/icon-192.png?v=2', badge: 'icons/icon-192.png?v=2',
                lang: 'pt-BR', data: { url: d.url || '#painel' } };
   if (d.tag) { op.tag = d.tag; op.renotify = true; }
   e.waitUntil(self.registration.showNotification(d.titulo || 'Apollux', op));
