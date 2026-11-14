@@ -52,6 +52,7 @@ de propósito — não conserte esses imports (`legado/README.md`).
 | `simulador.executar` | **[EX-1] ponto único de entrada**: despacha por `exec_modo`. `abrir()` (mercado) segue intacto ao lado |
 | `dca.py` | acumulação periódica, sem alavancagem, banca conceitualmente separada |
 | `alertas.py` | Telegram **opcional**: sem token na config é no-op |
+| `push.py` | notificação nativa no celular (Web Push, `[PUSH-1]`): sem `VAPID_*` no `.env` é no-op; envia em thread própria, nunca no caminho do dinheiro |
 | `logbot.py` | `from logbot import log` → grava em **`plataforma.log`** (10 MB × 5, teto no código) |
 | `pesquisa/validacao.py` | walk-forward + DSR + bootstrap — a régua que barra ideia ruim |
 

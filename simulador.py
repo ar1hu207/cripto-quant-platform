@@ -11,6 +11,7 @@ import pandas as pd
 
 import db
 import alertas
+import push                         # [PUSH-1] notificacao nativa no celular (no-op sem chave)
 import alvos                        # [TP-1] take profit por estrutura (suporte/resistência + Fibo)
 import mercado                      # [F-11] `mercado.precos`: 1 request por LISTA de ativos
 from logbot import log
@@ -232,6 +233,9 @@ def guarda_risco():
     if tripou and trava_em != hoje:
         db.set_config("trava_dia_em", hoje)        # marca o dia (idempotente: só na 1a vez)
         trava_em = hoje
+        # [PUSH-1] só aqui, na virada para travado: o `trava_em != hoje` acima já garante uma vez
+        # por dia. O aviso vem DEPOIS de gravar a trava e `avisar` nunca levanta: não toca na guarda.
+        push.avisar(*push.msg_trava(pnl_dia, limite_rs), "#apollo", f"trava-{hoje}")
     trava_dia = tripou or (trava_em == hoje)
     return {"pnl_dia": round(pnl_dia, 2), "realizado_hoje": round(realizado, 2),
             "limite_rs": round(limite_rs, 2), "limite_pct": round(lim * 100, 1),
@@ -340,6 +344,8 @@ def abrir(sinal_id, valor_reais, alavancagem):
     ativo, direcao = sig["ativo"], sig["direcao"]
     log(f"ABRIU #{pid} {direcao} {ativo} @ {preco} | R${valor_reais} {alavancagem}x")
     alertas.enviar(f"🟢 Abriu {direcao} {ativo}\nR$ {valor_reais} @ {alavancagem}x · entrada {preco}")
+    push.avisar(*push.msg_abriu(direcao, ativo, valor_reais, alavancagem, preco),
+                f"#pos/{pid}", f"pos-{pid}")
     return pid
 
 
@@ -510,6 +516,8 @@ def _abrir_da_ordem(o, taxa_maker):
     alertas.enviar("Ordem preenchida %s %s - R$ %s @ %sx - entrada %s"
                    % (o["direcao"], o["ativo"], o["valor_reais"], o["alavancagem"],
                       o["preco_limite"]))
+    push.avisar(*push.msg_ordem(o["direcao"], o["ativo"], o["valor_reais"], o["alavancagem"],
+                                o["preco_limite"]), f"#pos/{pid}", f"pos-{pid}")
     return pid
 
 
@@ -626,6 +634,8 @@ def _fechar_uma(pos_id, motivo, preco_saida):
     f_txt = f"{funding:+.2f}" if funding is not None else "n/d"    # n/d != 0.00, no log também
     log(f"FECHOU #{pos_id} {pos['direcao']} {pos['ativo']} | {motivo} | P&L R$ {pnl:+.2f} (funding {f_txt})")
     alertas.enviar(f"{emoji} Fechou {pos['direcao']} {pos['ativo']} ({motivo})\nP&L: R$ {pnl:+.2f}")
+    push.avisar(*push.msg_fechou(pos["direcao"], pos["ativo"], pnl, motivo),
+                "#diario", f"pos-{pos_id}")
     return pnl
 
 
@@ -887,6 +897,8 @@ def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
     log(f"PARCIAL #{pos['id']} {pos['direcao']} {pos['ativo']} | {motivo} {frac:.0%} @ "
         f"{preco_saida:.6g} | P&L R$ {pnl:+.2f}")
     alertas.enviar(f"🎯 {motivo.upper()} {pos['direcao']} {pos['ativo']}\nP&L parcial: R$ {pnl:+.2f}")
+    push.avisar(*push.msg_parcial(pos["direcao"], pos["ativo"], pnl, motivo, frac),
+                f"#pos/{pos['id']}", f"pos-{pos['id']}")
     return v_resto
 
 
