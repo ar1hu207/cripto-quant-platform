@@ -17,6 +17,8 @@ teto de exposição): experimento CONTROLADO, nao um cassino sem freio.
 
 Liga/desliga: config auto_trade = "1"/"0".
 """
+import math
+
 import pandas as pd
 
 import db
@@ -133,7 +135,6 @@ def _lev_por_risco(cfg, stop_dist):
 
     O que esta conta NÃO faz, dito para não haver ilusão: não muda o P&L em reais. O R$ perdido
     no stop e ganho no alvo é `risco_por_trade`; a alavancagem só decide margem e liquidação."""
-    import math
     risco = float(cfg.get("risco_por_trade", 0.01))
     m = float(cfg.get("auto_lev_margem_frac", 0) or 0)
     if m <= 0:

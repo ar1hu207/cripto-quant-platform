@@ -505,7 +505,7 @@ def processar_ordens():
                 % (o["id"], pid, o["preco_limite"], preco, taxa_maker * 100))
         except Exception as e:
             res["falhas"] += 1
-            log("ordem #%s falhou: %s" % (o["id"], e))
+            log("ordem #%s falhou: %s" % (o["id"], e), "error")
     return res
 
 

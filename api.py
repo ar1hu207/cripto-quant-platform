@@ -119,7 +119,8 @@ def _saidas_decidem(cfg):
 
 def _calcular_saidas():
     abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
-    v = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
+    cfg = db.get_config()                   # uma leitura para todas, e não uma por posição
+    v = [r for r in (signal_engine.avaliar_saida(p, cfg) for p in abertas) if r]
     _saidas.update(v=v, t=time.monotonic())
     return v
 
