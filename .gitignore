@@ -19,3 +19,14 @@ equity_curve.csv
 
 # venv de producao: existe na VM, criado no provisionamento, nunca versionado
 venv/
+
+# segredos e copias de banco que nao podem ser commitados por engano (o repositorio e publico)
+.env.*
+*.pem
+*.key
+*.sas
+id_ed25519*
+*.db.gz
+*.db.bak
+dump.sql
+trello.py
