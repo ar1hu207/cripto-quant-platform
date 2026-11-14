@@ -17,15 +17,18 @@ import urllib.request
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote, urlparse
 
+import ccxt
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import alvos
 import db
 import simulador
 import signal_engine
@@ -99,11 +102,20 @@ def _scan_devido(agora=None):
     return True
 
 
-def equity_total():
+def _banca_e_equity():
+    """(banca, equity total) lidos do MESMO instante. Sem o BEGIN cada SELECT via um retrato
+    diferente: um fechamento com lucro entre os dois somava a banca velha ao unreal já sem a
+    posição, e o ponto gravado na curva saía abaixo do real (entrava no drawdown e, se fosse o
+    primeiro do dia, virava a base da trava diária)."""
     with db.conectar() as c:
+        c.execute("BEGIN")
         banca = c.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
         unreal = c.execute("SELECT COALESCE(SUM(pnl),0) FROM posicoes WHERE status='aberta'").fetchone()[0]
-    return banca + (unreal or 0)
+    return banca, banca + (unreal or 0)
+
+
+def equity_total():
+    return _banca_e_equity()[1]
 
 
 def _saidas_decidem(cfg):
@@ -118,7 +130,8 @@ def _saidas_decidem(cfg):
 
 def _calcular_saidas():
     abertas = db.listar("posicoes", 50, "WHERE status='aberta'")
-    v = [r for r in (signal_engine.avaliar_saida(p) for p in abertas) if r]
+    cfg = db.get_config()                   # uma leitura para todas, e não uma por posição
+    v = [r for r in (signal_engine.avaliar_saida(p, cfg) for p in abertas) if r]
     _saidas.update(v=v, t=time.monotonic())
     return v
 
@@ -139,9 +152,10 @@ def worker():
             except Exception as e:                      # falha do bot não derruba o snapshot de equity abaixo
                 _health["erros"] += 1
                 log(f"auto-trader erro: {e}", "error")
+            banca_agora, equity_agora = _banca_e_equity()   # as duas do mesmo instante
             with db.conectar() as c:                    # snapshot de equity p/ o gráfico
                 c.execute("INSERT INTO equity(ts,banca,equity_total) VALUES(?,?,?)",
-                          (str(pd.Timestamp.now()), db.get_banca()["atual"], equity_total()))
+                          (str(pd.Timestamp.now()), banca_agora, equity_agora))
             _health["ultimo_ciclo"] = str(pd.Timestamp.now())
             _vigia["ultimo"] = time.monotonic()
             _sd_notify(b"WATCHDOG=1")           # [vigia] só ciclo COMPLETO alimenta o watchdog
@@ -260,8 +274,22 @@ def _cliente_ip(request: Request) -> str:
     peer = request.client.host if request.client else ""
     xff = request.headers.get("x-forwarded-for", "")
     if peer in LOOPBACK and xff:
-        return xff.split(",")[0].strip()
+        # O ÚLTIMO item, não o primeiro. Há um proxy só na frente (Funnel ou Caddy), e o que ELE
+        # escreve é o último: proxy que anexa entrega "o que o cliente mandou, IP real". Lendo o
+        # primeiro, quem errava a senha trocava de "IP" a cada tentativa e nunca era bloqueado.
+        # Com proxy que sobrescreve o cabeçalho há um item só, e dá no mesmo.
+        return xff.split(",")[-1].strip()
     return peer
+
+
+def _origem_local(origem: str) -> bool:
+    """O cabeçalho Origin aponta para esta própria máquina? "null" (file://, iframe sandbox) e
+    qualquer coisa que não parseie contam como de fora."""
+    try:
+        host = urlparse(origem).hostname
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _registrar_falha(ip: str):
@@ -283,7 +311,10 @@ async def auth_basica(request: Request, call_next):
     # do navegador já é respondido lá e nem chega aqui; isto cobre o OPTIONS avulso.
     # /testeB/health é o /health da conta B: público pelo mesmo motivo (o painel o lê antes do
     # login para dizer se o backend está de pé), e não expõe nada além da idade do ciclo.
-    if request.url.path in ("/health", "/testeB/health") or request.method == "OPTIONS":
+    # Só GET: a isenção era por caminho, e um POST anônimo em /testeB/health tinha o corpo lido
+    # em memória e repassado à conta B sem credencial nenhuma.
+    if request.method == "OPTIONS" or (request.method == "GET"
+                                       and request.url.path in ("/health", "/testeB/health")):
         return await call_next(request)
 
     if not DASH_PASS:
@@ -296,6 +327,18 @@ async def auth_basica(request: Request, call_next):
             return PlainTextResponse(
                 "Backend exposto sem DASH_PASS. Defina DASH_PASS no .env e reinicie o serviço.",
                 status_code=503)
+        # Loopback não basta: o NAVEGADOR do dono também é loopback. Sem senha e com CORS "*",
+        # qualquer página aberta nele mandava `POST /reset`, `/panico` ou `/config` para
+        # 127.0.0.1:8000 e era atendida. Quem denuncia é o Origin, que o navegador manda em todo
+        # POST e em todo GET entre origens, e que o painel local (servido por este processo)
+        # manda apontando para cá. curl e script não mandam Origin, e seguem entrando.
+        # Limite declarado: GET por DNS rebinding chega sem Origin; fecha-se com senha.
+        origem = request.headers.get("origin")
+        if origem is not None and not _origem_local(origem):
+            log(f"origem recusada no modo sem senha: {origem[:120]}", "error")
+            return PlainTextResponse(
+                "Sem DASH_PASS o backend só atende o painel aberto nesta própria máquina.",
+                status_code=403)
         return await call_next(request)
 
     ip = _cliente_ip(request)
@@ -413,11 +456,16 @@ CONFIG_CATALOGO = {
     # taxa de ida e volta com folga; fração precisa somar algo > 0 (normalizada em alvos.fracoes).
     "tp_ativo":             ("bool",),
     "tp_n":                 ("int", 1, 5),
-    "tp_fracoes":           ("texto", 60),
+    # As duas listas eram "texto": qualquer coisa de até 60 caracteres entrava. "-0.5,1.5" soma 1
+    # e passava pela normalização de `alvos.fracoes`; a fração negativa fazia o `fechar_parcial`
+    # CREDITAR dinheiro e aumentar a margem. E `tp_fallback_r` negativo ou zero punha o alvo do
+    # lado do prejuízo ou em cima da entrada, que "batia" no primeiro poll. Faixa: (0, teto], o
+    # zero fica de fora; no máximo 5 itens, que é o teto de `tp_n`.
+    "tp_fracoes":           ("lista_num", 0.0, alvos.FRAC_MAX, 5),
     "tp_min_r":             ("float", 0.3, 10.0),
     "tp_max_r":             ("float", 1.0, 30.0),
     "tp_forca_min":         ("float", 0.0, 20.0),
-    "tp_fallback_r":        ("texto", 60),
+    "tp_fallback_r":        ("lista_num", 0.0, alvos.R_MAX, 5),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
@@ -642,6 +690,22 @@ def _validar_config(chave, valor):
                 raise ValueError(f"'{chave}': par '{a}' fora do formato BASE/QUOTE")
         return ",".join(itens)
 
+    if tipo == "lista_num":
+        _, piso, teto, max_itens = spec
+        itens = [x.strip() for x in bruto.split(",") if x.strip()]
+        if not 1 <= len(itens) <= max_itens:
+            raise ValueError(f"'{chave}': informe de 1 a {max_itens} números separados por vírgula")
+        nums = []
+        for x in itens:
+            try:
+                n = float(x)
+            except ValueError:
+                raise ValueError(f"'{chave}': '{x}' não é número")
+            if not (piso < n <= teto):     # piso EXCLUSIVO; nan/inf caem aqui, como no float
+                raise ValueError(f"'{chave}': {x} fora da faixa permitida ({piso}, {teto}]")
+            nums.append(n)
+        return ",".join(str(int(n)) if n == int(n) else repr(n) for n in nums)
+
     if tipo == "data":
         if bruto and not _RE_DATA.match(bruto):
             raise ValueError(f"'{chave}': '{valor}' não é uma data AAAA-MM-DD (ou vazio)")
@@ -650,6 +714,27 @@ def _validar_config(chave, valor):
     if len(bruto) > spec[1]:                                 # texto
         raise ValueError(f"'{chave}': passa de {spec[1]} caracteres")
     return bruto
+
+
+# Chaves cujo VALOR não sai em resposta nenhuma. O `/estado` devolvia a config inteira a cada
+# poll de 3 s, com o `telegram_token` dentro; o `GET /config` e a auditoria também. Quem tem o
+# token manda mensagem em nome do bot. A tela nunca precisou do valor, só de saber se EXISTE
+# ("configurado" / "não configurado"), e é isso que a máscara preserva: vazio continua vazio.
+SEGREDOS = {"telegram_token"}
+MASCARA = "••••••••"
+
+
+def _config_publica(cfg):
+    """A config como ela pode sair pela API: segredo preenchido vira máscara."""
+    return {k: (MASCARA if k in SEGREDOS and v else v) for k, v in cfg.items()}
+
+
+def _sem_mascara(body):
+    """Tira do corpo o segredo que voltou como máscara: um cliente que reenvia o formulário
+    inteiro devolveria a máscara, e gravá-la apagaria o token de verdade."""
+    if not isinstance(body, dict):
+        return body
+    return {k: v for k, v in body.items() if not (k in SEGREDOS and v == MASCARA)}
 
 
 def _validar_lote(body, permitidas=None):
@@ -667,6 +752,8 @@ def _validar_lote(body, permitidas=None):
             aceitos[k] = _validar_config(k, v)
         except ValueError as e:
             recusados.append(str(e))
+    if not recusados:
+        recusados = _validar_cruzado(aceitos)
     if recusados:
         log(f"config recusada: {recusados}", "error")
         raise HTTPException(422, {"erro": "configuração recusada — nada foi gravado",
@@ -674,15 +761,46 @@ def _validar_lote(body, permitidas=None):
     return aceitos
 
 
+def _validar_cruzado(aceitos):
+    """Regras entre DUAS chaves, que a validação chave a chave não enxerga.
+
+    Hoje uma só: `auto_lev_min` não pode passar de `auto_lev_max`. Cada uma cabia na sua faixa
+    (1 a 50) e a dupla invertida entrava; em `autotrader._alavancagem` o piso vence o teto de
+    propósito (`tests/test_sizing.py` trava isso, para o erro não virar 1x calado), então o
+    "TETO de alavancagem" do painel deixava de ser teto. Recusar aqui fecha o caso sem mexer
+    naquela decisão. O valor que não veio no corpo é o que está gravado."""
+    if not {"auto_lev_min", "auto_lev_max"} & aceitos.keys():
+        return []
+    try:
+        vigente = db.get_config()
+    except Exception:                       # sem banco não há par para cruzar
+        vigente = {}
+    try:
+        piso = float(aceitos.get("auto_lev_min", vigente.get("auto_lev_min")))
+        teto = float(aceitos.get("auto_lev_max", vigente.get("auto_lev_max")))
+    except (TypeError, ValueError):
+        return []
+    if piso > teto:
+        return [f"'auto_lev_min' ({piso:g}) não pode ser maior que 'auto_lev_max' ({teto:g})"]
+    return []
+
+
 # ---------- modelos ----------
+# Id acima do INTEGER do SQLite estourava OverflowError dentro do driver e virava 500 em quatro
+# rotas. Fora da faixa é 422, com o motivo.
+ID_MAX = 2 ** 63 - 1
+
+
 class ConfirmarReq(BaseModel):
-    sinal_id: int
+    sinal_id: int = Field(ge=1, le=ID_MAX)
     valor_reais: float
-    alavancagem: float = 10.0
+    # None = "a da config". Era `= 10.0`: um /confirmar sem o campo abria a 10x cravado, fosse
+    # qual fosse o `alavancagem_padrao` (CLAUDE.md §1: nunca constante literal no módulo).
+    alavancagem: Optional[float] = None
 
 
 class IdReq(BaseModel):
-    id: int
+    id: int = Field(ge=1, le=ID_MAX)
 
 
 class DcaReq(BaseModel):
@@ -720,7 +838,12 @@ else:
 
 @app.get("/config.js")
 def config_js():
-    return FileResponse(os.path.join(WEB, "config.js"), media_type="application/javascript")
+    # O `web/config.js` versionado é o do Vercel e aponta para o backend de PRODUÇÃO. Servi-lo
+    # daqui fazia o painel aberto em http://localhost:8000 falar com a produção (com `/reset` e
+    # `/panico` a um clique), nunca com este processo. Quando é o backend que entrega o front, o
+    # front fala com ele: base vazia = mesma origem, que é o que o próprio arquivo documenta.
+    return Response('window.API_BASE = "";\n', media_type="application/javascript",
+                    headers={"Cache-Control": "no-store"})
 
 
 def _commit_em_producao(raiz=None):
@@ -771,7 +894,9 @@ def _repassar_b(metodo, caminho, query, corpo, auth, ctype):
     """[AB-1] A requisição vai para a instância B como veio, e a resposta volta como veio.
     Erro HTTP da B (401, 422...) é devolvido com o status DELA: mascarar como 502 esconderia,
     por exemplo, uma config recusada pelo catálogo."""
-    url = f"{TESTEB_URL}/{caminho}" + (f"?{query}" if query else "")
+    # `caminho` chega DECODIFICADO: um espaço ou caractere de controle nele estourava InvalidURL
+    # (que não é URLError) e a rota respondia 500. Recodificado, a B devolve o 404 dela.
+    url = f"{TESTEB_URL}/{quote(caminho, safe='/')}" + (f"?{query}" if query else "")
     cab = {k: v for k, v in (("Authorization", auth), ("Content-Type", ctype)) if v}
     req = urllib.request.Request(url, data=corpo if metodo == "POST" else None,
                                  headers=cab, method=metodo)
@@ -962,7 +1087,7 @@ def estado():
     return {
         "banca": db.get_banca(),
         "equity_total": round(equity_total(), 2),
-        "config": cfg,
+        "config": _config_publica(cfg),
         # [Q-3] o nome do perfil de risco vigente ('experimento'|'conservador'|
         # 'personalizado'), DERIVADO da config acima — não é chave no banco (db.perfil_ativo).
         # Vem no /estado, e não no /status, apesar do poll de 3s: é uma string curta (~25 B),
@@ -1003,7 +1128,7 @@ def metricas():
 
 @app.get("/config")
 def get_config():
-    return db.get_config()
+    return _config_publica(db.get_config())
 
 
 # [F-15][N-26] A ressalva viaja JUNTO com o dado, e não num README que ninguém abre quando
@@ -1033,6 +1158,11 @@ def config_auditoria(limite: int = Query(100, ge=1, le=500), chave: str = ""):
     mudou, e essa é a única leitura pior do que não ter auditoria nenhuma.
     """
     linhas = db.auditoria_config(limite, chave.strip() or None)
+    for l in linhas:                        # a trilha diz QUE o segredo mudou, não para quanto
+        if l["chave"] in SEGREDOS:
+            for campo in ("valor_antigo", "valor_novo"):
+                if l[campo]:
+                    l[campo] = MASCARA
     return {"nota": NOTA_AUDITORIA, "chave": chave.strip() or None,
             "total": len(linhas), "linhas": linhas}
 
@@ -1055,6 +1185,8 @@ def catalogo():
              "racional": CONFIG_RACIONAL.get(chave)}       # None = decisão não registrada
         if tipo in ("float", "int"):
             d["min"], d["max"] = spec[1], spec[2]
+        elif tipo == "lista_num":          # `min` é EXCLUSIVO aqui (ver `_validar_config`)
+            d["min"], d["max"], d["max_itens"] = spec[1], spec[2], spec[3]
         elif tipo == "enum":
             d["opcoes"] = list(spec[1])
         elif tipo == "texto":
@@ -1084,8 +1216,7 @@ def set_perfil(req: PerfilReq):
         raise HTTPException(422, f"perfil desconhecido: escolha um de {list(db.PERFIS_RISCO)}")
     antes = db.perfil_ativo()
     aceitos = _validar_lote(db.PERFIS_RISCO[req.perfil])
-    for k, v in aceitos.items():
-        db.set_config(k, v, f"POST /perfil:{req.perfil}")
+    db.set_configs(aceitos, f"POST /perfil:{req.perfil}")     # todas as chaves ou nenhuma
     cfg = db.get_config()
     log(f"perfil de risco: {antes} -> {req.perfil} ({aceitos})")
     return {"ok": True, "perfil_ativo": db.perfil_ativo(cfg), "perfil_anterior": antes,
@@ -1114,13 +1245,39 @@ def trades(limite: int = Query(50, ge=1, le=500)):
     return db.listar("trades", limite)
 
 
+# ENTRADA DAS ROTAS DE MERCADO. `ativo` e `tf` iam crus da query para o ccxt: um par mal
+# formado ou um timeframe inventado virava exceção da corretora e 500, com uma ida à rede no
+# caminho. Validar aqui devolve 422 com o motivo, sem sair da máquina. Par bem formado que a
+# corretora não lista ainda vai à rede, e a recusa DELA volta como 502 legível em vez de 500.
+MAX_PARES = 60          # o mesmo teto da chave `ativos` no catálogo
+
+
+def _par(ativo):
+    if not _RE_PAR.match(ativo or ""):
+        raise HTTPException(422, f"ativo '{str(ativo)[:40]}' fora do formato BASE/QUOTE (ex.: BTC/USDT)")
+    return ativo
+
+
+def _tf(tf):
+    if tf not in _TFS:
+        raise HTTPException(422, f"timeframe '{str(tf)[:20]}' inválido: use um de {list(_TFS)}")
+    return tf
+
+
+def _na_corretora(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except ccxt.BaseError as e:
+        raise HTTPException(502, f"a corretora recusou: {type(e).__name__}: {str(e)[:160]}")
+
+
 @app.get("/candles")
 def candles(ativo: str = "BTC/USDT", tf: str = "15m",
             limite: int = Query(200, ge=1, le=1000)):
     # 1000 é o teto do próprio fetch_ohlcv spot: acima disso o ccxt já corta com
     # min(limit, 1000) (ccxt/binance.py) e devolve 200 sem dizer que truncou; abaixo de 1
     # a Binance recusa e a exceção vira 500. Os dois casos deixam de existir aqui na borda.
-    raw = simulador.ex.fetch_ohlcv(ativo, timeframe=tf, limit=limite)
+    raw = _na_corretora(simulador.ex.fetch_ohlcv, _par(ativo), timeframe=_tf(tf), limit=limite)
     return [{"time": int(c[0] // 1000), "open": c[1], "high": c[2],
              "low": c[3], "close": c[4]} for c in raw]
 
@@ -1132,12 +1289,12 @@ def sentimento():
 
 @app.get("/smartmoney")
 def smartmoney(ativo: str = "BTC/USDT"):
-    return mercado.smartmoney(ativo)
+    return _na_corretora(mercado.smartmoney, _par(ativo))
 
 
 @app.get("/book")
 def book(ativo: str = "BTC/USDT"):
-    return mercado.book(ativo)
+    return mercado.book(_par(ativo))
 
 
 @app.get("/saidas")
@@ -1157,13 +1314,16 @@ def saidas():
 def precos(ativos: str = ""):
     """Preço ao vivo de uma lista de ativos (ex: ?ativos=BTC/USDT,ETH/USDT)."""
     lista = [a.strip() for a in ativos.split(",") if a.strip()]
-    return mercado.precos(lista) if lista else {}
+    if len(lista) > MAX_PARES:
+        raise HTTPException(422, f"no máximo {MAX_PARES} ativos por requisição")
+    return mercado.precos([_par(a) for a in lista]) if lista else {}
 
 
 @app.get("/analise")
-def analise(ativo: str = "BTC/USDT", tf: str = "15m", limite: int = 200):
+def analise(ativo: str = "BTC/USDT", tf: str = "15m",
+            limite: int = Query(200, ge=1, le=1000)):      # o mesmo teto do /candles, pelo mesmo motivo
     """Indicadores + leitura do cenário pro modo 'analisar sinal'."""
-    return signal_engine.analise(ativo, tf, limite)
+    return _na_corretora(signal_engine.analise, _par(ativo), _tf(tf), limite)
 
 
 @app.get("/funding")
@@ -1179,12 +1339,23 @@ def confirmar(req: ConfirmarReq):
     if g["trava_dia"]:
         return {"ok": False, "erro": f"🛑 Trava diária ativa — perda do dia R${g['pnl_dia']:.2f} "
                 f"atingiu o limite (R${g['limite_rs']:.2f}). Sem novos trades hoje."}
+    lev = (req.alavancagem if req.alavancagem is not None
+           else simulador._cfg_float(db.get_config(), "alavancagem_padrao", 10.0))
     if g["risco_aberto_max_rs"] is not None:
         with db.conectar() as c:
-            sig = c.execute("SELECT ativo,stop_sugerido FROM sinais WHERE id=?", (req.sinal_id,)).fetchone()
+            sig = c.execute("SELECT ativo,direcao,preco,stop_sugerido FROM sinais WHERE id=?",
+                            (req.sinal_id,)).fetchone()
         if sig:
             preco = simulador.preco_ao_vivo(sig["ativo"])
-            r_novo = simulador._risco_posicao(req.valor_reais, req.alavancagem, preco, sig["stop_sugerido"])
+            # O MESMO stop que o `abrir()` vai gravar: recomposto pela distância RELATIVA do
+            # sinal sobre o preço de agora. Este pré-check usava o stop absoluto do sinal contra
+            # o preço ao vivo; com o preço andado a favor ele media um risco maior que o real
+            # (R$27 para um trade de R$10) e recusava o que cabia no teto.
+            stop = sig["stop_sugerido"]
+            if sig["preco"] and stop:
+                d = 1 if sig["direcao"] == "LONG" else -1
+                stop = preco * (1 - d * abs(sig["preco"] - stop) / sig["preco"])
+            r_novo = simulador._risco_posicao(req.valor_reais, lev, preco, stop)
             if g["risco_aberto_rs"] + r_novo > g["risco_aberto_max_rs"]:
                 return {"ok": False, "erro": f"📊 Teto de exposição — risco aberto R${g['risco_aberto_rs']:.2f} "
                         f"+ R${r_novo:.2f} deste trade passa o limite R${g['risco_aberto_max_rs']:.2f}. "
@@ -1195,7 +1366,7 @@ def confirmar(req: ConfirmarReq):
         # `ordem_id` em vez de `posicao_id`, e quem le o painel PRECISA ver essa diferenca --
         # uma ordem pendente nao e uma posicao, e chamar as duas de "aberta" seria mentir sobre
         # exposicao.
-        tipo, ident = simulador.executar(req.sinal_id, req.valor_reais, req.alavancagem)
+        tipo, ident = simulador.executar(req.sinal_id, req.valor_reais, lev)
         if tipo == "ordem":
             return {"ok": True, "tipo": "ordem", "ordem_id": ident,
                     "msg": "ordem post-only colocada — vira posição se o preço vier até ela"}
@@ -1225,15 +1396,22 @@ def panico(pular_pendentes: bool = False):
     padrão: é decisão de produto (a fila pendente é combustível para religar por engano,
     mas o auto-trader já só opera sinal com até `auto_freshness_min` minutos, então ela
     envelhece sozinha) e o card [P1-7] a deixou explicitamente em aberto."""
-    db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
-    _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
-    # [EX-1] Ordem post-only pendente é posição esperando o preço: sem cancelar aqui, ela enchia
-    # no ciclo seguinte e o pânico deixava o sistema com posição aberta. Logo depois de desligar
-    # o bot e antes de fechar, pela mesma razão de ordem: matar a fonte primeiro.
-    canceladas = _cancelar_ordens("panico")
+    # Desligar e cancelar acontecem SOB o lock de abertura. "Antes de fechar" não bastava: um
+    # ciclo do bot que já tinha lido `auto_trade=1` e estava buscando preço na rede abria a
+    # posição DEPOIS deste ponto, e o pânico não volta para fechá-la. Com o lock, a entrada do
+    # bot ou terminou antes (e a posição dela está na lista que se fecha abaixo) ou confere o
+    # `auto_trade` depois, dentro do mesmo lock, e desiste (`simulador._checar_tetos`). O mesmo
+    # vale para ordem enchendo: `_abrir_da_ordem` só enche ordem ainda 'pendente', sob este lock.
+    with simulador._abrir_lock:
+        db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
+        _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
+        # [EX-1] Ordem post-only pendente é posição esperando o preço: sem cancelar aqui, ela
+        # enchia no ciclo seguinte e o pânico deixava o sistema com posição aberta.
+        canceladas = _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
-    abertas = db.listar("posicoes", 200, "WHERE status='aberta'")
-    n, total = 0, 0.0
+    # -1 = sem LIMIT (SQLite). Eram 200: o kill-switch promete TODAS, e com 205 abertas sobravam 5.
+    abertas = db.listar("posicoes", -1, "WHERE status='aberta'")
+    n, total, falhas = 0, 0.0, []
     for p in abertas:
         try:
             pnl = simulador.fechar(p["id"], "panico")
@@ -1241,14 +1419,18 @@ def panico(pular_pendentes: bool = False):
                 total += pnl
                 n += 1
         except Exception as e:
+            # A falha de UMA posição não interrompe as outras, mas também não pode sumir: a
+            # resposta dizia só `fechadas: n`, e o painel anunciava o pânico como sucesso com
+            # uma posição ainda viva. Quem ficou aberta volta nomeada em `falhas`.
+            falhas.append({"id": p["id"], "ativo": p["ativo"], "erro": f"{type(e).__name__}: {str(e)[:120]}"})
             log(f"panico erro pos {p['id']}: {e}", "error")
     pulados = 0
     if pular_pendentes:
         with db.conectar() as c:
             pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
-    return {"ok": True, "fechadas": n, "pnl": round(total, 2),
+    return {"ok": not falhas, "fechadas": n, "pnl": round(total, 2),
             "auto_desligado": True, "pendentes_pulados": pulados,
-            "ordens_canceladas": canceladas}
+            "ordens_canceladas": canceladas, "falhas": falhas}
 
 
 def _cancelar_ordens(motivo, con=None):
@@ -1295,10 +1477,12 @@ def set_config(body: dict):
     """Grava configuração VALIDADA. Chave fora do catálogo, tipo errado ou valor fora de
     faixa -> 422 dizendo o que foi recusado, em vez de gravar lixo que só explode depois,
     longe daqui, dentro de guarda_risco()."""
-    aceitos = _validar_lote(body)
-    for k, v in aceitos.items():
-        db.set_config(k, v, "POST /config")
-    return db.get_config()
+    limpo = _sem_mascara(body)
+    if body and not limpo:                  # só veio a máscara de volta: nada a gravar
+        return _config_publica(db.get_config())
+    aceitos = _validar_lote(limpo)
+    db.set_configs(aceitos, "POST /config")
+    return _config_publica(db.get_config())
 
 
 AUTO_PERMITIDAS = {"auto_trade", "auto_conviccao_min", "auto_max_posicoes", "auto_max_valor_frac",
@@ -1312,8 +1496,7 @@ def set_auto(body: dict):
     """Liga/desliga e ajusta o auto-trader (experimento). Whitelist de chaves E validação
     de valores: a whitelist sozinha deixava passar auto_max_posicoes="banana"."""
     aceitos = _validar_lote(body, AUTO_PERMITIDAS)
-    for k, v in aceitos.items():
-        db.set_config(k, v, "POST /auto")
+    db.set_configs(aceitos, "POST /auto")
     cfg = db.get_config()
     return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},
             "estado": _auto["v"]}
@@ -1428,7 +1611,8 @@ def dca_aportar(req: IdReq):
 
 @app.post("/dca/remover")
 def dca_remover(req: IdReq):
-    dca.remover(req.id)
+    if not dca.remover(req.id):
+        return {"ok": False, "erro": "📊 plano não encontrado (ou já removido)"}
     return {"ok": True}
 
 

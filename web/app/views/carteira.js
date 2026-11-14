@@ -246,7 +246,8 @@
     if (!a || !(v > 0) || !(d >= 1)) { A.toast('Preencha ativo, valor e frequência', 'warn'); return; }
     var ok = await A.dialogo({ titulo: 'Criar plano de DCA', ok: 'Criar plano', corpo: '<p>Compra spot de <b>' + F.brl(v) + '</b> em <b>' + A.esc(F.par(a)) + '</b> a cada <b>' + d + (d === 1 ? ' dia' : ' dias') + '</b>, sem alavancagem, na ' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '. O primeiro aporte sai no próximo ciclo do worker.</p>' });
     if (!ok) return;
-    try { await A.api('/dca', { ativo: a, valor_aporte: v, freq_dias: d }); A.toast('Plano DCA criado: ' + F.par(a) + ' ' + F.brl(v) + ' / ' + d + ' d'); A.carregar(); }
+    /* recusa de regra (par inexistente, valor inválido) vem como {ok:false} com HTTP 200: virava "Plano criado" */
+    try { var r = await A.api('/dca', { ativo: a, valor_aporte: v, freq_dias: d }); if (r && r.ok === false) { A.toast('Plano recusado: ' + (r.erro || 'sem detalhe'), 'neg'); return; } A.toast('Plano DCA criado: ' + F.par(a) + ' ' + F.brl(v) + ' / ' + d + ' d'); A.carregar(); }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
   var aportando = false;
@@ -263,7 +264,7 @@
   async function remover(d) {
     var ok = await A.dialogo({ titulo: 'Remover plano de DCA', ok: 'Remover', perigo: true, corpo: '<p>Remove o plano de <b>' + A.esc(F.par(d.ativo)) + '</b> (' + d.n_aportes + ' aportes, ' + F.brl(d.total_investido) + ' investidos, hoje ' + F.brl(d.valor_atual) + ').</p>' });
     if (!ok) return;
-    try { await A.api('/dca/remover', { id: d.id }); A.toast('Plano removido'); A.carregar(); } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
+    try { var r = await A.api('/dca/remover', { id: d.id }); A.toast(r && r.ok === false ? (r.erro || 'O plano não foi removido') : 'Plano removido', r && r.ok === false ? 'warn' : ''); A.carregar(); } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
 
   /* ---------- histórico mensal e métricas ---------- */

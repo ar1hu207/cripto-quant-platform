@@ -36,7 +36,7 @@ ainda não existe**: disco único, sem cron, e o blob está fora. Medido em 02/1
 ## 2. Acesso: esqueça o SSH, use o plano de controle
 
 A regra `ssh` do NSG está em **`Deny`** desde 2026-09-24. Ela liberava a porta 22 para um
-único IP residencial dinâmico, e naquela data o IP liberado (`187.101.26.74`) já não era o do
+único IP residencial dinâmico, e naquela data o IP liberado já não era o do
 dono: a porta ficava aberta para quem herdasse aquele IP, e fechada para o dono. **Não
 reabra a regra**: é fronteira do classificador (`CLAUDE.md` §8), e o caminho abaixo não
 precisa dela.
@@ -191,7 +191,7 @@ a descoberta era abrir o painel e reparar.
 
 | Recurso | O quê |
 |---|---|
-| Action group | `ag-cripto-bot` (em `rg-cripto-bot`) → e-mail `abonizioa10@gmail.com` |
+| Action group | `ag-cripto-bot` (em `rg-cripto-bot`) → e-mail do dono |
 | `cripto-vm-fora-do-ar` | sev 1 · `VmAvailabilityMetric < 1` · janela e avaliação de 5 min |
 | `cripto-memoria-baixa` | sev 2 · `Available Memory Bytes < 104857600` (100 MB) · 5 min |
 | `cripto-creditos-cpu-acabando` | sev 3 · `CPU Credits Remaining < 30` · 15 min |

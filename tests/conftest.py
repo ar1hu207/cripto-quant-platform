@@ -19,7 +19,15 @@ import tempfile
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RAIZ)
-os.environ.setdefault("DB_PATH", os.path.join(tempfile.mkdtemp(prefix="pytest_cripto_"), "guarda.db"))
+# Atribuicao INCONDICIONAL, e nao `setdefault`: num shell com o `.env` do servidor carregado o
+# `DB_PATH` ja existe e apontaria a suite para o banco vivo. O mesmo vale para o log (a suite
+# gravava no `plataforma.log` da raiz, que no servidor e o log vivo da conta A, com um segundo
+# handler girando o mesmo arquivo) e para a senha (`api.DASH_PASS` e lido no import: com ela
+# exportada, toda fixture de TestClient levava 401).
+_TMP = tempfile.mkdtemp(prefix="pytest_cripto_")
+os.environ["DB_PATH"] = os.path.join(_TMP, "guarda.db")
+os.environ["LOG_PATH"] = os.path.join(_TMP, "plataforma.log")
+os.environ.pop("DASH_PASS", None)
 
 import pytest                                                    # noqa: E402
 

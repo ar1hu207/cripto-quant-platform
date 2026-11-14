@@ -17,6 +17,8 @@ teto de exposição): experimento CONTROLADO, nao um cassino sem freio.
 
 Liga/desliga: config auto_trade = "1"/"0".
 """
+import math
+
 import pandas as pd
 
 import db
@@ -133,7 +135,6 @@ def _lev_por_risco(cfg, stop_dist):
 
     O que esta conta NÃO faz, dito para não haver ilusão: não muda o P&L em reais. O R$ perdido
     no stop e ganho no alvo é `risco_por_trade`; a alavancagem só decide margem e liquidação."""
-    import math
     risco = float(cfg.get("risco_por_trade", 0.01))
     m = float(cfg.get("auto_lev_margem_frac", 0) or 0)
     if m <= 0:
@@ -323,7 +324,10 @@ def auto_executar(saidas=None):
                          ativo=s["ativo"])
         if valor <= 0:                                    # banca não comporta: pula
             continue
-        valor = min(valor, round(budget, 2))              # não passa do teto de margem restante
+        # TRUNCA, não arredonda: `round(budget, 2)` subia até meio centavo ACIMA do orçamento, o
+        # `abrir()` recusava por "teto de margem" e o `break` abaixo encerrava o ciclo. O sinal
+        # seguia 'novo' e a recusa se repetia a cada 15 s até ele expirar.
+        valor = min(valor, math.floor(budget * 100) / 100)   # não passa do teto de margem restante
         if valor < min_valor:
             break
         try:
@@ -332,7 +336,10 @@ def auto_executar(saidas=None):
             # conta nos tetos (`simulador._pendentes`), entao tratar pendente como "ainda tem
             # espaco" faria o bot colocar mais ordens do que o teto permite e depois apanhar
             # delas uma a uma no preenchimento.
-            tipo, ident = simulador.executar(s["id"], valor, lev)
+            # `exige_auto`: o `auto_trade` lido no topo deste ciclo pode ter sido desligado pelo
+            # `/panico` enquanto o laço estava na rede; quem confere de novo é o simulador, sob o
+            # mesmo lock em que o pânico desliga.
+            tipo, ident = simulador.executar(s["id"], valor, lev, exige_auto=True)
             pid = ident if tipo == "posicao" else None
             res["abertos"].append({"ativo": s["ativo"], "direcao": s["direcao"], "tf": s.get("tf"),
                                    "valor": valor, "lev": lev, "conviccao": s["conviccao"] or 0,
@@ -345,8 +352,8 @@ def auto_executar(saidas=None):
                             (s["ativo"], s["id"]))
         except ValueError as e:
             res["rejeitados"].append({"ativo": s["ativo"], "erro": str(e)})
-            if "teto" in str(e) or "trava" in str(e):     # teto/trava: nao adianta tentar mais nesse ciclo
-                break
+            if "teto" in str(e) or "trava" in str(e) or "desligado" in str(e):
+                break                                     # teto/trava/pânico: o ciclo acabou
         except Exception as e:                            # rede/etc: pula o candidato, não derruba o ciclo
             res["rejeitados"].append({"ativo": s["ativo"], "erro": f"falha: {e}"})
             log(f"auto-trader abrir erro {s['ativo']}: {e}", "error")

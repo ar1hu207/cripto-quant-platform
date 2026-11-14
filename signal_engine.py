@@ -11,6 +11,7 @@ Rodar:  python signal_engine.py               (loop)
         python signal_engine.py --cronometro --repetir 2   (o 2o ciclo ja e o REGIME: [F-10])
 """
 import sys
+import threading
 import time
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -99,7 +100,7 @@ def analisa(ativo, tf):
         out.append(dict(ativo=ativo, tf=tf, tipo=p["tipo"],
                         direcao="LONG" if p["direcao"] == 1 else "SHORT",
                         conviccao=p["conviccao"], motivos=p["motivos"],
-                        preco=round(c, 6), stop_sugerido=round(stop, 6),
+                        preco=mercado.arred_preco(c), stop_sugerido=mercado.arred_preco(stop),
                         adx=p["adx"], n_fatores=p["n_fatores"], vela_ms=vela_ms))
     return out
 
@@ -523,7 +524,23 @@ def expirar_sinais(agora=None):
     return n
 
 
+_scan_lock = threading.Lock()
+
+
 def scan():
+    """Uma varredura por vez. O worker varre a cada 60 s e o `POST /scan` varre a pedido; os
+    dois no mesmo instante passavam, cada um, pelo dedupe (`_repetido` lê, `_gravar` escreve,
+    com rede no meio do laço) vendo a fila vazia, e gravavam o MESMO sinal duas vezes: dois
+    'novo' do mesmo ativo disputando a fila, e o contador `ultimo_scan` pisado pelos dois. Quem
+    chega em segundo espera e varre depois; aí o dedupe já enxerga o que o primeiro gravou.
+
+    Lock de processo, e não transação: o que precisa de exclusão é o par ler-gravar inteiro, e
+    há um só processo escrevendo neste banco (a conta B tem o dela)."""
+    with _scan_lock:
+        return _varrer()
+
+
+def _varrer():
     cfg = db.get_config()
     ativos = [a.strip() for a in cfg["ativos"].split(",") if a.strip()]
     tfs = [t.strip() for t in cfg.get("timeframes", cfg.get("timeframe", "15m")).split(",") if t.strip()]

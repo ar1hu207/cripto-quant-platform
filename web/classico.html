@@ -1411,9 +1411,9 @@ async function carregarSentimento(){
       const cor=fg.valor<25?'var(--neg)':fg.valor<45?'var(--warn)':fg.valor<55?'var(--txt2)':'var(--pos)';
       h+=`<div class="fg">
         <div><div class="lbl">Fear &amp; Greed</div>
-          <div class="fg-num mono" style="color:${cor}">${fg.valor}<span class="fg-lbl">${fg.label}</span></div></div>
+          <div class="fg-num mono" style="color:${cor}">${+fg.valor||0}<span class="fg-lbl">${escH(fg.label)}</span></div></div>
         <div class="fg-escala">
-          <div class="fg-barra" role="img" aria-label="Fear and Greed em ${fg.valor} de 100: ${fg.label}">
+          <div class="fg-barra" role="img" aria-label="Fear and Greed em ${+fg.valor||0} de 100: ${escH(fg.label)}">
             <span class="fg-agulha" style="left:${fg.valor}%"></span></div>
           <div class="fg-pontas"><span>Medo extremo</span><span>Ganância extrema</span></div>
         </div></div>`;
@@ -1716,11 +1716,31 @@ async function confirmarTrade(){if(_busy||!_sig)return; _busy=true;        // tr
     toast(`✅ ${_sig.direcao} ${_sig.ativo} aberto — R$${valor} @ ${lev}x`);fecharModal();carregar();}
   catch(e){toast('erro: '+e.message);}
   finally{_busy=false; if(cbtn){cbtn.disabled=false;cbtn.textContent='✅ Confirmar';}}}
-async function pular(id){await api('/pular',{id});carregar();}
-async function fechar(id){const r=await api('/fechar',{id});toast(`Posição fechada — P&L ${brl(r.pnl)}`);carregar();}
+// Texto que vem de fora (backend, e por ele de API de terceiro) nunca entra cru em innerHTML.
+function escH(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function pular(id){
+  try{const r=await api('/pular',{id}); if(r&&r.ok===false)toast(r.erro||'sinal não está mais na fila'); carregar();}
+  catch(e){toast('erro: '+e.message);}}
+// Fechar pedia UM clique, numa tabela que se redesenha a cada 3 s: uma posição nova empurra as
+// linhas e o clique caía no Fechar de outra. Agora confirma dizendo QUAL posição, e a recusa
+// do backend ({ok:false}) ou a posição já fechada (pnl null) param de virar "fechada, R$ 0,00".
+async function fechar(id){
+  const p=((_est&&_est.posicoes)||[]).find(x=>x.id===id);
+  const qual=p?`${p.direcao} ${p.ativo} (P&L agora ${brl(p.pnl)})`:`a posição #${id}`;
+  if(!confirm(`Fechar ${qual} a mercado?`))return;
+  try{const r=await api('/fechar',{id});
+    if(r&&r.ok===false)toast(r.erro||'não fechou');
+    else toast(r.pnl==null?'A posição já estava fechada':`Posição fechada — P&L ${brl(r.pnl)}`);
+    carregar();}
+  catch(e){toast('erro ao fechar: '+e.message);}}
 async function escanear(){toast('🔍 escaneando...');await api('/scan',{});carregar();}
-async function resetar(){if(!confirm('Resetar a simulação? (zera banca, posições e trades)'))return;
-  await api('/reset',{confirmar:'RESET'});toast('↻ simulação resetada');carregar();}
+// O reset apaga sinais, posições, trades e a curva, sem backup. Um OK num confirm() mandava a
+// palavra-chave sozinho e anulava a guarda do backend; agora é a pessoa que digita.
+async function resetar(){
+  const w=prompt('Resetar APAGA sinais, posições, trades e a curva desta conta, sem volta.\nDigite RESET para confirmar:');
+  if(w!=='RESET'){ if(w!=null)toast('reset cancelado: a palavra não confere'); return; }
+  try{await api('/reset',{confirmar:'RESET'});toast('↻ simulação resetada');carregar();}
+  catch(e){toast('reset recusado: '+e.message);}}
 async function criarDca(){if(_busy)return;
   const ativo=document.getElementById('dca-ativo').value, valor=+document.getElementById('dca-valor').value, freq=+document.getElementById('dca-freq').value;
   if(!ativo||valor<=0||freq<=0){toast('preencha ativo/valor/frequência');return;}
@@ -1730,10 +1750,18 @@ async function criarDca(){if(_busy)return;
 }
 async function aportarDca(id){const r=await api('/dca/aportar',{id}); toast(r.ok?`💰 Aporte feito @ ${num(r.preco)}`:'erro no aporte'); carregar();}
 async function removerDca(id){if(!confirm('Remover este plano DCA?'))return; await api('/dca/remover',{id}); toast('plano removido'); carregar();}
-async function panico(){const n=(_est&&_est.posicoes)?_est.posicoes.length:0;
-  if(!n){toast('Nenhuma posição aberta');return;}
-  if(!confirm(`🛑 Fechar TODAS as ${n} posições AGORA (preço de mercado)?`))return;
-  const r=await api('/panico',{});toast(`🛑 ${r.fechadas} posição(ões) fechada(s) · P&L ${brl(r.pnl)}`);carregar();}
+// O pânico DESLIGA o bot e CANCELA as ordens antes de fechar posição. Este botão voltava sem
+// chamar o backend quando não havia posição aberta: com o bot ligado e ordens descansando, o
+// dono apertava, lia "Nenhuma posição aberta" e o bot seguia abrindo. Agora chama sempre.
+async function panico(){
+  const n=(_est&&_est.posicoes)?_est.posicoes.length:0, no=(_est&&_est.ordens)?_est.ordens.length:0;
+  if(!confirm(`🛑 PÂNICO: desliga o bot, cancela ${no} ordem(ns) pendente(s) e fecha ${n} posição(ões) a mercado. Confirmar?`))return;
+  try{const r=await api('/panico',{});
+    const falhou=(r.falhas||[]).length;
+    toast(`🛑 bot desligado · ${r.fechadas} posição(ões) fechada(s) · ${r.ordens_canceladas||0} ordem(ns) cancelada(s) · P&L ${brl(r.pnl)}`);
+    if(falhou)alert(`ATENÇÃO: ${falhou} posição(ões) NÃO fecharam (${r.falhas.map(f=>f.ativo).join(', ')}). O bot está desligado; aperte o pânico de novo ou feche à mão.`);
+    carregar();}
+  catch(e){alert('O PÂNICO FALHOU: '+e.message+'\nNada garante que o bot foi desligado. Tente de novo.');}}
 
 async function carregarSaidas(){
   try{
@@ -1809,9 +1837,17 @@ async function salvarAuto(){
   const levVal=document.getElementById('a-lev').value;
   const body={ auto_conviccao_min:document.getElementById('a-conv').value,
     risco_por_trade:(parseFloat(document.getElementById('a-risco').value)/100),
-    auto_max_posicoes:document.getElementById('a-maxpos').value,
-    auto_lev_modo:modoConv?'conviccao':'fixo' };
-  if(modoConv) body.auto_lev_max=levVal; else body.alavancagem_padrao=levVal;
+    auto_max_posicoes:document.getElementById('a-maxpos').value };
+  // Esta tela desenha DOIS modos de alavancagem e o catálogo tem três. Com `auto_lev_modo=risco`
+  // (alavancagem pela conta do trade) o checkbox aparecia desmarcado e o Salvar gravava "fixo":
+  // mexer na convicção mínima trocava o modo de alavancagem sem aviso. Modo que a tela não
+  // conhece não é tocado, nem os dois campos que dependem dele. Sem o primeiro /estado não há
+  // como saber o modo, então também não se envia.
+  const modoAtual=String((_est&&_est.config&&_est.config.auto_lev_modo)||'');
+  if(modoAtual==='conviccao'||modoAtual==='fixo'){
+    body.auto_lev_modo=modoConv?'conviccao':'fixo';
+    if(modoConv) body.auto_lev_max=levVal; else body.alavancagem_padrao=levVal;
+  }
   try{ await api('/auto',body); toast('Config do bot salva'); carregar(); }
   catch(e){ toast('erro: '+e.message); }
   finally{ _busy=false; }

@@ -217,8 +217,8 @@
     var s = S.sinalSel && (e.pendentes || []).find(function (x) { return x.id === S.sinalSel; });
     if (s && s.ativo === S.ativo) { add({ price: s.preco, color: T.acc, lineStyle: 1, title: 'sinal ' + s.direcao }); add({ price: s.stop_sugerido, color: T.neg, lineStyle: 3, title: 'stop sugerido' }); }
     if (S.ind.liq && S.smart && S.smart.ativo === S.ativo) {
-      (S.smart.j.liquidez_acima || []).forEach(function (p) { add({ price: p, color: T.warn, lineStyle: 3, title: 'liq ↑' }); });
-      (S.smart.j.liquidez_abaixo || []).forEach(function (p) { add({ price: p, color: T.warn, lineStyle: 3, title: 'liq ↓' }); });
+      (S.smart.j.liquidez_acima || []).forEach(function (p) { add({ price: p, color: T.warn, lineStyle: 3, title: 'liquidez ↑' }); });
+      (S.smart.j.liquidez_abaixo || []).forEach(function (p) { add({ price: p, color: T.warn, lineStyle: 3, title: 'liquidez ↓' }); });
     }
     pe(e);
   }

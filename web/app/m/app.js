@@ -153,8 +153,8 @@
     var corpo = '<p class="note">O backend grava <b>auto_trade = 0 primeiro</b> e só depois fecha ' +
       (n ? '<b>' + n + (n === 1 ? ' posição' : ' posições') + '</b> a mercado.' : 'as posições abertas (agora: nenhuma).') + '</p>' +
       '<div class="diff"><div><span>Apollo (auto-trade)</span><span>' + (on ? 'ligado → <b class="neg">desligado</b>' : 'já desligado') + '</span></div>' +
-      '<div><span>Posições abertas</span><span>' + n + ' → <b>0</b></span></div></div>' +
-      (no ? '<div class="aviso">' + no + (no === 1 ? ' ordem post-only descansando NÃO é cancelada' : ' ordens post-only descansando NÃO são canceladas') + ' pelo pânico e ainda pode virar posição se o preço vier até ela.</div>' : '') +
+      '<div><span>Posições abertas</span><span>' + n + ' → <b>0</b></span></div>' +
+      (no ? '<div><span>Ordens post-only descansando</span><span>' + no + ' → <b>0</b> (canceladas)</span></div>' : '') + '</div>' +
       '<p class="note">Religar o Apollo depois exige ação explícita na aba Apollo.</p>';
     if (!(await sheet({ titulo: 'Pânico · ' + NOME_CONTA, corpo: corpo, perigo: true, slide: { txt: 'Arraste para o pânico', perigo: true } }))) return;
     await executaPanico();
@@ -163,8 +163,12 @@
   async function executaPanico() {
     try {
       var r = await A.api('/panico', {});
-      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
-      A.carregar(); return true;
+      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
+      A.carregar();
+      /* posição que falhou ao fechar volta nomeada em `falhas`: um toast de 3 s não basta para isso */
+      var fl = r.falhas || [];
+      if (fl.length) await sheet({ titulo: 'Pânico incompleto', perigo: true, cancelar: 'Entendi', corpo: '<p class="note"><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return esc(F.par(f.ativo)); }).join(', ') + '.</p><p class="note">O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p>' });
+      return !fl.length;
     } catch (err) { A.toast('Pânico falhou: ' + A.erroTxt(err), 'neg'); return false; }
   }
   async function fechar(p) {
@@ -179,7 +183,8 @@
     } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); return false; }
   }
   async function pular(s) {
-    try { await A.api('/pular', { id: s.id }); A.toast('Sinal ' + F.par(s.ativo) + ' pulado'); A.carregar(); return true; }
+    /* {ok:false} com HTTP 200 = o sinal já saiu da fila (o Apollo o abriu): não é "pulado" */
+    try { var r = await A.api('/pular', { id: s.id }); if (r && r.ok === false) { A.toast(r.erro || 'O sinal não está mais na fila', 'warn'); A.carregar(); return false; } A.toast('Sinal ' + F.par(s.ativo) + ' pulado'); A.carregar(); return true; }
     catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); return false; }
   }
   async function alternaAuto() {
@@ -556,7 +561,7 @@
       var od = e.ordens || []; $('a-ord-w').hidden = !od.length; $('a-ord-h').innerHTML = 'Ordens descansando · ' + cnt(od.length); $('a-ord').innerHTML = od.map(ordItem).join('');
       var n = (e.posicoes || []).length, no = od.length;
       $('a-pan-n').innerHTML = 'Grava <code>auto_trade=0</code> <b>antes</b> de fechar ' + (n ? '<b>' + n + (n === 1 ? ' posição' : ' posições') + '</b>' : 'as posições (agora: nenhuma)') + ' a mercado' +
-        (no ? '. ' + no + (no === 1 ? ' ordem descansando NÃO é cancelada' : ' ordens descansando NÃO são canceladas') : '') + '. O mesmo botão fica no topo de toda tela.';
+        (no ? ' e cancela <b>' + no + (no === 1 ? ' ordem descansando' : ' ordens descansando') + '</b>' : '') + '. O mesmo botão fica no topo de toda tela.';
     }
   };
 
@@ -881,7 +886,8 @@
   var tela = null, rotaAtual = null, tabs = Array.prototype.slice.call(document.querySelectorAll('#m-tabs [data-tab]'));
   function parse() {
     var h = location.hash.replace(/^#/, '').split('?')[0], p = h.split('/');
-    if (TELAS[p[0]] && (p[0] !== 'pos' && p[0] !== 'sinal' || p[1])) return { id: p[0], arg: p[1], chave: h };
+    /* hasOwnProperty: `#constructor` existe em todo objeto, passava por tela válida e derrubava o boot */
+    if (Object.prototype.hasOwnProperty.call(TELAS, p[0]) && (p[0] !== 'pos' && p[0] !== 'sinal' || p[1])) return { id: p[0], arg: p[1], chave: h };
     return { id: 'painel', chave: 'painel' };
   }
   function vai() {

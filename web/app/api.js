@@ -84,7 +84,7 @@
     try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
     catch (e) { var d = new Date(Date.now() - 3 * 3600000); return d.toISOString().slice(0, 10); }
   }
-  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
   /* ---- barramento de eventos (views assinam no init e saem no destroy) ---- */
   var subs = {};
@@ -183,6 +183,7 @@
   async function apiFetch(path, opts) {
     opts = opts || {};
     var mk = function () { var h = Object.assign({}, opts.headers || {}); if (cred) h.Authorization = cred; return Object.assign({}, opts, { headers: h }); };
+    var usada = cred, escrita = !!opts.method && opts.method !== 'GET';
     var r = await fetch(API + path, mk());
     if (r.status === 429) {
       /* o poll para (senão ele renova o próprio bloqueio), mas volta sozinho: antes ele só voltava
@@ -194,8 +195,19 @@
       return r;
     }
     if (r.status === 401) {
-      parar(); store.del('cbAuth'); cred = '';
-      if (await gateAbre()) r = await fetch(API + path, mk());
+      /* Este 401 é da credencial com que a requisição SAIU. Se ela já foi trocada (o login passou
+         enquanto a resposta voltava), a credencial nova não tem culpa: antes ela era apagada aqui
+         e o gate reabria sozinho logo depois de aceitar a senha certa. */
+      var trocou = !!cred && usada !== cred;
+      if (!trocou) { parar(); store.del('cbAuth'); cred = ''; }
+      if (trocou || await gateAbre()) {
+        /* Só LEITURA é refeita sozinha. Um POST (pânico, fechar, reset, config, confirmar) que
+           tomou 401 era reenviado quando o login passasse, fosse dali a um minuto ou a três
+           horas, com o mercado em outro lugar e sem ninguém reconfirmar. Agora ele NÃO vai: quem
+           chamou recebe o erro e a pessoa repete a ação sabendo o que está fazendo. */
+        if (escrita) { var e401 = new Error('Sessão renovada. A ação NÃO foi enviada: repita.'); e401.status = 401; throw e401; }
+        r = await fetch(API + path, mk());
+      }
     }
     return r;
   }
