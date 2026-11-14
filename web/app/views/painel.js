@@ -175,7 +175,7 @@
     '<section class="row-3">' +
       '<article class="card"><div class="card-head"><h2 class="h2">Ordens pendentes</h2><span class="count" id="pn-ord-n">0</span></div><div id="pn-ord"></div></article>' +
       '<article class="card"><div class="card-head"><h2 class="h2">Trava diária</h2><span class="state" id="pn-trava-st">—</span></div><div id="pn-trava"></div></article>' +
-      '<article class="card"><div class="card-head"><h2 class="h2">Journal</h2><a class="count" href="#apollo">últimos 5 · ver tudo</a></div><ul class="jr" id="pn-jr"></ul></article>' +
+      '<article class="card"><div class="card-head"><h2 class="h2">Journal</h2><a class="count" href="#carteira">últimos 5 · ver tudo</a></div><ul class="jr" id="pn-jr"></ul></article>' +
     '</section>' +
     '<section aria-label="Em construção"><div class="card-head"><h2 class="h2">Em construção</h2><span class="count mute">5 módulos</span></div><div class="build">' +
       '<a class="bcard" href="#acoes"><h3>Ações BR</h3><p>B3: ações, índice, mini dólar. O mesmo Apollo, outro mercado.</p><span class="soon">em breve</span></a>' +

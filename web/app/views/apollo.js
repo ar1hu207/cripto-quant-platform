@@ -1,5 +1,7 @@
-/* Apollux · view Apollo (#apollo): o agente. Esfera full (ApolloMesh), estado real, liga/pausa, pânico,
-   configuração pelo catálogo e journal.
+/* Apollux · view Apollo (#apollo): o agente, e só o agente. Esfera full (ApolloMesh), o que ele anda
+   fazendo, estado real, liga/pausa, pânico e a configuração dele pelo catálogo, em grupos recolhíveis.
+   O journal saiu daqui em 14/11 (pedido do dono): histórico de trade é resultado da banca e mora na
+   Carteira, junto da curva, do mês e das métricas.
 
    Regras que esta tela obedece (CLAUDE.md §2 e o briefing do front):
    - config só pelo /catalogo + POST /config, com o valor ATUAL ao lado e um diálogo de diff antes de
@@ -11,8 +13,8 @@
      a tela;
    - chat e voz estão travados (F5). "Chamar Apollo" monta o resumo por template a partir do /estado,
      sem LLM, e a esfera fala enquanto ele aparece.
-   Rotas, só com a view montada: /catalogo (uma vez), /status (30 s), /trades?limite=200 (60 s),
-   /config/auditoria (ao abrir a aba e depois de gravar). */
+   Rotas, só com a view montada: /catalogo (uma vez), /status (30 s), /trades?limite=8 (uma vez: semeia a
+   atividade recente), /config/auditoria (ao abrir a aba e depois de gravar). */
 (function () {
   'use strict';
   function p1(v) { v = +v || 0; return (Math.round(v * 10) / 10).toLocaleString('pt-BR', { maximumFractionDigits: 1 }); }
@@ -47,8 +49,14 @@
   '.v-apollo .cap{border:1px solid var(--line2);background:rgba(var(--bg-rgb),.72);border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.55;color:var(--txt);max-height:220px;overflow:auto}' +
   '.v-apollo .cap .lbl{font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:4px}' +
   '.v-apollo .cap .mono{font-family:var(--f-mono)}' +
-  '.v-apollo .row-main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:start}' +
-  '.v-apollo .tl{list-style:none;margin:0;padding:0;display:grid;gap:10px;max-height:420px;overflow:auto}' +
+  /* A conversa estica até a altura do Status (antes ficava baixa e deixava um buraco ao lado dele): a
+     lista fica absoluta dentro de um wrapper que cresce, então não empurra a linha, só rola. */
+  '.v-apollo .row-main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;align-items:stretch}' +
+  '.v-apollo .chat{display:flex;flex-direction:column;min-width:0}' +
+  '.v-apollo .tlw{position:relative;flex:1 1 auto;min-height:200px}' +
+  '.v-apollo .tlw .tl{position:absolute;inset:0}' +
+  '.v-apollo .tl{list-style:none;margin:0;padding:0 4px 0 0;display:grid;gap:10px;align-content:start;overflow:auto}' +
+  '.v-apollo .tl .sep{display:block;font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);padding-top:4px}' +
   '.v-apollo .tl li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;font-size:12.5px}' +
   '.v-apollo .tl time{font-family:var(--f-mono);font-size:11px;color:var(--mute);padding-top:2px}' +
   '.v-apollo .tl .b{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--panel2)}' +
@@ -56,9 +64,22 @@
   '.v-apollo .chat-in input{flex:1;min-width:0;background:none;border:0;color:var(--mute);font:inherit}' +
   '.v-apollo .notes{font-family:var(--f-mono);font-size:11px;color:var(--mute);line-height:1.6;margin-top:10px}' +
   '.v-apollo .st-acts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}' +
-  '.v-apollo .cfg-g{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}' +
-  '.v-apollo .cfg-g:first-of-type{border-top:0;margin-top:0;padding-top:0}' +
-  '.v-apollo .cfg-gt{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin-bottom:8px}' +
+  /* grupos recolhíveis: fechados por padrão; o que você abriu fica aberto entre visitas (localStorage) */
+  '.v-apollo .cfg-head-acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}' +
+  '.v-apollo .cfg-g{border:1px solid var(--line);border-radius:12px;background:var(--panel2);margin-top:8px}' +
+  '.v-apollo .cfg-g>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:12px 14px;border-radius:12px}' +
+  '.v-apollo .cfg-g>summary::-webkit-details-marker{display:none}' +
+  '.v-apollo .cfg-g>summary:hover{background:rgba(var(--txt-rgb),.03)}' +
+  '.v-apollo .cfg-g>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}' +
+  '.v-apollo .cfg-g>summary::after{content:"";width:7px;height:7px;border-right:1.5px solid var(--txt2);border-bottom:1.5px solid var(--txt2);transform:translateY(-2px) rotate(45deg);transition:transform .2s}' +
+  '.v-apollo .cfg-g[open]>summary::after{transform:translateY(2px) rotate(-135deg)}' +
+  '.v-apollo .cfg-g[open]>summary{border-bottom:1px solid var(--line);border-radius:12px 12px 0 0}' +
+  '.v-apollo .cfg-gt{font-size:13px;font-weight:600;color:var(--txt)}' +
+  '.v-apollo .cfg-gs{font-family:var(--f-mono);font-size:11px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}' +
+  '.v-apollo .cfg-gn{font-family:var(--f-mono);font-size:10.5px;color:var(--mute);white-space:nowrap}' +
+  '.v-apollo .cfg-gn.warn{color:var(--warn)}' +
+  '.v-apollo .cfg-gb{padding:2px 14px 8px;background:var(--panel)}' +
+  '.v-apollo .cfg-g[open]>.cfg-gb{border-radius:0 0 12px 12px}' +
   '.v-apollo .cfg-r{display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid rgba(var(--line-rgb),.5)}' +
   '.v-apollo .cfg-r:last-child{border-bottom:0}' +
   '.v-apollo .cfg-r.mudou{background:linear-gradient(90deg,rgba(var(--accent-rgb),.07),transparent)}' +
@@ -86,21 +107,13 @@
   '.v-apollo .ind-trava{display:flex;justify-content:space-between;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel2);margin-bottom:12px;font-size:12.5px}' +
   '.v-apollo .ind-trava b{font-family:var(--f-mono);font-size:11px;letter-spacing:.12em}' +
   '.v-apollo .perfis{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;font-size:12.5px;color:var(--txt2)}' +
-  '.v-apollo .flt{display:flex;gap:6px;flex-wrap:wrap}' +
-  '.v-apollo .flt button{border:1px solid var(--line2);background:none;color:var(--txt2);border-radius:999px;padding:3px 10px;font-family:var(--f-mono);font-size:11px;cursor:pointer}' +
-  '.v-apollo .flt button[aria-pressed="true"]{color:var(--accent);border-color:rgba(var(--accent-rgb),var(--glow))}' +
-  '.v-apollo .jr{list-style:none;margin:10px 0 0;padding:0;display:grid;max-height:720px;overflow:auto}' +
-  '.v-apollo .jr li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;padding:9px 0;border-bottom:1px solid rgba(var(--line-rgb),.6);font-size:12.5px;align-items:start}' +
-  '.v-apollo .jr time{font-family:var(--f-mono);font-size:11px;color:var(--mute);white-space:nowrap}' +
-  '.v-apollo .jr .d{font-family:var(--f-mono);font-size:11px;color:var(--txt2);margin-top:2px}' +
-  '.v-apollo .jr .amt{font-family:var(--f-mono);font-weight:600;white-space:nowrap}' +
-  '.v-apollo .aud{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-family:var(--f-mono);font-size:11.5px}' +
+  '.v-apollo .aud{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-family:var(--f-mono);font-size:11.5px;max-height:360px;overflow:auto}' +
   '.v-apollo .aud li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;padding:6px 0;border-bottom:1px solid rgba(var(--line-rgb),.5)}' +
   /* valor de config sem espaço (a lista `ativos`, 24 pares colados por vírgula) alargava a página para 1.664 px e o celular reduzia o zoom da tela inteira */
   '.v-apollo .aud li>*{min-width:0;overflow-wrap:anywhere}' +
   '.v-apollo .aud .o{color:var(--mute);font-size:10.5px}' +
-  '@media (max-width:1100px){.v-apollo .row-main{grid-template-columns:1fr}.v-apollo .hero{grid-template-columns:1fr 1fr}.v-apollo .hero-r{grid-column:2}}' +
-  '@media (max-width:700px){.v-apollo .hero{grid-template-columns:1fr;min-height:480px;align-content:end}.v-apollo .hero-r{grid-column:1;padding-top:0}.v-apollo .cfg-r{grid-template-columns:1fr}.v-apollo .cfg-v{justify-items:stretch}.v-apollo .cfg-v .cur,.v-apollo .cfg-v .ro{text-align:left}}' +
+  '@media (max-width:1100px){.v-apollo .row-main{grid-template-columns:1fr}.v-apollo .hero{grid-template-columns:1fr 1fr}.v-apollo .hero-r{grid-column:2}.v-apollo .tlw{min-height:0}.v-apollo .tlw .tl{position:static;max-height:360px}}' +
+  '@media (max-width:700px){.v-apollo .hero{grid-template-columns:1fr;min-height:480px;align-content:end}.v-apollo .hero-r{grid-column:1;padding-top:0}.v-apollo .cfg-g>summary{grid-template-columns:minmax(0,1fr) auto auto;gap:10px}.v-apollo .cfg-gs{grid-column:1/-1;grid-row:2}.v-apollo .cfg-r{grid-template-columns:1fr}.v-apollo .cfg-v{justify-items:stretch}.v-apollo .cfg-v .cur,.v-apollo .cfg-v .ro{text-align:left}}' +
   '</style>';
 
   var html = css + '<div class="v-apollo">' +
@@ -108,25 +121,25 @@
       '<div class="hero-l"><h2 class="ap-name">Apollo<small>agente · opera, vigia e fala com você</small></h2><span class="ap-state" id="ap-state">—</span>' +
         '<span class="voice" title="Voz entra na fase F5"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Voz <span class="soon">em breve</span></span>' +
         '<button type="button" class="btn primary" id="ap-chamar" style="justify-self:start">Chamar Apollo</button></div>' +
-      '<div class="hero-r"><div class="cap" id="ap-cap" aria-live="polite"><span class="lbl">Apollo</span><span id="ap-cap-t">Chame o Apollo para um resumo do estado de agora, montado do /estado.</span></div></div>' +
+      '<div class="hero-r"><div class="cap" id="ap-cap" aria-live="polite"><span class="lbl">Apollo</span><span id="ap-cap-t">Chame o Apollo para um resumo de agora: banca, posições, sinais e trava, lidos do bot.</span></div></div>' +
     '</section>' +
     '<section class="row-main">' +
-      '<article class="card"><div class="card-head"><h2 class="h2">Fale com o Apollo</h2><span class="soon">chat · F5</span></div>' +
-        '<ul class="tl" id="ap-tl"><li><time>—</time><div class="b mute">Aqui entram os eventos reais desta sessão: posição aberta ou fechada, sinal novo, ordem descansando, trava. Enquanto o chat não chega, é o Apollo contando o que fez.</div></li></ul>' +
+      '<article class="card chat"><div class="card-head"><h2 class="h2">Fale com o Apollo</h2><span class="soon">chat · F5</span></div>' +
+        '<div class="tlw"><ul class="tl" id="ap-tl"><li><time>—</time><div class="b mute">Aqui entram os eventos reais: posição aberta ou fechada, sinal novo, ordem descansando, trava. Enquanto o chat não chega, é o Apollo contando o que fez.</div></li></ul></div>' +
         '<label class="chat-in"><input disabled placeholder="Fale com o Apollo…" aria-label="Mensagem (em breve)"><span class="soon">em breve</span></label>' +
-        '<div class="notes">· chat e voz entram na fase F5, junto com o push · o Apollo só executa o que a régua autorizou: conversa não cria regra nova</div></article>' +
+        '<div class="notes">· chat e voz ainda não estão no ar (o push já está, no app do celular) · o Apollo só executa o que a régua autorizou: conversa não cria regra nova</div></article>' +
       '<article class="card"><div class="card-head"><h2 class="h2">Status</h2><span class="state" id="ap-st-chip">—</span></div><dl class="kv" id="ap-st"></dl>' +
         '<div class="st-acts"><button type="button" class="btn" id="ap-auto">—</button><button type="button" class="btn danger" id="ap-panico">Pânico</button></div>' +
         '<div class="notes">Pausar desliga só a abertura nova: posições abertas seguem com stop e trailing. Pânico desliga e fecha tudo a mercado.</div></article>' +
     '</section>' +
-    '<section class="row-main">' +
-      '<article class="card"><div class="card-head"><h2 class="h2">Configuração</h2><span class="count mute" id="ap-cfg-t">pelo /catalogo</span></div>' +
-        '<div class="ind-trava" id="ap-trava"></div><div class="perfis" id="ap-perfis"></div><div id="ap-cfg"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:60%"></div></div>' +
-        '<div class="cfg-save"><button type="button" class="btn primary" id="ap-salvar" disabled>Revisar e salvar</button><button type="button" class="btn ghost" id="ap-desfaz" disabled>Desfazer</button><span class="mute" id="ap-pend">nenhuma alteração pendente</span></div></article>' +
-      '<div class="stack"><article class="card"><div class="card-head"><h2 class="h2">Journal</h2><span class="count" id="ap-jr-n">—</span></div>' +
-        '<div class="flt" id="ap-flt"><button type="button" data-f="tudo" aria-pressed="true">Tudo</button><button type="button" data-f="ganho" aria-pressed="false">Ganhos</button><button type="button" data-f="perda" aria-pressed="false">Perdas</button><button type="button" data-f="stop" aria-pressed="false">Stop</button><button type="button" data-f="manual" aria-pressed="false">Manual</button></div>' +
-        '<ul class="jr" id="ap-jr"><li><span class="skel" style="grid-column:1/-1"></span></li></ul></article>' +
-        '<article class="card"><div class="card-head"><h2 class="h2">Auditoria da config</h2><span class="count mute" id="ap-aud-n">—</span></div><ul class="aud" id="ap-aud"></ul><div class="notes" id="ap-aud-nota"></div></article></div>' +
+    /* Configuração em largura cheia: com os grupos recolhidos ela fica baixa, e uma coluna ao lado (era o
+       journal + a auditoria) voltava a abrir buraco. A auditoria virou o último grupo do próprio card. */
+    '<section class="card"><div class="card-head"><h2 class="h2">Configuração</h2><div class="cfg-head-acts"><span class="count mute" id="ap-cfg-t">—</span>' +
+        '<button type="button" class="btn ghost sm" id="ap-abre">abrir tudo</button><button type="button" class="btn ghost sm" id="ap-fecha">recolher tudo</button></div></div>' +
+      '<div class="ind-trava" id="ap-trava"></div><div class="perfis" id="ap-perfis"></div><div id="ap-cfg"><div class="skel"></div><div class="skel"></div><div class="skel" style="width:60%"></div></div>' +
+      '<div class="cfg-save"><button type="button" class="btn primary" id="ap-salvar" disabled>Revisar e salvar</button><button type="button" class="btn ghost" id="ap-desfaz" disabled>Desfazer</button><span class="mute" id="ap-pend">nenhuma alteração pendente</span></div>' +
+      '<details class="cfg-g" data-g="Histórico de mudanças"><summary><span class="cfg-gt">Histórico de mudanças</span><span class="cfg-gs">quem mudou o quê, e quando</span><span class="cfg-gn" id="ap-aud-n">—</span></summary>' +
+        '<div class="cfg-gb" style="padding-top:10px"><ul class="aud" id="ap-aud"></ul><div class="notes" id="ap-aud-nota"></div></div></details>' +
     '</section>' +
   '</div>';
 
@@ -230,19 +243,37 @@
     var cfg = e.config || {}, P = cat.parametros || {}, usados = {};
     var grupos = GRUPOS.map(function (g) { return [g[0], g[1].filter(function (k) { usados[k] = 1; return P[k] && !FORA[k]; })]; });
     var resto = Object.keys(P).filter(function (k) { return !usados[k] && !FORA[k]; }); if (resto.length) grupos.push(['Outros', resto]);
-    $('ap-cfg').innerHTML = grupos.filter(function (g) { return g[1].length; }).map(function (g) {
-      return '<div class="cfg-g"><div class="cfg-gt">' + g[0] + '</div>' + g[1].map(function (k) {
+    grupos = grupos.filter(function (g) { return g[1].length; });
+    S.grupoDe = {}; grupos.forEach(function (g) { g[1].forEach(function (k) { S.grupoDe[k] = g[0]; }); });
+    var nPar = grupos.reduce(function (a, g) { return a + g[1].length; }, 0);
+    $('ap-cfg-t').dataset.n = nPar + ' parâmetros em ' + grupos.length + ' grupos';
+    $('ap-cfg').innerHTML = grupos.map(function (g) {
+      /* o resumo fechado mostra os 3 primeiros valores do grupo: dá para conferir sem abrir */
+      var res = g[1].slice(0, 3).map(function (k) { return nome(k) + ' ' + curto(k, cfg[k], P[k]); }).join(' · ');
+      return '<details class="cfg-g" data-g="' + A.esc(g[0]) + '"' + (S.abertos[g[0]] ? ' open' : '') + '><summary><span class="cfg-gt">' + A.esc(g[0]) + '</span><span class="cfg-gs">' + A.esc(res) + '</span><span class="cfg-gn" data-gn="' + A.esc(g[0]) + '">' + g[1].length + '</span></summary><div class="cfg-gb">' + g[1].map(function (k) {
         var spec = P[k], v = cfg[k], ro = k === 'ativos';
         var faixa = spec.tipo === 'float' || spec.tipo === 'int' ? (PCT[k] ? F.f2(spec.min * 100) + '–' + F.f2(spec.max * 100) + '%' : spec.min + '–' + spec.max) : spec.tipo === 'enum' ? spec.opcoes.join(' · ') : spec.tipo === 'lista_num' ? 'até ' + spec.max_itens + ' números, cada um acima de ' + spec.min + ' e até ' + spec.max + ', separados por vírgula' : spec.tipo;
         return '<div class="cfg-r' + (k in S.mudancas ? ' mudou' : '') + '" data-row="' + k + '"><div class="cfg-k"><b>' + A.esc(nome(k)) + (RISCO[k] ? '<span class="tag-r" title="mudar isto mexe em risco: decisão do dono">toca-risco</span>' : '') + '</b>' +
           '<span class="ch">' + k + ' · ' + A.esc(faixa) + ' · padrão ' + A.esc(mostra(k, spec.padrao, spec)) + '</span>' +
           (spec.racional ? '<details><summary>por que este valor</summary><p>' + A.esc(spec.racional) + '</p></details>' : '') + '</div>' +
           '<div class="cfg-v">' + (ro ? '<span class="ro">' + A.esc(String(v || '').split(',').map(F.par).join(' · ')) + '</span><span class="cur">só leitura nesta tela (' + String(v || '').split(',').filter(Boolean).length + ' pares)</span>' : campo(k, spec, v) + '<span class="cur">atual: ' + A.esc(mostra(k, v, spec)) + '</span>') + '</div></div>';
-      }).join('') + '</div>';
+      }).join('') + '</div></details>';
     }).join('');
     var tg = cfg.telegram_token ? 'configurado' : 'não configurado';
-    $('ap-cfg').insertAdjacentHTML('beforeend', '<div class="cfg-g"><div class="cfg-gt">Alertas</div><div class="cfg-r"><div class="cfg-k"><b>Telegram</b><span class="ch">telegram_token · telegram_chat_id · segredo: o valor não aparece na tela</span></div><div class="cfg-v"><span class="ro">' + tg + '</span></div></div></div>');
+    $('ap-cfg').insertAdjacentHTML('beforeend', '<details class="cfg-g" data-g="Alertas"' + (S.abertos.Alertas ? ' open' : '') + '><summary><span class="cfg-gt">Alertas</span><span class="cfg-gs">Telegram ' + tg + '</span><span class="cfg-gn">1</span></summary><div class="cfg-gb"><div class="cfg-r"><div class="cfg-k"><b>Telegram</b><span class="ch">telegram_token · telegram_chat_id · segredo: o valor não aparece na tela</span></div><div class="cfg-v"><span class="ro">' + tg + '</span></div></div></div></details>');
     pendentes();
+  }
+  /* valor curto para o resumo do grupo fechado: a lista de pares vira contagem */
+  function curto(k, v, spec) {
+    if (k === 'ativos') return String(v || '').split(',').filter(Boolean).length + ' pares';
+    if (k === 'risco_aberto_max' && isFinite(+v) && +v === 0) return 'sem teto';
+    if (k === 'exposicao_max' && isFinite(+v) && +v === 0) return 'sem teto';
+    return mostra(k, v, spec);
+  }
+  function lembraAbertos() { try { A.store.set('apx.apollo.cfg.abertos', JSON.stringify(S.abertos)); } catch (x) {} }
+  function abreTodos(abre) {
+    Array.prototype.forEach.call(S.root.querySelectorAll('details.cfg-g'), function (d) { d.open = abre; S.abertos[d.dataset.g] = abre; });
+    lembraAbertos();
   }
   function perfis() {
     var cat = S.cat; if (!cat) return;
@@ -255,7 +286,14 @@
   function pendentes() {
     var n = Object.keys(S.mudancas).length;
     $('ap-salvar').disabled = !n; $('ap-desfaz').disabled = !n;
-    var t = $('ap-cfg-t'); t.textContent = n ? n + ' pendente' + (n > 1 ? 's' : '') + ' · salvar no fim' : 'pelo /catalogo'; t.className = 'count' + (n ? ' warn' : ' mute');
+    var t = $('ap-cfg-t'); t.textContent = n ? n + ' pendente' + (n > 1 ? 's' : '') + ' · salvar no fim' : (t.dataset.n || '—'); t.className = 'count' + (n ? ' warn' : ' mute');
+    /* o grupo fechado avisa que tem alteração pendente dentro dele */
+    var porG = {}; Object.keys(S.mudancas).forEach(function (k) { var g = (S.grupoDe || {})[k]; if (g) porG[g] = (porG[g] || 0) + 1; });
+    Array.prototype.forEach.call(S.root.querySelectorAll('[data-gn]'), function (el) {
+      var g = el.dataset.gn, tot = S.root.querySelectorAll('details[data-g="' + g.replace(/"/g, '\\"') + '"] .cfg-r').length;
+      el.textContent = porG[g] ? porG[g] + ' pendente' + (porG[g] > 1 ? 's' : '') : String(tot);
+      el.className = 'cfg-gn' + (porG[g] ? ' warn' : '');
+    });
     $('ap-pend').textContent = n ? n + (n === 1 ? ' alteração pendente' : ' alterações pendentes') + ' · nada foi gravado ainda' : 'nenhuma alteração pendente';
   }
   function aoMudar(el) {
@@ -296,23 +334,20 @@
     catch (err) { if (S) $('ap-cfg').innerHTML = '<div class="empty">Não consegui ler o /catalogo (' + A.esc(A.erroTxt(err)) + '). Sem catálogo esta tela não edita nada: é ele que diz o que pode.</div>'; }
   }
 
-  /* ---------- journal e auditoria ---------- */
-  async function lerTrades() { try { var t = await A.api('/trades?limite=200'); if (!S) return; S.trades = t || []; journal(); } catch (err) { if (S) $('ap-jr').innerHTML = '<li class="mute">Não consegui ler o /trades.</li>'; } }
-  function journal() {
-    var f = S.filtro, l = (S.trades || []).filter(function (t) {
-      if (f === 'ganho') return t.pnl_reais > 0; if (f === 'perda') return t.pnl_reais < 0;
-      if (f === 'stop') return /stop|trailing|liquid/i.test(t.motivo_saida || ''); if (f === 'manual') return /manual|panico|pânico/i.test(t.motivo_saida || '');
-      return true;
-    });
-    var soma = l.reduce(function (a, t) { return a + (t.pnl_reais || 0); }, 0);
-    $('ap-jr-n').innerHTML = l.length + ' de ' + (S.trades || []).length + (l.length ? ' · <span class="' + F.cls(soma) + '">' + F.money(soma) + '</span>' : '');
-    $('ap-jr').innerHTML = l.length ? l.slice(0, 80).map(function (t) {
-      /* o líquido (com taxa e funding), que é o que acompanha o P&L da mesma célula; o bruto só para linha antiga */
-      var ret = t.ret_pct_liq != null ? F.pct(t.ret_pct_liq) : t.ret_pct != null ? F.pct(t.ret_pct) : '';
-      return '<li><time>' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</time><div><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span> <span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(t.direcao) + '</span> <span class="chip neutro">' + A.esc(t.motivo_saida || '—') + '</span>' +
-        '<div class="d">' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' · ' + A.esc(t.alavancagem) + 'x · margem ' + F.brl(t.valor_reais) + (t.conviccao != null ? ' · conv. ' + Math.round(t.conviccao) : '') + ' · taxa ' + F.brl(t.taxa) + '</div></div>' +
-        '<span class="amt ' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '<div class="d" style="text-align:right">' + ret + '</div></span></li>';
-    }).join('') : '<li class="mute" style="display:block">Nenhum trade nesse filtro.</li>';
+  /* ---------- atividade recente e auditoria ---------- */
+  /* A conversa abre com os últimos fechamentos (o journal completo mora na Carteira): sem isso ela nasce
+     vazia toda vez que a aba é aberta, porque os eventos ao vivo só existem a partir dali. */
+  async function semear() {
+    var t; try { t = await A.api('/trades?limite=8'); } catch (err) { return; }
+    if (!S || !(t || []).length) return;
+    var ul = $('ap-tl'); if (!ul) return;
+    if (!S.tlAlgum) { ul.innerHTML = ''; S.tlAlgum = true; }
+    var h = '<li class="sep-li"><span class="sep" style="grid-column:1/-1">antes desta visita · <a href="#carteira">journal completo na Carteira</a></span></li>';
+    h += t.map(function (x) {
+      var manual = /manual|panico|pânico/i.test(x.motivo_saida || '');
+      return '<li><time>' + A.ddmm(x.fechado_em) + ' ' + A.hhmm(x.fechado_em) + '</time><div class="b">' + (manual ? 'Você fechou' : 'Fechei') + ' <b>' + A.esc(F.par(x.ativo)) + '</b> ' + A.esc(x.direcao) + ' · ' + A.esc(x.motivo_saida || '—') + ' · <span class="' + F.cls(x.pnl_reais) + '">' + F.money(x.pnl_reais) + '</span></div></li>';
+    }).join('');
+    ul.insertAdjacentHTML('beforeend', h);
   }
   async function auditoria() {
     try {
@@ -339,7 +374,11 @@
   window.PULSE_VIEWS.apollo = {
     id: 'apollo', titulo: 'Apollo', html: html,
     init: function (root) {
-      S = { root: root, estado: null, cat: null, mudancas: {}, timers: [], offs: [], filtro: 'tudo', trades: null, status: null };
+      var ab = {}; try { ab = JSON.parse(A.store.get('apx.apollo.cfg.abertos') || '{}') || {}; } catch (x) { ab = {}; }
+      S = { root: root, estado: null, cat: null, mudancas: {}, timers: [], offs: [], status: null, abertos: ab };
+      Array.prototype.forEach.call(root.querySelectorAll('details.cfg-g'), function (d) { if (S.abertos[d.dataset.g]) d.open = true; });
+      /* toggle não borbulha: escuta na captura, e lembra o que ficou aberto */
+      root.addEventListener('toggle', function (ev) { var d = ev.target; if (!S || !d.matches || !d.matches('details.cfg-g')) return; S.abertos[d.dataset.g] = d.open; lembraAbertos(); }, true);
       if (window.ApolloMesh) { try { S.mesh = window.ApolloMesh.create($('ap-mesh'), { mode: 'full', density: 22 }); } catch (x) { console.error('ApolloMesh full', x); } }
       S.offs.push(A.on('estado', render), A.on('evento', evento));
       root.addEventListener('click', function (ev) {
@@ -350,12 +389,13 @@
         else if (t.id === 'ap-salvar') salvar();
         else if (t.id === 'ap-desfaz') { S.mudancas = {}; editor(); }
         else if (t.dataset.perfil) aplicaPerfil(t.dataset.perfil);
-        else if (t.dataset.f) { S.filtro = t.dataset.f; Array.prototype.forEach.call($('ap-flt').children, function (b) { b.setAttribute('aria-pressed', String(b === t)); }); journal(); }
+        else if (t.id === 'ap-abre') abreTodos(true);
+        else if (t.id === 'ap-fecha') abreTodos(false);
       });
       var mudar = function (ev) { var el = ev.target; if (el && el.dataset && el.dataset.k && S && S.cat) aoMudar(el); };
       root.addEventListener('input', mudar); root.addEventListener('change', mudar);
-      S.timers.push(setInterval(function () { if (!document.hidden) lerStatus(); }, 30000), setInterval(function () { if (!document.hidden) lerTrades(); }, 60000));
-      lerCatalogo(); lerStatus(); lerTrades(); auditoria();
+      S.timers.push(setInterval(function () { if (!document.hidden) lerStatus(); }, 30000));
+      lerCatalogo(); lerStatus(); semear(); auditoria();
       if (A.estado) render(A.estado);
     },
     destroy: function () {
