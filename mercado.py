@@ -8,6 +8,7 @@ um PROXY: funding mostra a multidão, e os swing highs/lows mostram onde a liqui
 (stops) provavelmente está — pra onde o preço costuma ser "puxado".
 """
 import json
+import threading
 import time
 import urllib.request
 
@@ -26,27 +27,62 @@ ex_spot = ccxt.binance({"enableRateLimit": True})
 ex_fut = ccxt.binanceusdm({"enableRateLimit": True})
 _cache = {"sent": None, "sent_t": 0.0}
 _tcache = {}                                   # ativo -> (ts, ticker cru do ccxt); guarda so o que esta fresco
+_tlock = threading.Lock()                      # o worker e as rotas da API mexem no `_tcache`
+
+
+def par_listado(ativo):
+    """O par existe na corretora? `None` quando ainda não dá para saber.
+
+    O ccxt só conhece a tabela de mercados depois do primeiro contato com a rede
+    (`load_markets`, que qualquer `fetch_*` dispara). Antes disso a resposta honesta é "não
+    sei", e quem chama decide: recusar aí trocaria um par ruim por função nenhuma quando a
+    rede cai."""
+    mk = getattr(ex_spot, "markets", None)
+    return (ativo in mk) if mk else None
+
+
+def _buscar_tickers(faltam):
+    """Um `fetch_tickers` pelo lote, SEM os pares que a corretora não lista.
+
+    O ccxt recusa o lote INTEIRO se um símbolo não existe (`BadSymbol`), e a recusa virava
+    `{}`: um plano de DCA criado com um par inexistente zerava o valor de TODOS os planos no
+    painel (P&L −100% em cada um), e um ativo ruim no `/precos` apagava os outros da resposta.
+    Tirar o desconhecido antes de pedir devolve ao erro o tamanho dele: um par ausente."""
+    conhecidos = [a for a in faltam if par_listado(a) is not False]
+    if not conhecidos:
+        return {}
+    try:
+        return ex_spot.fetch_tickers(conhecidos) or {}
+    except Exception:
+        return {}                              # falhou: quem chama vê o ativo AUSENTE, nunca um zero
 
 
 def _tickers(ativos):
     """Tickers crus de vários ativos: 1 request (fetch_tickers) pelo que venceu, cache
     de 5s POR ATIVO. É o único ponto do módulo que fala com o ccxt por lista de ativo —
     cache por consumidor, chaveado pela lista pedida, faz listas diferentes se
-    invalidarem entre si e a janela de 5s nunca acertar."""
+    invalidarem entre si e a janela de 5s nunca acertar.
+
+    O cache é lido pelo worker e pelas rotas da API, em threads diferentes. A faxina dos
+    vencidos era `del` sobre uma lista calculada antes: duas threads calculavam a mesma lista e
+    a segunda levantava `KeyError` (500 no `/precos`, DCA zerado no `/estado`). O lock cobre só
+    o dicionário; a rede fica FORA dele, para uma cotação lenta de uma rota não segurar a
+    marcação de stop do worker."""
     agora = time.time()
-    for a in [k for k, (t, _) in list(_tcache.items()) if agora - t >= 5]:
-        del _tcache[a]                         # vencido sai: estar no cache já significa estar fresco
-    faltam = [a for a in ativos if a not in _tcache]
+    with _tlock:
+        for a in [k for k, (t, _) in _tcache.items() if agora - t >= 5]:
+            _tcache.pop(a, None)               # vencido sai: estar no cache já significa estar fresco
+        faltam = [a for a in ativos if a not in _tcache]
     if faltam:
-        try:
-            novos = ex_spot.fetch_tickers(faltam)
-        except Exception:
-            novos = {}                         # falhou: quem chama vê o ativo AUSENTE, nunca um zero
-        for a in faltam:
-            _tcache[a] = (agora, novos.get(a))  # o que não voltou entra como None: a ausência também
-                                                # é cacheada, senão um símbolo que a corretora não
-                                                # lista refaz o request a cada chamada
-    return {a: _tcache[a][1] for a in ativos if _tcache.get(a, (0.0, None))[1]}
+        novos = _buscar_tickers(faltam)
+        with _tlock:
+            for a in faltam:
+                _tcache[a] = (agora, novos.get(a))  # o que não voltou entra como None: a ausência
+                                                    # também é cacheada, senão um símbolo que a
+                                                    # corretora não lista refaz o request sempre
+    with _tlock:
+        achados = {a: _tcache.get(a) for a in ativos}
+    return {a: ent[1] for a, ent in achados.items() if ent and ent[1]}
 
 
 def precos(ativos):

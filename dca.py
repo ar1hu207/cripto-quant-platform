@@ -32,6 +32,12 @@ def criar(ativo, valor_aporte, freq_dias):
         raise ValueError("valor do aporte precisa ser maior que zero")
     if not (math.isfinite(f) and f >= 1):
         raise ValueError("frequência mínima é 1 dia")
+    # O formato não basta: "XYZ/USDT" casa com a regex e não existe. O plano nascia, falhava no
+    # preço a cada ciclo do worker para sempre, e ainda derrubava a cotação em lote dos outros
+    # planos (ver `mercado._buscar_tickers`). `None` = a tabela de mercados ainda não foi lida
+    # (sem rede desde o start): aí não dá para saber, e o plano passa como passava.
+    if mercado.par_listado(ativo) is False:
+        raise ValueError(f"o par {ativo} não existe na Binance spot")
     with db.conectar() as c:
         c.execute("INSERT INTO dca(ativo,valor_aporte,freq_dias,unidades,total_investido,"
                   "n_aportes,ultimo_aporte,criado_em,status) VALUES(?,?,?,0,0,0,?,?, 'ativo')",
@@ -99,6 +105,8 @@ def listar():
 
 
 def remover(pid):
+    """True se havia um plano ATIVO com esse id. Devolvia True sempre, e a rota respondia
+    `{"ok": true}` para um id que nunca existiu."""
     with db.conectar() as c:
-        c.execute("UPDATE dca SET status='removido' WHERE id=?", (pid,))
-    return True
+        return c.execute("UPDATE dca SET status='removido' WHERE id=? AND status='ativo'",
+                         (pid,)).rowcount == 1

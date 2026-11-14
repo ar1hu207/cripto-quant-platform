@@ -1458,7 +1458,8 @@ def dca_aportar(req: IdReq):
 
 @app.post("/dca/remover")
 def dca_remover(req: IdReq):
-    dca.remover(req.id)
+    if not dca.remover(req.id):
+        return {"ok": False, "erro": "📊 plano não encontrado (ou já removido)"}
     return {"ok": True}
 
 

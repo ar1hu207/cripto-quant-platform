@@ -241,3 +241,74 @@ def test_scan_dois_ao_mesmo_tempo_nao_duplicam_sinal(banco, monkeypatch):
     for t in ts:
         t.join(20)
     assert _n("sinais", "WHERE status='novo'") == 1
+
+
+# ================================================================= mercado
+class _ExLote:
+    """ccxt de mentira: como o de verdade, recusa o LOTE inteiro se um simbolo nao existe."""
+    def __init__(self):
+        self.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
+        self.pedidos = []
+
+    def fetch_tickers(self, simbolos):
+        self.pedidos.append(list(simbolos))
+        ruins = [s for s in simbolos if s not in self.markets]
+        if ruins:
+            raise RuntimeError(f"binance does not have market symbol {ruins[0]}")
+        return {s: {"last": 100.0, "percentage": 1.0} for s in simbolos}
+
+
+def test_mercado_um_par_inexistente_nao_derruba_o_lote(monkeypatch):
+    ex = _ExLote()
+    monkeypatch.setattr(mercado, "ex_spot", ex)
+    mercado._tcache.clear()
+    p = mercado.precos(["BTC/USDT", "NAOEXISTE/USDT", "ETH/USDT"])
+    assert p == {"BTC/USDT": 100.0, "ETH/USDT": 100.0}
+    assert ex.pedidos == [["BTC/USDT", "ETH/USDT"]]
+    mercado._tcache.clear()
+
+
+def test_mercado_cache_de_ticker_aguenta_duas_threads(monkeypatch):
+    """Worker e rotas da API varrem o mesmo cache. Com `del` sobre uma lista de vencidos
+    calculada antes, a segunda thread levantava KeyError (500 no /precos, DCA zerado)."""
+    ex = _ExLote()
+    monkeypatch.setattr(mercado, "ex_spot", ex)
+    erros = []
+
+    def martela():
+        try:
+            for _ in range(300):
+                mercado._tcache["BTC/USDT"] = (0.0, {"last": 1.0})     # sempre vencido
+                mercado._tcache["ETH/USDT"] = (0.0, {"last": 1.0})
+                mercado.precos(["BTC/USDT", "ETH/USDT"])
+        except Exception as e:                                         # noqa: BLE001
+            erros.append(repr(e))
+
+    ts = [threading.Thread(target=martela) for _ in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(30)
+    mercado._tcache.clear()
+    assert erros == []
+
+
+def test_mercado_dca_recusa_par_que_a_corretora_nao_lista(banco, monkeypatch):
+    monkeypatch.setattr(mercado, "ex_spot", _ExLote())
+    with pytest.raises(ValueError, match="não existe"):
+        dca.criar("NAOEXISTE/USDT", 100, 7)
+    assert dca.criar("BTC/USDT", 100, 7) is True
+
+
+def test_mercado_dca_sem_tabela_de_mercados_nao_trava_a_criacao(banco, monkeypatch):
+    """Antes do primeiro contato com a corretora o ccxt nao sabe o que existe. Recusar ai seria
+    trocar um par ruim por plano nenhum quando a rede cai."""
+    ex = _ExLote()
+    ex.markets = None
+    monkeypatch.setattr(mercado, "ex_spot", ex)
+    assert dca.criar("QUALQUER/USDT", 100, 7) is True
+
+
+def test_mercado_dca_remover_o_que_nao_existe_diz_que_nao_removeu(cliente):
+    r = cliente.post("/dca/remover", json={"id": 99999}).json()
+    assert r["ok"] is False
