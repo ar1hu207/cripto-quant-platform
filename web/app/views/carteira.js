@@ -2,7 +2,9 @@
 
    Dado real, só com a view montada: /estado (posições, DCA, banca, métricas, curva) · /candles 1h dos
    pares com posição + BTC (correlação de 30 dias e a régua B&H BTC da curva, ao abrir e a cada 10 min) ·
-   /trades?limite=500 (histórico mensal, 5 min) · /dca, /dca/aportar, /dca/remover.
+   /trades?limite=500 (histórico mensal e journal, uma leitura para os dois, 60 s e logo depois de um
+   fechamento) · /dca, /dca/aportar, /dca/remover.
+   O journal veio do #apollo em 14/11: histórico de trade é resultado da banca, não conversa com o agente.
    Fora do mock, declarado: a conta que NÃO está selecionada aparece sem número (cada conta é um backend;
    ler a outra seria mais um poll), a conta Real é esteira sem número, e as bolhas de ações BR do mock
    (eram exemplo) saíram: entram com a B3 (F8). O DD por mês do mock não tem fonte por mês: sai. */
@@ -70,6 +72,14 @@
   '.v-carteira .mt>div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel2);min-width:0}' +
   '.v-carteira .mt .k{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
   '.v-carteira .mt .v{font-family:var(--f-mono);font-size:16px;font-weight:600;margin-top:3px}' +
+  '.v-carteira .flt{display:flex;gap:6px;flex-wrap:wrap}' +
+  '.v-carteira .flt button{border:1px solid var(--line2);background:none;color:var(--txt2);border-radius:999px;padding:3px 10px;font-family:var(--f-mono);font-size:11px;cursor:pointer}' +
+  '.v-carteira .flt button[aria-pressed="true"]{color:var(--accent);border-color:rgba(var(--accent-rgb),var(--glow))}' +
+  '.v-carteira .jr{list-style:none;margin:10px 0 0;padding:0;display:grid;max-height:640px;overflow:auto}' +
+  '.v-carteira .jr li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;padding:9px 0;border-bottom:1px solid rgba(var(--line-rgb),.6);font-size:12.5px;align-items:start}' +
+  '.v-carteira .jr time{font-family:var(--f-mono);font-size:11px;color:var(--mute);white-space:nowrap}' +
+  '.v-carteira .jr .d{font-family:var(--f-mono);font-size:11px;color:var(--txt2);margin-top:2px;overflow-wrap:anywhere}' +
+  '.v-carteira .jr .amt{font-family:var(--f-mono);font-weight:600;white-space:nowrap;text-align:right}' +
   '@media (max-width:1100px){.v-carteira .mapa{grid-template-columns:1fr}.v-carteira .ct-contas{grid-template-columns:1fr}.v-carteira .mt{grid-template-columns:repeat(2,minmax(0,1fr))}}' +
   '@media (max-width:640px){.v-carteira .mt .k{white-space:normal}.v-carteira .bolhas{height:320px}.v-carteira .aloc{justify-content:center}.v-carteira .exp div{grid-template-columns:96px minmax(0,1fr) auto}.v-carteira .dca-form{grid-template-columns:1fr 1fr}.v-carteira .dca-g{grid-template-columns:1fr 1fr}}' +
   '</style>';
@@ -81,6 +91,10 @@
     '<section class="row-2"><article class="card"><div class="card-head"><h2 class="h2">Alocação</h2><span class="count" id="ct-al-n">—</span></div><div id="ct-al"></div></article>' +
       '<article class="card"><div class="card-head"><h2 class="h2">Correlação · 30 dias</h2><span class="count mute">retornos 1h</span></div><div id="ct-corr"><div class="skel"></div></div></article></section>' +
     '<section class="card"><div class="card-head"><div><h2 class="h2">Curva de equity</h2><div class="sub" id="ct-eq-s">—</div></div><div class="lgd"><span><i></i>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</span><span><i class="bh"></i>B&amp;H BTC</span></div></div><svg class="chart" id="ct-eq" role="img" aria-label="Curva de equity"></svg></section>' +
+    '<section class="card"><div class="card-head"><h2 class="h2">Journal</h2><span class="count" id="ct-jr-n">—</span></div>' +
+      '<div class="flt" id="ct-flt"><button type="button" data-f="tudo" aria-pressed="true">Tudo</button><button type="button" data-f="ganho" aria-pressed="false">Ganhos</button><button type="button" data-f="perda" aria-pressed="false">Perdas</button><button type="button" data-f="stop" aria-pressed="false">Stop</button><button type="button" data-f="tp" aria-pressed="false">TP</button><button type="button" data-f="manual" aria-pressed="false">Manual</button></div>' +
+      '<ul class="jr" id="ct-jr"><li><span class="skel" style="grid-column:1/-1"></span></li></ul>' +
+      '<button type="button" class="btn ghost sm" id="ct-jr-mais" hidden style="margin-top:10px">mostrar mais 50</button></section>' +
     '<section class="row-2"><article class="card"><div class="card-head"><h2 class="h2">DCA · acumulação</h2><span class="count">spot · sem alavancagem</span></div><div id="ct-dca"></div>' +
       '<form class="dca-form" id="ct-dca-f"><label class="fld">Ativo<select id="ct-dca-a"></select></label><label class="fld">R$ por aporte<input class="inp" id="ct-dca-v" type="number" min="1" step="1" value="50"></label><label class="fld">A cada (dias)<input class="inp" id="ct-dca-d" type="number" min="1" step="1" value="7"></label><button type="submit" class="btn primary">Criar plano</button></form>' +
       '<div class="mute" style="font-size:11.5px;margin-top:10px;font-family:var(--f-mono)">banca conceitualmente separada do day trade: o DCA não entra no teto de exposição nem na trava diária</div></article>' +
@@ -267,11 +281,32 @@
     try { var r = await A.api('/dca/remover', { id: d.id }); A.toast(r && r.ok === false ? (r.erro || 'O plano não foi removido') : 'Plano removido', r && r.ok === false ? 'warn' : ''); A.carregar(); } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
 
-  /* ---------- histórico mensal e métricas ---------- */
-  async function mensal() {
-    var tr; try { tr = await A.api('/trades?limite=500'); } catch (err) { if (S) $('ct-mes').innerHTML = '<div class="empty">Não consegui ler o /trades.</div>'; return; }
+  /* ---------- journal, histórico mensal e métricas ---------- */
+  async function lerTrades() {
+    var tr; try { tr = await A.api('/trades?limite=500'); } catch (err) { if (S) { $('ct-mes').innerHTML = '<div class="empty">Não consegui ler o /trades.</div>'; $('ct-jr').innerHTML = '<li class="mute" style="display:block">Não consegui ler o /trades.</li>'; } return; }
     if (!S) return;
-    tr = (tr || []).filter(function (t) { return t.fechado_em; });
+    S.trades = (tr || []).filter(function (t) { return t.fechado_em; });
+    mensal(S.trades); journal();
+  }
+  function journal() {
+    var f = S.filtro, tr = S.trades || [], l = tr.filter(function (t) {
+      var m = t.motivo_saida || '';
+      if (f === 'ganho') return t.pnl_reais > 0; if (f === 'perda') return t.pnl_reais < 0;
+      if (f === 'stop') return /stop|trailing|liquid/i.test(m); if (f === 'tp') return /^tp/i.test(m); if (f === 'manual') return /manual|panico|pânico/i.test(m);
+      return true;
+    });
+    var soma = l.reduce(function (a, t) { return a + (t.pnl_reais || 0); }, 0);
+    $('ct-jr-n').innerHTML = l.length + ' de ' + tr.length + (l.length ? ' · <span class="' + F.cls(soma) + '">' + F.money(soma) + '</span>' : '');
+    $('ct-jr').innerHTML = l.length ? l.slice(0, S.jrN).map(function (t) {
+      /* o líquido (com taxa e funding), que é o que acompanha o P&L da mesma célula; o bruto só para linha antiga */
+      var ret = t.ret_pct_liq != null ? F.pct(t.ret_pct_liq) : t.ret_pct != null ? F.pct(t.ret_pct) : '';
+      return '<li><time>' + A.ddmm(t.fechado_em) + ' ' + A.hhmm(t.fechado_em) + '</time><div><span class="mono strong">' + A.esc(F.par(t.ativo)) + '</span> <span class="chip ' + (t.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(t.direcao) + '</span> <span class="chip neutro">' + A.esc(t.motivo_saida || '—') + '</span>' +
+        '<div class="d">' + F.px(t.entrada) + ' → ' + F.px(t.saida) + ' · ' + A.esc(t.alavancagem) + 'x · margem ' + F.brl(t.valor_reais) + (t.conviccao != null ? ' · conv. ' + Math.round(t.conviccao) : '') + ' · taxa ' + F.brl(t.taxa) + '</div></div>' +
+        '<span class="amt ' + F.cls(t.pnl_reais) + '">' + F.money(t.pnl_reais) + '<div class="d">' + ret + '</div></span></li>';
+    }).join('') : '<li class="mute" style="display:block">' + (tr.length ? 'Nenhum trade nesse filtro.' : 'Nenhum trade fechado ainda.') + '</li>';
+    $('ct-jr-mais').hidden = l.length <= S.jrN;
+  }
+  function mensal(tr) {
     if (!tr.length) { $('ct-mes').innerHTML = '<div class="empty">Nenhum trade fechado ainda.</div>'; $('ct-mes-t').textContent = '—'; return; }
     var m = {}, ord = [], teto = tr.length >= 500, menor = tr.reduce(function (a, t) { return t.fechado_em < a ? t.fechado_em : a; }, tr[0].fechado_em).slice(0, 7);
     tr.forEach(function (t) { var k = t.fechado_em.slice(0, 7); if (!m[k]) { m[k] = { p: 0, n: 0, g: 0 }; ord.push(k); } m[k].p += t.pnl_reais || 0; m[k].n++; if (t.pnl_reais > 0) m[k].g++; });
@@ -307,7 +342,7 @@
     bolhas(e); lado(e); contas(e); alocacao(e); dca(e); metricas(e);
     var ids = (e.posicoes || []).map(function (p) { return p.ativo; }).sort().join(',');
     if (primeira || ids !== S.posIds) { S.posIds = ids; lerVelas(); if (!primeira) correlacao(); }
-    if (primeira) { curva(e); mensal(); } else if ((e.equity_hist || []).length !== S.nEq) curva(e);
+    if (primeira) { curva(e); lerTrades(); } else if ((e.equity_hist || []).length !== S.nEq) curva(e);
     S.nEq = (e.equity_hist || []).length;
   }
 
@@ -315,8 +350,10 @@
   window.PULSE_VIEWS.carteira = {
     id: 'carteira', titulo: 'Carteira', html: html,
     init: function (root) {
-      S = { root: root, estado: null, timers: [], offs: [], bo: null };
+      S = { root: root, estado: null, timers: [], offs: [], bo: null, trades: null, filtro: 'tudo', jrN: 50 };
       S.offs.push(A.on('estado', render));
+      /* fechou uma posição: relê o journal logo (o trade só existe no /trades depois do fechamento gravado) */
+      S.offs.push(A.on('evento', function (ev) { if (S && ev && ev.tipo === 'posicao_fechada') { clearTimeout(S.tjr); S.tjr = setTimeout(function () { if (S) lerTrades(); }, 1500); } }));
       arrasto($('ct-bo'));
       root.addEventListener('click', function (ev) {
         var t = ev.target.closest('button'); if (!t || !S) return;
@@ -324,12 +361,14 @@
         if (t.dataset.conta) A.trocaConta(t.dataset.conta);
         else if (t.dataset.aportar) { var d = acha(t.dataset.aportar); if (d) aportar(d); }
         else if (t.dataset.remover) { var d2 = acha(t.dataset.remover); if (d2) remover(d2); }
+        else if (t.dataset.f) { S.filtro = t.dataset.f; S.jrN = 50; Array.prototype.forEach.call($('ct-flt').children, function (b) { b.setAttribute('aria-pressed', String(b === t)); }); journal(); }
+        else if (t.id === 'ct-jr-mais') { S.jrN += 50; journal(); }
       });
       $('ct-dca-f').addEventListener('submit', criaDca);
       var rt = 0; S.ro = new ResizeObserver(function () { clearTimeout(rt); rt = setTimeout(function () { if (S && S.estado) { bolhas(S.estado); curva(S.estado); } }, 150); }); S.ro.observe($('ct-bo'));
-      S.timers.push(setInterval(function () { if (!document.hidden) mensal(); }, 300000), setInterval(function () { if (!document.hidden) lerVelas(); }, 600000));
+      S.timers.push(setInterval(function () { if (!document.hidden) lerTrades(); }, 60000), setInterval(function () { if (!document.hidden) lerVelas(); }, 600000));
       if (A.estado) render(A.estado);
     },
-    destroy: function () { if (!S) return; S.timers.forEach(clearInterval); S.offs.forEach(function (f) { f(); }); if (S.ro) S.ro.disconnect(); S = null; }
+    destroy: function () { if (!S) return; clearTimeout(S.tjr); S.timers.forEach(clearInterval); S.offs.forEach(function (f) { f(); }); if (S.ro) S.ro.disconnect(); S = null; }
   };
 })();
