@@ -201,6 +201,25 @@ def test_icones_do_app_no_tamanho_e_sem_transparencia():
     assert ihdr("marca.png")[2] == 6
 
 
+def test_todo_endereco_de_icone_carrega_versao():
+    """O iPhone guarda o icone da tela de inicio pelo ENDERECO. Na PR #35 a logo trocou com o mesmo
+    nome de arquivo e o celular do dono seguiu com a antiga. Todo endereco de icone leva ?v=N, o
+    mesmo N em todo lugar, e aponta para um arquivo que existe: trocar a logo de novo = subir o N."""
+    achados = []
+    for nome in ("index.html", "m.html", "classico.html"):
+        achados += re.findall(r'href="(icons/(?:apple-touch-icon|favicon-32)\.png[^"]*)"', _ler(WEB, nome))
+    achados += [i["src"] for i in json.loads(_ler(WEB, "manifest.webmanifest"))["icons"]]
+    achados += re.findall(r"'(icons/icon-192\.png[^']*)'", _ler(WEB, "sw.js"))
+    assert len(achados) == 3 * 2 + 3 + 2
+    versoes = set()
+    for url in achados:
+        m = re.fullmatch(r"(icons/[a-z0-9-]+\.png)\?v=(\d+)", url)
+        assert m, url
+        assert os.path.isfile(os.path.join(WEB, m.group(1))), url
+        versoes.add(m.group(2))
+    assert len(versoes) == 1, versoes
+
+
 def test_manifesto_apollux():
     m = json.loads(_ler(WEB, "manifest.webmanifest"))
     assert m["name"] == "Apollux" and m["short_name"] == "Apollux"
