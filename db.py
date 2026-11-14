@@ -235,7 +235,7 @@ CONFIG_PADRAO = {
     "tp_ativo": "0",              # 1 = realiza nos alvos TP1/TP2/TP3
     "tp_n": "3",                  # quantos alvos por posição
     "tp_fracoes": "0.34,0.33,0.33",  # fração da posição ORIGINAL em cada TP (o último leva o resto)
-    "tp_min_r": "1",              # alvo mais perto permitido, em R (abaixo disso não paga o risco)
+    "tp_min_r": "2",              # alvo mais perto permitido, em R (T49: realizar abaixo de 2R custa)
     "tp_max_r": "12",             # alvo mais longe considerado, em R
     "tp_forca_min": "2",          # força mínima da zona (pivô 4h=2, pivô 1h=1, Fibo=1) p/ ter prioridade
     "tp_fallback_r": "2,4,6",     # sem estrutura suficiente, alvos em múltiplos de R

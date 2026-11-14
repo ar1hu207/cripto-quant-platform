@@ -180,7 +180,7 @@ def cfg_tp(cfg):
 
     return {"on": str(cfg.get("tp_ativo", "0")) in ("1", "true", "True"),
             "tp_n": int(f("tp_n", 3)),
-            "tp_min_r": f("tp_min_r", 1.0),
+            "tp_min_r": f("tp_min_r", 2.0),
             "tp_max_r": f("tp_max_r", 12.0),
             "tp_forca_min": f("tp_forca_min", 2.0),
             "tp_fracoes": lista("tp_fracoes", "0.34,0.33,0.33"),
