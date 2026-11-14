@@ -29,6 +29,7 @@ Como os níveis saem (tudo calculado UMA vez por posição e gravado em `posicoe
    ter alvo.
 """
 import json
+import math
 
 import pandas as pd
 
@@ -36,6 +37,12 @@ import indicadores
 
 FIB_RETR = (0.236, 0.382, 0.5, 0.618, 0.786)
 FIB_EXT = (1.272, 1.618)
+
+# Tetos do que uma lista de TP admite, lidos também pelo catálogo do `POST /config` (api.py) para
+# que a entrada e a leitura recusem a mesma coisa. Fração é parte de um todo; múltiplo de R tem o
+# mesmo teto do `tp_max_r` do catálogo.
+FRAC_MAX = 1.0
+R_MAX = 30.0
 
 
 def _df(raw):
@@ -172,19 +179,28 @@ def cfg_tp(cfg):
         except (TypeError, ValueError):
             return float(padrao)
 
-    def lista(chave, padrao):
+    def lista(chave, padrao, teto):
+        """Lista de números da config, ou o padrão se QUALQUER item não servir.
+
+        A validação de verdade é na entrada (`POST /config`, catálogo); isto é a defesa em
+        profundidade para o que já está no banco. Um item ruim invalida a lista inteira, e não
+        só ele: "−0.5,1.5" sem o primeiro vira "1.5", que é outra política, não a do dono."""
+        ok = [float(x) for x in padrao.split(",")]
         try:
-            return [float(x) for x in str(cfg.get(chave, padrao)).split(",") if x.strip()]
+            vals = [float(x) for x in str(cfg.get(chave, padrao)).split(",") if x.strip()]
         except ValueError:
-            return [float(x) for x in padrao.split(",")]
+            return ok
+        if not vals or not all(math.isfinite(v) and 0 < v <= teto for v in vals):
+            return ok
+        return vals
 
     return {"on": str(cfg.get("tp_ativo", "0")) in ("1", "true", "True"),
             "tp_n": int(f("tp_n", 3)),
             "tp_min_r": f("tp_min_r", 1.0),
             "tp_max_r": f("tp_max_r", 12.0),
             "tp_forca_min": f("tp_forca_min", 2.0),
-            "tp_fracoes": lista("tp_fracoes", "0.34,0.33,0.33"),
-            "tp_fallback_r": lista("tp_fallback_r", "2,4,6")}
+            "tp_fracoes": lista("tp_fracoes", "0.34,0.33,0.33", FRAC_MAX),
+            "tp_fallback_r": lista("tp_fallback_r", "2,4,6", R_MAX)}
 
 
 def ler(pos):

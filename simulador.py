@@ -858,6 +858,12 @@ def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
     Concorrência: o UPDATE exige o `valor_reais` lido. Se o worker e a API fecharem pedaços ao
     mesmo tempo, só um passa -- o mesmo padrão de rowcount do `fechar()`. Devolve a margem que
     sobrou, ou None se não fechou nada."""
+    # `frac` chega do plano de TP, e o plano sai de texto de config (`tp_fracoes`). Fração
+    # negativa passava: `v_fecha` negativo AUMENTAVA a margem da posição e o cap de perda do
+    # `_pnl` (`pnl < -valor_reais`) virava crédito na banca. 0 fecha nada e 1 é fechar tudo, que
+    # é serviço do `fechar()`. A comparação encadeada também recusa NaN.
+    if not 0 < frac < 1:
+        raise ValueError(f"fração de fechamento parcial inválida: {frac!r} (precisa estar entre 0 e 1)")
     v_ant = float(pos["valor_reais"])
     v_fecha = v_ant * frac
     v_resto = v_ant - v_fecha

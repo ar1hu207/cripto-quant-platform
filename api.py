@@ -26,6 +26,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import alvos
 import db
 import simulador
 import signal_engine
@@ -413,11 +414,16 @@ CONFIG_CATALOGO = {
     # taxa de ida e volta com folga; fração precisa somar algo > 0 (normalizada em alvos.fracoes).
     "tp_ativo":             ("bool",),
     "tp_n":                 ("int", 1, 5),
-    "tp_fracoes":           ("texto", 60),
+    # As duas listas eram "texto": qualquer coisa de até 60 caracteres entrava. "-0.5,1.5" soma 1
+    # e passava pela normalização de `alvos.fracoes`; a fração negativa fazia o `fechar_parcial`
+    # CREDITAR dinheiro e aumentar a margem. E `tp_fallback_r` negativo ou zero punha o alvo do
+    # lado do prejuízo ou em cima da entrada, que "batia" no primeiro poll. Faixa: (0, teto], o
+    # zero fica de fora; no máximo 5 itens, que é o teto de `tp_n`.
+    "tp_fracoes":           ("lista_num", 0.0, alvos.FRAC_MAX, 5),
     "tp_min_r":             ("float", 0.3, 10.0),
     "tp_max_r":             ("float", 1.0, 30.0),
     "tp_forca_min":         ("float", 0.0, 20.0),
-    "tp_fallback_r":        ("texto", 60),
+    "tp_fallback_r":        ("lista_num", 0.0, alvos.R_MAX, 5),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
@@ -641,6 +647,22 @@ def _validar_config(chave, valor):
             if not _RE_PAR.match(a):
                 raise ValueError(f"'{chave}': par '{a}' fora do formato BASE/QUOTE")
         return ",".join(itens)
+
+    if tipo == "lista_num":
+        _, piso, teto, max_itens = spec
+        itens = [x.strip() for x in bruto.split(",") if x.strip()]
+        if not 1 <= len(itens) <= max_itens:
+            raise ValueError(f"'{chave}': informe de 1 a {max_itens} números separados por vírgula")
+        nums = []
+        for x in itens:
+            try:
+                n = float(x)
+            except ValueError:
+                raise ValueError(f"'{chave}': '{x}' não é número")
+            if not (piso < n <= teto):     # piso EXCLUSIVO; nan/inf caem aqui, como no float
+                raise ValueError(f"'{chave}': {x} fora da faixa permitida ({piso}, {teto}]")
+            nums.append(n)
+        return ",".join(str(int(n)) if n == int(n) else repr(n) for n in nums)
 
     if tipo == "data":
         if bruto and not _RE_DATA.match(bruto):
@@ -1055,6 +1077,8 @@ def catalogo():
              "racional": CONFIG_RACIONAL.get(chave)}       # None = decisão não registrada
         if tipo in ("float", "int"):
             d["min"], d["max"] = spec[1], spec[2]
+        elif tipo == "lista_num":          # `min` é EXCLUSIVO aqui (ver `_validar_config`)
+            d["min"], d["max"], d["max_itens"] = spec[1], spec[2], spec[3]
         elif tipo == "enum":
             d["opcoes"] = list(spec[1])
         elif tipo == "texto":
