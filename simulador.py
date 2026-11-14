@@ -235,7 +235,8 @@ def guarda_risco():
         trava_em = hoje
         # [PUSH-1] só aqui, na virada para travado: o `trava_em != hoje` acima já garante uma vez
         # por dia. O aviso vem DEPOIS de gravar a trava e `avisar` nunca levanta: não toca na guarda.
-        push.avisar(*push.msg_trava(pnl_dia, limite_rs), "#apollo", f"trava-{hoje}")
+        push.avisar(*push.msg_trava(pnl_dia, limite_rs), "#apollo", f"trava-{hoje}",
+                    tipo="trava")
     trava_dia = tripou or (trava_em == hoje)
     return {"pnl_dia": round(pnl_dia, 2), "realizado_hoje": round(realizado, 2),
             "limite_rs": round(limite_rs, 2), "limite_pct": round(lim * 100, 1),
@@ -345,7 +346,7 @@ def abrir(sinal_id, valor_reais, alavancagem):
     log(f"ABRIU #{pid} {direcao} {ativo} @ {preco} | R${valor_reais} {alavancagem}x")
     alertas.enviar(f"🟢 Abriu {direcao} {ativo}\nR$ {valor_reais} @ {alavancagem}x · entrada {preco}")
     push.avisar(*push.msg_abriu(direcao, ativo, valor_reais, alavancagem, preco),
-                f"#pos/{pid}", f"pos-{pid}")
+                f"#pos/{pid}", f"pos-{pid}", tipo="entrada")
     return pid
 
 
@@ -517,7 +518,7 @@ def _abrir_da_ordem(o, taxa_maker):
                    % (o["direcao"], o["ativo"], o["valor_reais"], o["alavancagem"],
                       o["preco_limite"]))
     push.avisar(*push.msg_ordem(o["direcao"], o["ativo"], o["valor_reais"], o["alavancagem"],
-                                o["preco_limite"]), f"#pos/{pid}", f"pos-{pid}")
+                                o["preco_limite"]), f"#pos/{pid}", f"pos-{pid}", tipo="entrada")
     return pid
 
 
@@ -635,7 +636,7 @@ def _fechar_uma(pos_id, motivo, preco_saida):
     log(f"FECHOU #{pos_id} {pos['direcao']} {pos['ativo']} | {motivo} | P&L R$ {pnl:+.2f} (funding {f_txt})")
     alertas.enviar(f"{emoji} Fechou {pos['direcao']} {pos['ativo']} ({motivo})\nP&L: R$ {pnl:+.2f}")
     push.avisar(*push.msg_fechou(pos["direcao"], pos["ativo"], pnl, motivo),
-                "#diario", f"pos-{pos_id}")
+                "#diario", f"pos-{pos_id}", tipo="fechou")
     return pnl
 
 
@@ -898,7 +899,7 @@ def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
         f"{preco_saida:.6g} | P&L R$ {pnl:+.2f}")
     alertas.enviar(f"🎯 {motivo.upper()} {pos['direcao']} {pos['ativo']}\nP&L parcial: R$ {pnl:+.2f}")
     push.avisar(*push.msg_parcial(pos["direcao"], pos["ativo"], pnl, motivo, frac),
-                f"#pos/{pos['id']}", f"pos-{pos['id']}")
+                f"#pos/{pos['id']}", f"pos-{pos['id']}", tipo="parcial")
     return v_resto
 
 
