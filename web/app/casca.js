@@ -88,13 +88,13 @@
     var corpo = '<p>O backend grava <b>auto_trade = 0 primeiro</b> e só depois fecha ' +
       (n ? '<b>' + n + (n === 1 ? ' posição' : ' posições') + '</b> a mercado.' : 'as posições abertas (agora: nenhuma).') + '</p>' +
       '<div class="diff"><div><span>Apollo (auto-trade)</span><span>' + (on ? 'ligado → <b class="neg">desligado</b>' : 'já desligado') + '</span></div>' +
-      '<div><span>Posições abertas</span><span>' + n + ' → <b>0</b></span></div></div>' +
-      (no ? '<div class="aviso">' + no + (no === 1 ? ' ordem post-only descansando NÃO é cancelada' : ' ordens post-only descansando NÃO são canceladas') + ' pelo /panico e ainda pode virar posição se o preço vier até ela.</div>' : '') +
+      '<div><span>Posições abertas</span><span>' + n + ' → <b>0</b></span></div>' +
+      (no ? '<div><span>Ordens post-only descansando</span><span>' + no + ' → <b>0</b> (canceladas)</span></div>' : '') + '</div>' +
       '<p class="mute">Religar o Apollo depois exige ação explícita no módulo Apollo.</p>';
     if (!(await dialogo({ titulo: 'Pânico', corpo: corpo, ok: 'Confirmar pânico', perigo: true }))) return;
     try {
       var r = await A.api('/panico', {});
-      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
+      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
       A.carregar();
     } catch (err) { A.toast('Pânico falhou: ' + A.erroTxt(err), 'neg'); }
   }

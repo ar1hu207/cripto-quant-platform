@@ -409,3 +409,15 @@ def test_mercado_dca_sem_tabela_de_mercados_nao_trava_a_criacao(banco, monkeypat
 def test_mercado_dca_remover_o_que_nao_existe_diz_que_nao_removeu(cliente):
     r = cliente.post("/dca/remover", json={"id": 99999}).json()
     assert r["ok"] is False
+
+
+# ==================================================================== front
+def test_front_o_panico_nao_diz_mais_que_a_ordem_pendente_sobrevive():
+    """O backend cancela as ordens post-only no panico desde a PR #27; os dois apps ainda
+    avisavam o contrario, no dialogo da acao mais critica do sistema."""
+    import os
+    web = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "app")
+    for arq in ("casca.js", os.path.join("m", "app.js")):
+        txt = open(os.path.join(web, arq), encoding="utf-8").read()
+        assert "NÃO é cancelada" not in txt and "NÃO são canceladas" not in txt, arq
+        assert "ordens_canceladas" in txt, arq + ": o resultado do panico tem de dizer quantas cancelou"
