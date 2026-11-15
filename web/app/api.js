@@ -4,8 +4,8 @@
    Contratos herdados do painel clássico (web/classico.html), mantidos IGUAIS de propósito para quem já
    tem o app instalado não ser deslogado nem trocar de banca sem perceber:
    - credencial em localStorage 'cbAuth' ("Basic ..."), header Authorization em toda requisição;
-   - conta em localStorage 'cbConta' ('A' | 'B'); a B é outra instância exposta em /testeB/... [AB-1],
-     então trocar de conta é trocar o prefixo de TODAS as rotas;
+   - conta em localStorage 'cbConta' ('A' | 'B' | 'C'); B e C são outras instâncias, expostas em
+     /testeB/... e /testeC/... [AB-1, AB-2], então trocar de conta é trocar o prefixo de TODAS as rotas;
    - 401 nunca insiste com a mesma credencial (15 senhas erradas bloqueiam o IP): para o poll, descarta,
      abre o gate uma vez só (single-flight) e religa quando a credencial nova passa;
    - 429 para o poll, senão ele renova o próprio bloqueio.
@@ -24,9 +24,18 @@
     del: function (k) { try { localStorage.removeItem(k); } catch (e) {} }
   };
 
-  var CONTA = store.get('cbConta') === 'B' ? 'B' : 'A';
+  /* [AB-2] As contas que o front conhece, num lugar só. Nome e papel eram escritos em cada tela
+     como "B ou então A": com a terceira conta, o diálogo de Resetar diria "Paper A" estando na C.
+     Quem precisa do nome lê NOME_CONTA; conta nova é uma linha aqui e um botão no HTML. */
+  var CONTAS = {
+    A: { nome: 'Paper A', papel: 'produção', rota: '' },
+    B: { nome: 'Conta B', papel: 'teste A/B', rota: '/testeB' },
+    C: { nome: 'Conta C', papel: 'A sem TP2 e TP3', rota: '/testeC' }
+  };
+  var salva = store.get('cbConta');
+  var CONTA = (salva === 'B' || salva === 'C') ? salva : 'A';
   var BASE = String(window.API_BASE || '').replace(/\/+$/, '');
-  var API = BASE + (CONTA === 'B' ? '/testeB' : '');
+  var API = BASE + CONTAS[CONTA].rota;
   var cred = store.get('cbAuth') || '';
 
   /* ---- formatação (pt-BR; números em mono tabular na tela) ---- */
@@ -164,7 +173,7 @@
     var res; var p = new Promise(function (r) { res = r; });
     gateSessao = { p: p, res: res };
     root.classList.add('gate-on'); $('gate').hidden = false;
-    $('gate-foot').textContent = 'autenticando em ' + (API || location.origin) + (CONTA === 'B' ? ' · conta B' : '');
+    $('gate-foot').textContent = 'autenticando em ' + (API || location.origin) + (CONTA !== 'A' ? ' · conta ' + CONTA : '');
     gateLimpa(); gateOcupado(false); $('gate-pass').value = '';
     ($('gate-user').value.trim() ? $('gate-pass') : $('gate-user')).focus();
     gateSaude(); clearInterval(gateHealth); gateHealth = setInterval(gateSaude, 15000);
@@ -274,7 +283,7 @@
     try { if ((await fetch(API + '/status')).ok) { carregar(); iniciar(); toast('Este backend não pede senha: não há sessão para encerrar'); return; } } catch (e) {}
     gateAbre();
   }
-  function trocaConta(c) { if (c === CONTA || (c !== 'A' && c !== 'B')) return; store.set('cbConta', c); location.reload(); }
+  function trocaConta(c) { if (c === CONTA || (c !== 'A' && c !== 'B' && c !== 'C')) return; store.set('cbConta', c); location.reload(); }
 
   /* ---- libs vendoradas sob demanda (sempre de web/vendor, nunca de CDN) ---- */
   var libs = {};
@@ -321,7 +330,8 @@
   function rgba(nome, a) { return 'rgba(' + cor(nome + '-rgb') + ',' + a + ')'; }
 
   window.APX = {
-    STATIC: STATIC, RM: RM, CONTA: CONTA, API: API, store: store, fmt: fmt, esc: esc,
+    STATIC: STATIC, RM: RM, CONTA: CONTA, CONTAS: CONTAS, NOME_CONTA: CONTAS[CONTA].nome, PAPEL_CONTA: CONTAS[CONTA].papel,
+    API: API, store: store, fmt: fmt, esc: esc,
     ts: ts, dia: dia, ddmm: ddmm, hhmm: hhmm, idade: idade, hoje: hoje,
     on: on, off: off, emit: emit, toast: toast,
     api: api, apiFetch: apiFetch, erroTxt: erroTxt, saude: saude,

@@ -205,7 +205,7 @@
     var ult = '—';
     if (a.ts) ult = A.hhmm(a.ts) + ' · ' + ((a.abertos || []).length ? a.abertos.length + ' aberto(s)' : (a.fechados || []).length ? a.fechados.length + ' fechado(s)' : (a.motivo || 'nada a fazer'));
     else if (a.motivo) ult = a.motivo;
-    var rows = [['Modo', cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado'], ['Conta', A.CONTA === 'B' ? 'Conta B' : 'Paper A'], ['Última ação do auto', ult],
+    var rows = [['Modo', cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado'], ['Conta', A.NOME_CONTA], ['Última ação do auto', ult],
       ['Ordens descansando', String((e.ordens || []).length)], ['Posições abertas', String((e.posicoes || []).length)], ['Trava diária', rg.trava_dia ? 'disparada' : 'livre']];
     if (st) {
       var ini = A.ts(st.iniciado), up = ini ? Math.max(0, (Date.now() - ini) / 3600000) : null;
@@ -219,7 +219,7 @@
     var e = A.estado; if (!e) return; var cfg = e.config || {}, liga = !on(e);
     if (liga) {
       var ok = await A.dialogo({ titulo: 'Ligar o Apollo', ok: 'Ligar',
-        corpo: '<p>Ele passa a abrir e fechar posições sozinho na <b>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</b> com a config gravada agora' + (S.mudancas && Object.keys(S.mudancas).length ? ' (as alterações não salvas do editor <b>não</b> entram)' : '') + ':</p><div class="diff">' +
+        corpo: '<p>Ele passa a abrir e fechar posições sozinho na <b>' + A.NOME_CONTA + '</b> com a config gravada agora' + (S.mudancas && Object.keys(S.mudancas).length ? ' (as alterações não salvas do editor <b>não</b> entram)' : '') + ':</p><div class="diff">' +
           ['risco_por_trade', 'auto_conviccao_min', 'auto_max_posicoes', 'auto_lev_modo', 'alavancagem_padrao', 'exec_modo'].map(function (k) { return '<div><span>' + nome(k) + '</span><b>' + A.esc(mostra(k, cfg[k], S.cat && S.cat.parametros[k])) + '</b></div>'; }).join('') + '</div>' });
       if (!ok) return;
     }
@@ -308,7 +308,7 @@
   async function salvar() {
     var m = S.mudancas, ks = Object.keys(m); if (!ks.length) return;
     var cfg = (S.estado || {}).config || {}, P = S.cat.parametros, risco = ks.some(function (k) { return RISCO[k]; });
-    var corpo = '<p>Grava ' + ks.length + (ks.length === 1 ? ' chave' : ' chaves') + ' na <b>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</b> pelo <span class="mono">POST /config</span>, validado pelo catálogo, e fica na auditoria.</p>' +
+    var corpo = '<p>Grava ' + ks.length + (ks.length === 1 ? ' chave' : ' chaves') + ' na <b>' + A.NOME_CONTA + '</b> pelo <span class="mono">POST /config</span>, validado pelo catálogo, e fica na auditoria.</p>' +
       '<div class="diff">' + ks.map(function (k) { return '<div><span>' + A.esc(nome(k)) + (RISCO[k] ? ' <span class="tag-r">toca-risco</span>' : '') + '</span><span>' + A.esc(mostra(k, cfg[k], P[k])) + ' → <b>' + A.esc(mostra(k, m[k], P[k])) + '</b></span></div>'; }).join('') + '</div>' +
       (risco ? '<div class="aviso">Pelo menos uma destas chaves mexe em risco. Apertar guarda pode; afrouxar é decisão do dono (CLAUDE.md §2).</div>' : '');
     if (!(await A.dialogo({ titulo: 'Revisar alterações', corpo: corpo, ok: 'Gravar', perigo: risco }))) return;

@@ -32,8 +32,8 @@
 
   /* ================= paleta e conta ================= */
   var pal0 = A.paletaInicial(); if (pal0) A.pintaPaleta(pal0);
-  if (A.CONTA === 'B') document.body.classList.add('conta-b');
-  var NOME_CONTA = A.CONTA === 'B' ? 'Conta B' : 'Paper A';
+  if (A.CONTA !== 'A') document.body.classList.add('conta-teste');
+  var NOME_CONTA = A.NOME_CONTA;
 
   /* ================= estado compartilhado entre telas ================= */
   var M = { pnlHist: {}, saidas: {}, precos: {}, health: null, tr: null, trSig: '', mes: null };
@@ -202,8 +202,14 @@
   }
   function levTxt(cfg) { return cfg.auto_lev_modo === 'fixo' ? cfg.alavancagem_padrao + 'x fixa' : cfg.auto_lev_modo === 'risco' ? 'pela conta (' + cfg.auto_lev_min + '–' + cfg.auto_lev_max + 'x)' : 'por convicção (' + cfg.auto_lev_min + '–' + cfg.auto_lev_max + 'x)'; }
   async function trocaContaSheet() {
-    var corpo = '<p class="note">Cada conta é uma banca separada no backend. A credencial é a mesma.</p>' +
-      '<div class="seg" role="group" aria-label="Conta"><button type="button" data-c="A" aria-pressed="' + (A.CONTA === 'A') + '">Paper A</button><button type="button" data-c="B" aria-pressed="' + (A.CONTA === 'B') + '">Conta B · teste A/B</button></div>';
+    /* [AB-2] três contas não cabem com o papel escrito dentro do botão: o botão leva o nome e o
+       papel de cada uma vai na nota, na mesma ordem */
+    var ks = Object.keys(A.CONTAS);
+    var corpo = '<p class="note">Cada conta é uma banca separada no backend. A credencial é a mesma.<br>' +
+      ks.map(function (k) { return esc(A.CONTAS[k].nome + ': ' + A.CONTAS[k].papel); }).join(' · ') + '</p>' +
+      '<div class="seg" role="group" aria-label="Conta">' + ks.map(function (k) {
+        return '<button type="button" data-c="' + k + '" aria-pressed="' + (A.CONTA === k) + '">' + esc(A.CONTAS[k].nome) + '</button>';
+      }).join('') + '</div>';
     sheet({ titulo: 'Conta', corpo: corpo, cancelar: 'Fechar', aoAbrir: function (box) {
       box.querySelectorAll('[data-c]').forEach(function (b) { b.addEventListener('click', function () { A.trocaConta(b.dataset.c); }); });
     } });
@@ -214,7 +220,7 @@
     o = o || {};
     return '<div class="mh">' + (o.voltar ? '<a class="back" href="' + o.voltar + '" aria-label="Voltar">' + ic('voltar') + '</a>' : '') +
       '<h4' + (o.voltar ? ' class="det"' : '') + '>' + titulo + '</h4>' + (o.extra || '') +
-      (o.semConta ? '' : '<button type="button" class="acct" data-acao="conta" aria-label="Conta: ' + NOME_CONTA + '. Trocar"><span class="avatar">' + A.CONTA + '</span>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</button>') +
+      (o.semConta ? '' : '<button type="button" class="acct" data-acao="conta" aria-label="Conta: ' + NOME_CONTA + '. Trocar"><span class="avatar">' + A.CONTA + '</span>' + NOME_CONTA + '</button>') +
       '<button type="button" class="ib danger" data-acao="panico" aria-label="Pânico">' + ic('panico') + '</button></div>' +
       '<div class="conn" id="m-conn"><span class="led off"></span><span>conectando…</span></div>' +
       '<div class="offline-bar" role="status">' + ic('alerta') + '<span id="m-off-txt">backend offline · reconectando. Os números abaixo são do último retrato.</span></div>';
@@ -653,7 +659,7 @@
         '<section class="m-card" style="gap:0;padding:4px 14px">' +
         '<a class="m-row" href="#carteira"><span class="k" style="color:var(--txt)">Carteira<small>métricas de todos os trades</small></span>' + ic('chev') + '</a>' +
         '<a class="m-row" href="#diario"><span class="k" style="color:var(--txt)">Diário<small>dia a dia e journal</small></span>' + ic('chev') + '</a>' +
-        '<button type="button" class="m-row" data-acao="conta"><span class="k" style="color:var(--txt)">Conta<small>' + (A.CONTA === 'B' ? 'Conta B · teste A/B' : 'Paper A · produção') + '</small></span>' + ic('chev') + '</button>' +
+        '<button type="button" class="m-row" data-acao="conta"><span class="k" style="color:var(--txt)">Conta<small>' + esc(A.NOME_CONTA + ' · ' + A.PAPEL_CONTA) + '</small></span>' + ic('chev') + '</button>' +
         '<button type="button" class="m-row" id="mx-scan"><span class="k" style="color:var(--txt)">Escanear o mercado agora<small>varre fora do ciclo do worker</small></span>' + ic('pulso') + '</button></section>' +
         '<section class="m-card"><h5>Notificações</h5><p class="note" id="nt-st">Verificando este aparelho…</p><div id="nt-acts" style="display:grid;gap:8px"></div></section>' +
         '<section class="m-card"><h5>Paleta</h5><div class="chips" id="mx-pal" role="group" aria-label="Paleta" style="margin:0;padding:2px 0;flex-wrap:wrap"></div><p class="note">Lembrada neste aparelho, a mesma do desktop.</p></section>' +
@@ -896,7 +902,7 @@
     if (tela && tela.destroy) { try { tela.destroy(); } catch (e) { console.error('tela destroy', e); } }
     var t = TELAS[r.id]; tela = t;
     tabs.forEach(function (a) { var on = a.dataset.tab === t.tab; a.classList.toggle('is-active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-    document.title = (A.CONTA === 'B' ? '[Conta B] ' : '') + t.titulo + ' · Apollux';
+    document.title = (A.CONTA !== 'A' ? '[' + NOME_CONTA + '] ' : '') + t.titulo + ' · Apollux';
     /* nó novo por montagem (mesma regra do desktop): listener delegado morre com a tela */
     var mount = document.createElement('div'); mount.style.display = 'contents';
     mount.innerHTML = t.html(r.arg);

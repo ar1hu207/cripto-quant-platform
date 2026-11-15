@@ -48,13 +48,13 @@
   document.addEventListener('click', fechaMenus);
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') fechaMenus(); });
 
-  /* ================= conta (A / B / Real em esteira) ================= */
+  /* ================= conta (A / B / C / Real em esteira) ================= */
   Array.prototype.forEach.call(document.querySelectorAll('.conta[data-conta]'), function (b) {
     b.setAttribute('aria-pressed', String(b.dataset.conta === A.CONTA));
     b.addEventListener('click', function () { A.trocaConta(b.dataset.conta); });
   });
-  if (A.CONTA === 'B') { document.body.classList.add('conta-b'); }
-  $('menu-conta').textContent = A.CONTA === 'B' ? 'Conta B · teste A/B' : 'Paper A · produção';
+  if (A.CONTA !== 'A') { document.body.classList.add('conta-teste'); }
+  $('menu-conta').textContent = A.NOME_CONTA + ' · ' + A.PAPEL_CONTA;
 
   /* ================= diálogo de confirmação ================= */
   var dlgRes = null, dlgFoco = null;
@@ -118,7 +118,7 @@
       return;
     }
     if (acao === 'reset') {
-      var corpo = '<p>Apaga <b>sinais, posições, trades e a curva de equity</b> da ' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + ', devolve a banca ao valor inicial e solta a trava do dia. Irreversível, sem backup.</p>' +
+      var corpo = '<p>Apaga <b>sinais, posições, trades e a curva de equity</b> da ' + A.NOME_CONTA + ', devolve a banca ao valor inicial e solta a trava do dia. Irreversível, sem backup.</p>' +
         '<p>Preserva a configuração. Os planos de DCA só são apagados se você marcar abaixo.</p>' +
         '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="dlg-dca"> apagar também os planos de DCA e o acumulado</label>';
       var incluirDca = false;
@@ -246,7 +246,7 @@
     }));
   }
   function head(route) {
-    return '<div class="view-head"><div><div class="eyebrow">Apollux · ' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</div><h1>' + A.esc(TIT[route]) + '</h1></div>' +
+    return '<div class="view-head"><div><div class="eyebrow">Apollux · ' + A.NOME_CONTA + '</div><h1>' + A.esc(TIT[route]) + '</h1></div>' +
       (route === 'painel' ? '' : '<div class="crumb"><a href="#painel">Painel</a> › ' + A.esc(TIT[route]) + '</div>') + '</div>';
   }
   var seq = 0;
@@ -257,7 +257,7 @@
     if (curView && typeof curView.destroy === 'function') { try { curView.destroy(); } catch (e) { console.error('view ' + curRoute + ' destroy', e); } }
     curView = null; curRoute = route;
     navLinks.forEach(function (a) { var on = a.getAttribute('data-route') === route; a.classList.toggle('is-active', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-    document.title = (A.CONTA === 'B' ? '[Conta B] ' : '') + TIT[route] + ' · Apollux';
+    document.title = (A.CONTA !== 'A' ? '[' + A.NOME_CONTA + '] ' : '') + TIT[route] + ' · Apollux';
     widgetRota(route);
     window.scrollTo(0, 0);
     if (tem(UC, route)) { viewRoot.innerHTML = head(route) + ucHtml(route, UC[route]); entrada(); return; }
@@ -299,7 +299,7 @@
     if (!e) return;
     led.className = 'led' + (on ? '' : ' off');
     txt.textContent = 'Apollo ' + (on ? 'ligado' : 'desligado') + ' · ' + (cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado');
-    sub.textContent = (health ? 'v' + health.j.versao + (health.j.commit ? ' · ' + String(health.j.commit).slice(0, 7) : '') + ' · ' : '') + (A.CONTA === 'B' ? 'Conta B' : 'Paper A');
+    sub.textContent = (health ? 'v' + health.j.versao + (health.j.commit ? ' · ' + String(health.j.commit).slice(0, 7) : '') + ' · ' : '') + A.NOME_CONTA;
     var nb = (e.pendentes || []).length, no = (e.ordens || []).length;
     $('nb-sinais').hidden = !nb; $('nb-sinais').textContent = nb;
     $('nb-ordens').hidden = !no; $('nb-ordens').textContent = no;
