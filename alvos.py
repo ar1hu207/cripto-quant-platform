@@ -135,8 +135,19 @@ def escolher_tps(direcao, entrada, r, zs, atr1h, cfg):
 
 
 def fracoes(cfg, k):
-    """Quanto da posição ORIGINAL sai em cada TP. O último sempre leva o que sobrou."""
+    """Quanto da posição ORIGINAL sai em cada TP. O último sempre leva o que sobrou.
+
+    [TP-2] Com `resto_livre`, as frações valem como foram escritas: não são esticadas até
+    somar 1 e NÃO são completadas até `k`. "0.34" são 34% no TP1 e 66% sem alvo nenhum, por
+    conta do trailing -- e a lista devolvida tem um item só, mesmo com três níveis escolhidos
+    (`calcular` descarta o nível que ficou sem fração). Normalizar aqui transformaria esse 34%
+    em 100%: fechar tudo no primeiro alvo, a regra que o T51 mediu como a pior das seis. Só
+    normaliza se a soma PASSAR de 1, porque vender mais do que a posição tem não é política, é
+    erro de config."""
     fr = list(cfg["tp_fracoes"])[:k]
+    if cfg.get("resto_livre"):
+        soma = sum(fr)
+        return [f / soma for f in fr] if soma > 1.0 else fr
     while len(fr) < k:
         fr.append(fr[-1] if fr else 1.0 / k)
     soma = sum(fr) or 1.0
@@ -162,13 +173,26 @@ def calcular(pos, raw_1h, raw_4h, cfg):
     zs = zonas(niveis, 0.35 * atr1h)
     tps = escolher_tps(pos["direcao"], entrada, r, zs, atr1h, cfg)
     fr = fracoes(cfg, len(tps))
+    # [TP-2] Com resto livre, nível sem fração não é alvo e sai do plano. Os níveis são
+    # ESCOLHIDOS como sempre (mesmo `tp_n`) e só depois cortados: "0.34" com `tp_n=3` dá o
+    # mesmo TP1 de quem usa os três. Baixar `tp_n` para 1 não é a mesma coisa -- com um alvo
+    # só, `escolher_tps` pega a zona forte mais próxima e o 2R de reserva deixa de entrar.
+    # Sem a regra, `fracoes` devolve `len(tps)` itens e este corte não tira nada.
+    tps = tps[:len(fr)]
     for t, f in zip(tps, fr):
         t["preco"] = round(t["preco"], 8)
         t["r"] = round(t["r"], 2)
         t["frac"] = round(f, 4)
         t["feito"] = False
-    return {"niveis": tps, "valor_inicial": float(pos["valor_reais"]), "r_preco": r,
-            "calc_em": str(pd.Timestamp.now())}
+    plano = {"niveis": tps, "valor_inicial": float(pos["valor_reais"]), "r_preco": r,
+             "calc_em": str(pd.Timestamp.now())}
+    # [TP-2] A regra do resto mora NO PLANO, gravada uma vez, e não na config de cada ciclo:
+    # posição que nasceu com "o último TP leva tudo" termina assim mesmo que alguém ligue a
+    # chave no meio da vida dela (e vice-versa). A chave só entra no dict quando ligada, então
+    # o plano de quem não usa continua byte a byte o de antes.
+    if cfg.get("resto_livre"):
+        plano["resto_livre"] = True
+    return plano
 
 
 def cfg_tp(cfg):
@@ -200,7 +224,8 @@ def cfg_tp(cfg):
             "tp_max_r": f("tp_max_r", 12.0),
             "tp_forca_min": f("tp_forca_min", 2.0),
             "tp_fracoes": lista("tp_fracoes", "0.34,0.33,0.33", FRAC_MAX),
-            "tp_fallback_r": lista("tp_fallback_r", "2,4,6", R_MAX)}
+            "tp_fallback_r": lista("tp_fallback_r", "2,4,6", R_MAX),
+            "resto_livre": str(cfg.get("tp_resto_livre", "0")) in ("1", "true", "True")}
 
 
 def ler(pos):

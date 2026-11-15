@@ -466,6 +466,7 @@ CONFIG_CATALOGO = {
     "tp_max_r":             ("float", 1.0, 30.0),
     "tp_forca_min":         ("float", 0.0, 20.0),
     "tp_fallback_r":        ("lista_num", 0.0, alvos.R_MAX, 5),
+    "tp_resto_livre":       ("bool",),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é

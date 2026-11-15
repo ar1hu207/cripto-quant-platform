@@ -860,7 +860,12 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
     MERCADO, no preço de agora: é o que o operador faria ao ligar a regra.
 
     **O stop não se mexe aqui.** O T17 mediu que a escada de stop (subir o stop a cada TP) é o
-    que matou a cauda; quem cuida do stop do que sobra continua sendo o trailing."""
+    que matou a cauda; quem cuida do stop do que sobra continua sendo o trailing.
+
+    **[TP-2] Resto livre.** Num plano com `resto_livre`, o último alvo realiza só a fração
+    DELE, e o que sobra fica aberto sem alvo: sai pelo trailing ou pelo stop, onde o movimento
+    acabar. É o plano que decide, não a config do ciclo -- ver `alvos.calcular`. Se as frações
+    somarem a posição inteira, a conta abaixo dá 1 e o último alvo fecha tudo como antes."""
     plano, novo = _plano_tps(pos, tp)
     niveis = plano.get("niveis", [])
     while True:
@@ -868,8 +873,9 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
         if t is None or not alvos.bateu(pos["direcao"], preco, t["preco"]):
             return False
         ultimo = i == len(niveis) - 1
+        leva_tudo = ultimo and not plano.get("resto_livre")
         fill = preco if novo else t["preco"]
-        frac = 1.0 if ultimo else min(1.0, t["frac"] * plano["valor_inicial"] / pos["valor_reais"])
+        frac = 1.0 if leva_tudo else min(1.0, t["frac"] * plano["valor_inicial"] / pos["valor_reais"])
         t["feito"] = True
         t["fill"] = fill
         t["em"] = str(pd.Timestamp.now())
