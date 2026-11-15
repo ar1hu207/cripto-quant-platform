@@ -90,7 +90,7 @@
     '<section class="ct-contas" id="ct-contas"></section>' +
     '<section class="row-2"><article class="card"><div class="card-head"><h2 class="h2">Alocação</h2><span class="count" id="ct-al-n">—</span></div><div id="ct-al"></div></article>' +
       '<article class="card"><div class="card-head"><h2 class="h2">Correlação · 30 dias</h2><span class="count mute">retornos 1h</span></div><div id="ct-corr"><div class="skel"></div></div></article></section>' +
-    '<section class="card"><div class="card-head"><div><h2 class="h2">Curva de equity</h2><div class="sub" id="ct-eq-s">—</div></div><div class="lgd"><span><i></i>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</span><span><i class="bh"></i>B&amp;H BTC</span></div></div><svg class="chart" id="ct-eq" role="img" aria-label="Curva de equity"></svg></section>' +
+    '<section class="card"><div class="card-head"><div><h2 class="h2">Curva de equity</h2><div class="sub" id="ct-eq-s">—</div></div><div class="lgd"><span><i></i>' + A.NOME_CONTA + '</span><span><i class="bh"></i>B&amp;H BTC</span></div></div><svg class="chart" id="ct-eq" role="img" aria-label="Curva de equity"></svg></section>' +
     '<section class="card"><div class="card-head"><h2 class="h2">Journal</h2><span class="count" id="ct-jr-n">—</span></div>' +
       '<div class="flt" id="ct-flt"><button type="button" data-f="tudo" aria-pressed="true">Tudo</button><button type="button" data-f="ganho" aria-pressed="false">Ganhos</button><button type="button" data-f="perda" aria-pressed="false">Perdas</button><button type="button" data-f="stop" aria-pressed="false">Stop</button><button type="button" data-f="tp" aria-pressed="false">TP</button><button type="button" data-f="manual" aria-pressed="false">Manual</button></div>' +
       '<ul class="jr" id="ct-jr"><li><span class="skel" style="grid-column:1/-1"></span></li></ul>' +
@@ -160,10 +160,15 @@
   function contas(e) {
     var eu = A.CONTA, h = e.equity_hist || [], ini = (e.banca || {}).inicial, cfg = e.config || {};
     var d0 = h.length ? A.ddmm(h[0].ts) : '—', ret = ini ? (e.equity_total / ini - 1) * 100 : 0;
-    var desc = 'risco ' + F.f2((parseFloat(cfg.risco_por_trade) || 0) * 100) + '% · teto ' + F.f0((parseFloat(cfg.risco_aberto_max) || 0) * 100) + '% · TP ' + (String(cfg.tp_ativo) === '1' ? 'por estrutura' : 'off') + ' · trailing ' + (String(cfg.trailing_ativo) === '1' ? 'em ' + (cfg.trailing_unidade === 'R' ? 'R' : '%') : 'off') + (cfg.tendencia_filtro && cfg.tendencia_filtro !== 'off' ? ' · lado pelo diário' : '');
-    var minha = '<div class="card ct-conta is-on"><div class="card-head"><h2 class="h2">' + (eu === 'B' ? 'Conta B' : 'Paper A') + '</h2><span class="count">esta</span></div><div class="v"><span class="cur">R$</span>' + F.f2(e.equity_total) + '</div>' +
+    var desc = 'risco ' + F.f2((parseFloat(cfg.risco_por_trade) || 0) * 100) + '% · teto ' + F.f0((parseFloat(cfg.risco_aberto_max) || 0) * 100) + '% · TP ' + (String(cfg.tp_ativo) === '1' ? 'por estrutura' + (String(cfg.tp_resto_livre) === '1' ? ' (resto sem alvo)' : '') : 'off') + ' · trailing ' + (String(cfg.trailing_ativo) === '1' ? 'em ' + (cfg.trailing_unidade === 'R' ? 'R' : '%') : 'off') + (cfg.tendencia_filtro && cfg.tendencia_filtro !== 'off' ? ' · lado pelo diário' : '');
+    var minha = '<div class="card ct-conta is-on"><div class="card-head"><h2 class="h2">' + A.esc(A.NOME_CONTA) + '</h2><span class="count">esta</span></div><div class="v"><span class="cur">R$</span>' + F.f2(e.equity_total) + '</div>' +
       '<div class="s"><span class="' + F.cls(ret) + '">' + F.money(e.equity_total - ini) + ' · ' + F.pct(ret) + '</span> sobre ' + F.brl(ini) + ' (curva desde ' + d0 + ')<br>' + A.esc(desc) + '</div></div>';
-    var outra = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">' + (eu === 'B' ? 'Paper A' : 'Conta B') + '</h2><span class="count mute">' + (eu === 'B' ? 'produção' : 'teste A/B') + '</span></div><div class="s" style="margin:8px 0 12px">Outro backend, outro banco. Os números dela só aparecem com ela selecionada.</div><button type="button" class="btn ghost sm" data-conta="' + (eu === 'B' ? 'A' : 'B') + '">trocar para ' + (eu === 'B' ? 'Paper A' : 'Conta B') + '</button></div>';
+    /* [AB-2] as outras contas dividem UM cartão: com três contas, um cartão por conta empurraria a
+       esteira do Real para fora da linha. Cada botão diz o nome e o papel da conta para onde leva. */
+    var outra = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">Outras contas</h2><span class="count mute">paper</span></div><div class="s" style="margin:8px 0 12px">Outro backend, outro banco. Os números de cada uma só aparecem com ela selecionada.</div><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      Object.keys(A.CONTAS).filter(function (k) { return k !== eu; }).map(function (k) {
+        return '<button type="button" class="btn ghost sm" data-conta="' + k + '">' + A.esc(A.CONTAS[k].nome + ' · ' + A.CONTAS[k].papel) + '</button>';
+      }).join('') + '</div></div>';
     var real = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">Real · Binance</h2><span class="soon">esteira</span></div><div class="esteira"><span>testnet</span>→<span>dry-run</span>→<span>live</span></div><div class="s">Mede execução antes de encostar em dinheiro. Quando esta conta existir, a moldura inteira fica vermelha: dinheiro de verdade nunca parece paper.</div></div>';
     $('ct-contas').innerHTML = minha + outra + real;
   }
@@ -258,7 +263,7 @@
     ev.preventDefault();
     var a = $('ct-dca-a').value, v = +$('ct-dca-v').value, d = +$('ct-dca-d').value;
     if (!a || !(v > 0) || !(d >= 1)) { A.toast('Preencha ativo, valor e frequência', 'warn'); return; }
-    var ok = await A.dialogo({ titulo: 'Criar plano de DCA', ok: 'Criar plano', corpo: '<p>Compra spot de <b>' + F.brl(v) + '</b> em <b>' + A.esc(F.par(a)) + '</b> a cada <b>' + d + (d === 1 ? ' dia' : ' dias') + '</b>, sem alavancagem, na ' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '. O primeiro aporte sai no próximo ciclo do worker.</p>' });
+    var ok = await A.dialogo({ titulo: 'Criar plano de DCA', ok: 'Criar plano', corpo: '<p>Compra spot de <b>' + F.brl(v) + '</b> em <b>' + A.esc(F.par(a)) + '</b> a cada <b>' + d + (d === 1 ? ' dia' : ' dias') + '</b>, sem alavancagem, na ' + A.NOME_CONTA + '. O primeiro aporte sai no próximo ciclo do worker.</p>' });
     if (!ok) return;
     /* recusa de regra (par inexistente, valor inválido) vem como {ok:false} com HTTP 200: virava "Plano criado" */
     try { var r = await A.api('/dca', { ativo: a, valor_aporte: v, freq_dias: d }); if (r && r.ok === false) { A.toast('Plano recusado: ' + (r.erro || 'sem detalhe'), 'neg'); return; } A.toast('Plano DCA criado: ' + F.par(a) + ' ' + F.brl(v) + ' / ' + d + ' d'); A.carregar(); }

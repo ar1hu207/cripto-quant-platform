@@ -429,7 +429,7 @@
     var e = A.estado; if (!e) return; var cfg = e.config || {}, on = String(cfg.auto_trade) === '1';
     if (!on) {
       var ok = await A.dialogo({ titulo: 'Ligar o Apollo', ok: 'Ligar',
-        corpo: '<p>Ele passa a abrir e fechar posições sozinho na <b>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</b>, com a config de agora:</p><div class="diff">' +
+        corpo: '<p>Ele passa a abrir e fechar posições sozinho na <b>' + A.NOME_CONTA + '</b>, com a config de agora:</p><div class="diff">' +
           '<div><span>risco por trade</span><b>' + F.f2((parseFloat(cfg.risco_por_trade) || 0) * 100) + '%</b></div><div><span>convicção mínima</span><b>' + A.esc(cfg.auto_conviccao_min) + '</b></div>' +
           '<div><span>máx. posições</span><b>' + A.esc(cfg.auto_max_posicoes) + '</b></div><div><span>alavancagem</span><b>' + A.esc(cfg.auto_lev_modo) + '</b></div><div><span>execução</span><b>' + A.esc(cfg.exec_modo) + '</b></div></div>' +
           '<p class="mute">Trava diária e teto de risco aberto continuam valendo. Para mudar a config, use o módulo Apollo antes de ligar.</p>' });

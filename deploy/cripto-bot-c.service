@@ -1,0 +1,43 @@
+# [AB-2] Conta C, no dl380: cópia da config da conta A com UMA diferença -- sem TP2 e TP3, o
+# que sobra depois do TP1 corre no trailing (`tp_resto_livre`, T50/T51). Mesmo código e mesmo
+# .env da conta A (então a MESMA senha do painel), com banco, log e porta próprios. Escuta só
+# em loopback: quem a expõe é a conta A, na rota /testeC/... (api.teste_c).
+#
+# Instalar (uma vez), DEPOIS de a conta B ter subido pelo menos uma vez neste código -- é o
+# boot dela que grava a marca /home/cripto/cripto-bot-b/.conta, e é a marca que impede esta
+# unit, se copiada com o caminho errado, de abrir o banco da B:
+#   test "$(cat /home/cripto/cripto-bot-b/.conta)" = B
+#   sudo install -d -o cripto -g cripto /home/cripto/cripto-bot-c
+#   sudo cp deploy/cripto-bot-c.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-c
+#
+# A conta nasce com a config PADRÃO do código e `auto_trade=0`. A config da A é copiada pelo
+# POST /testeC/config (com as chaves de TP da C por cima), e quem liga o auto é o dono.
+#
+# O deploy da A (git pull no /home/cripto/cripto-bot) troca o código das três: depois dele,
+# reinicie OS TRÊS serviços, senão B e C ficam no commit anterior (/testeC/health mostra).
+[Unit]
+Description=Cripto Bot - conta C (paper A sem TP2 e TP3)
+After=network-online.target cripto-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cripto
+WorkingDirectory=/home/cripto/cripto-bot
+EnvironmentFile=/home/cripto/cripto-bot/.env
+Environment=TZ=America/Sao_Paulo
+# CONTA, DB_PATH e LOG_PATH vão pelo `env` do ExecStart, e NÃO por `Environment=`: o `.env` da
+# A define DB_PATH, e no systemd o EnvironmentFile VENCE o Environment=. Foi assim que a B subiu
+# em cima do banco da A no primeiro deploy (10/11). O `api._guarda_conta` recusa subir no banco
+# da A, e recusa subir numa pasta marcada como de outra conta.
+ExecStart=/usr/bin/env CONTA=C DB_PATH=/home/cripto/cripto-bot-c/trading.db LOG_PATH=/home/cripto/cripto-bot-c/plataforma.log /home/cripto/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8002
+Restart=always
+RestartSec=5
+WatchdogSec=300
+NotifyAccess=main
+MemoryHigh=620M
+MemoryMax=760M
+
+[Install]
+WantedBy=multi-user.target

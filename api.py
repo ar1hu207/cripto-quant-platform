@@ -231,8 +231,31 @@ LOOPBACK = {"127.0.0.1", "::1"}
 # antes do repasse) -- e a B confere a MESMA credencial de novo, porque lê o mesmo `.env`.
 # As descobertas dos backtests entram no código atrás de chaves de config: a B as liga, a A
 # fica como está. Mesmo código, mesmo mercado, mesma hora -- a diferença é só a config.
+#
+# [AB-2] A conta C é a terceira instância, do mesmo jeito: cópia da config da A com UMA
+# diferença de regra (`tp_resto_livre`, T50/T51), exposta em `/testeC/...`. Conta nova é uma
+# linha em `_url_teste`, uma unit em `deploy/` e uma pasta própria -- o resto é o mesmo código.
 CONTA = (os.environ.get("CONTA") or "A").strip().upper()
 TESTEB_URL = (os.environ.get("TESTEB_URL") or "http://127.0.0.1:8001").rstrip("/")
+TESTEC_URL = (os.environ.get("TESTEC_URL") or "http://127.0.0.1:8002").rstrip("/")
+CONTAS_TESTE = ("B", "C")
+HEALTH_PUBLICOS = ("/health",) + tuple(f"/teste{c}/health" for c in CONTAS_TESTE)
+MARCA_CONTA = ".conta"          # arquivo na pasta do banco: diz de qual conta a pasta é
+
+
+def _url_teste(conta):
+    """Endereço da instância de teste. Lido na chamada, não no import: é o que deixa o teste
+    apontar a conta para um servidor falso sem reimportar o módulo."""
+    return {"B": TESTEB_URL, "C": TESTEC_URL}[conta]
+
+
+def _dona_da_pasta(pasta):
+    """A conta gravada na marca da pasta, ou None se a pasta não tem marca."""
+    try:
+        with open(os.path.join(pasta, MARCA_CONTA), encoding="utf-8") as f:
+            return f.read().strip().upper() or None
+    except OSError:
+        return None
 
 
 def _guarda_conta():
@@ -245,14 +268,39 @@ def _guarda_conta():
 
     A unit agora força o caminho no `ExecStart`, mas a garantia não pode depender de a unit
     estar certa: a A mora no diretório do código, e a B nunca. A versão-sintoma seria só
-    consertar a unit -- e o próximo `.env` ou a próxima unit copiada repetiriam o erro."""
-    if CONTA == "A":
-        return
+    consertar a unit -- e o próximo `.env` ou a próxima unit copiada repetiriam o erro.
+
+    **[AB-2] Com três contas, "não é o da A" deixou de bastar.** A unit da C nasce copiada da
+    unit da B: esquecer de trocar o `DB_PATH` poria a C no banco da B, e a regra acima deixava
+    (a pasta da B não é a raiz). Cada pasta de conta de teste passa a ter uma marca, `.conta`,
+    com a letra da dona:
+      - marca de OUTRA conta -> não sobe (vale para a A também: ela não abre banco de teste);
+      - pasta sem marca e SEM banco -> conta nova: grava a marca e sobe;
+      - pasta sem marca e COM banco -> só a B a adota, porque o banco dela nasceu em 10/11,
+        antes da marca existir. Qualquer outra conta recusa: banco que já existe e não diz de
+        quem é não é dela. (Restaurou um backup numa pasta nova? Grave a letra em `.conta`.)
+    Só a pasta do BANCO recebe marca. A do log é conferida e nunca gravada: se um `LOG_PATH`
+    errado pudesse marcar a pasta onde caiu, a conta com a unit errada tomaria a pasta da outra
+    e a dona é que passaria a ser recusada no boot seguinte."""
     raiz = os.path.dirname(os.path.realpath(__file__))
     for nome, caminho in (("DB_PATH", db.DB), ("LOG_PATH", logbot.LOG_FILE)):
-        if os.path.dirname(os.path.realpath(caminho)) == raiz:
-            raise RuntimeError(f"conta {CONTA} recusada: {nome}={caminho} é o da conta A. "
-                               "Defina um caminho próprio (deploy/cripto-bot-b.service).")
+        pasta = os.path.dirname(os.path.realpath(caminho))
+        if CONTA != "A" and pasta == raiz:
+            raise RuntimeError(f"conta {CONTA} recusada: {nome}={caminho} é o da conta A. Defina "
+                               f"um caminho próprio (deploy/cripto-bot-{CONTA.lower()}.service).")
+        dona = _dona_da_pasta(pasta)
+        if dona and dona != CONTA:
+            raise RuntimeError(f"conta {CONTA} recusada: {nome}={caminho} está na pasta da conta "
+                               f"{dona} ({MARCA_CONTA}). Cada conta tem a pasta dela.")
+        if dona or CONTA == "A" or nome != "DB_PATH":
+            continue
+        if os.path.exists(caminho) and CONTA != "B":
+            raise RuntimeError(f"conta {CONTA} recusada: {nome}={caminho} já existe e a pasta não "
+                               f"tem a marca {MARCA_CONTA}. Se o banco é mesmo da conta {CONTA}, "
+                               "grave a letra nesse arquivo; se não é, corrija o caminho.")
+        os.makedirs(pasta, exist_ok=True)
+        with open(os.path.join(pasta, MARCA_CONTA), "w", encoding="utf-8") as f:
+            f.write(CONTA + "\n")
 # A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
 # por construção, então o throttle serve para conter scanner barulhento, não como defesa
 # principal. Valores folgados porque o painel dispara ~5 requisições paralelas por ciclo
@@ -312,9 +360,9 @@ async def auth_basica(request: Request, call_next):
     # /testeB/health é o /health da conta B: público pelo mesmo motivo (o painel o lê antes do
     # login para dizer se o backend está de pé), e não expõe nada além da idade do ciclo.
     # Só GET: a isenção era por caminho, e um POST anônimo em /testeB/health tinha o corpo lido
-    # em memória e repassado à conta B sem credencial nenhuma.
+    # em memória e repassado à conta B sem credencial nenhuma. [AB-2] Vale igual para a C.
     if request.method == "OPTIONS" or (request.method == "GET"
-                                       and request.url.path in ("/health", "/testeB/health")):
+                                       and request.url.path in HEALTH_PUBLICOS):
         return await call_next(request)
 
     if not DASH_PASS:
@@ -466,6 +514,7 @@ CONFIG_CATALOGO = {
     "tp_max_r":             ("float", 1.0, 30.0),
     "tp_forca_min":         ("float", 0.0, 20.0),
     "tp_fallback_r":        ("lista_num", 0.0, alvos.R_MAX, 5),
+    "tp_resto_livre":       ("bool",),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
@@ -890,13 +939,13 @@ def _estado_vigia(agora=None):
     return (idade is not None and idade <= VIGIA_CICLO_S) or subindo, idade
 
 
-def _repassar_b(metodo, caminho, query, corpo, auth, ctype):
+def _repassar(conta, metodo, caminho, query, corpo, auth, ctype):
     """[AB-1] A requisição vai para a instância B como veio, e a resposta volta como veio.
     Erro HTTP da B (401, 422...) é devolvido com o status DELA: mascarar como 502 esconderia,
-    por exemplo, uma config recusada pelo catálogo."""
+    por exemplo, uma config recusada pelo catálogo. [AB-2] `conta` diz qual instância."""
     # `caminho` chega DECODIFICADO: um espaço ou caractere de controle nele estourava InvalidURL
     # (que não é URLError) e a rota respondia 500. Recodificado, a B devolve o 404 dela.
-    url = f"{TESTEB_URL}/{quote(caminho, safe='/')}" + (f"?{query}" if query else "")
+    url = f"{_url_teste(conta)}/{quote(caminho, safe='/')}" + (f"?{query}" if query else "")
     cab = {k: v for k, v in (("Authorization", auth), ("Content-Type", ctype)) if v}
     req = urllib.request.Request(url, data=corpo if metodo == "POST" else None,
                                  headers=cab, method=metodo)
@@ -907,20 +956,38 @@ def _repassar_b(metodo, caminho, query, corpo, auth, ctype):
         return e.code, e.read(), e.headers.get("Content-Type", "text/plain")
 
 
-@app.api_route("/testeB/{caminho:path}", methods=["GET", "POST"])
-async def teste_b(caminho: str, request: Request):
+def _repassar_b(metodo, caminho, query, corpo, auth, ctype):
+    return _repassar("B", metodo, caminho, query, corpo, auth, ctype)
+
+
+def _repassar_c(metodo, caminho, query, corpo, auth, ctype):
+    return _repassar("C", metodo, caminho, query, corpo, auth, ctype)
+
+
+async def _rota_teste(conta, repassar, caminho, request):
     # Só a A repassa. Na própria B a rota não existe, senão uma config errada de TESTEB_URL
-    # faria a B chamar a si mesma em laço.
+    # faria a B chamar a si mesma em laço. [AB-2] Nem B repassa para C, nem C para B: uma conta
+    # de teste alcançando a outra seria um caminho a mais para gravar na conta errada.
     if CONTA != "A":
-        raise HTTPException(404, "rota /testeB só existe na conta A")
+        raise HTTPException(404, f"rota /teste{conta} só existe na conta A")
     corpo = await request.body()
     try:
         st, dados, ctype = await run_in_threadpool(
-            _repassar_b, request.method, caminho, request.url.query, corpo,
+            repassar, request.method, caminho, request.url.query, corpo,
             request.headers.get("Authorization"), request.headers.get("Content-Type"))
     except (urllib.error.URLError, OSError) as e:
-        return PlainTextResponse(f"Teste B fora do ar: {e}", status_code=502)
+        return PlainTextResponse(f"Teste {conta} fora do ar: {e}", status_code=502)
     return Response(content=dados, status_code=st, media_type=ctype)
+
+
+@app.api_route("/testeB/{caminho:path}", methods=["GET", "POST"])
+async def teste_b(caminho: str, request: Request):
+    return await _rota_teste("B", _repassar_b, caminho, request)
+
+
+@app.api_route("/testeC/{caminho:path}", methods=["GET", "POST"])
+async def teste_c(caminho: str, request: Request):
+    return await _rota_teste("C", _repassar_c, caminho, request)
 
 
 @app.get("/health")

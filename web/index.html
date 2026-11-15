@@ -115,7 +115,7 @@ h1,h2,h3{text-wrap:balance}
 .conta:hover{color:var(--txt);border-color:var(--line2)}
 .conta[aria-pressed="true"]{color:var(--accent);border-color:rgba(var(--accent-rgb),var(--glow));box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),var(--glow-lo))}
 .conta.lock{border-style:dashed;color:var(--mute)}
-.conta-b .conta[aria-pressed="true"]{color:var(--warn);border-color:rgba(var(--warn-rgb),.6);box-shadow:inset 0 0 0 1px rgba(var(--warn-rgb),.3)}
+.conta-teste .conta[aria-pressed="true"]{color:var(--warn);border-color:rgba(var(--warn-rgb),.6);box-shadow:inset 0 0 0 1px rgba(var(--warn-rgb),.3)}
 .conn{display:inline-flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11.5px;color:var(--txt2);white-space:nowrap}
 .conn .led{width:7px;height:7px}
 .top-acts{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -462,6 +462,7 @@ select.inp{font-family:var(--f-ui)}
       <div class="contas" role="group" aria-label="Conta">
         <button type="button" class="conta" data-conta="A" title="Produção: as regras de hoje">Paper A</button>
         <button type="button" class="conta" data-conta="B" title="Teste A/B: outra instância, banca própria">Conta B</button>
+        <button type="button" class="conta" data-conta="C" title="A Paper A sem TP2 e TP3: depois do TP1 o resto corre no trailing. Banca própria">Conta C</button>
         <button type="button" class="conta lock" disabled title="Esteira testnet → dry-run → live (PLANO-LIVE-BINANCE)">Real · em esteira</button>
       </div>
       <span class="conn" id="conn"><span class="led off" aria-hidden="true"></span><span>conectando…</span></span>

@@ -239,7 +239,9 @@ def _plano_do_bot(pos, cfg):
         niveis = plano.get("niveis", [])
         if t is not None:
             partes.append(f"TP{i + 1} em {t['r']:.1f}R")
-            if i < len(niveis) - 1:
+            if plano.get("resto_livre"):
+                partes.append("resto sem teto")          # [TP-2] o último alvo não é meta final
+            elif i < len(niveis) - 1:
                 partes.append(f"meta final {niveis[-1]['r']:.1f}R")
     if trail_on and str(cfg.get("trailing_unidade", "R")).strip() == "R" and r_agora is not None:
         arma = float(cfg.get("trailing_arma_r", 3) or 3)

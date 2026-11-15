@@ -25,12 +25,12 @@
     ['Guardas', ['limite_perda_dia', 'risco_aberto_max', 'exposicao_max']],
     ['Entrada', ['auto_conviccao_min', 'min_conviccao', 'adx_min', 'min_fatores', 'exigir_fluxo', 'reversao_ativa', 'adx_max_rev', 'tendencia_filtro', 'auto_freshness_min', 'auto_cooldown_min']],
     ['Execução', ['exec_modo', 'exec_ordem_ttl_s', 'taxa_maker', 'exec_maker_off', 'taxa_por_lado']],
-    ['Saída', ['trailing_ativo', 'trailing_unidade', 'trailing_arma_r', 'trailing_dist_r', 'trailing_dist', 'tp_ativo', 'tp_n', 'tp_fracoes', 'tp_min_r', 'tp_max_r', 'tp_forca_min', 'tp_fallback_r', 'auto_fechar_saida', 'alvo_roe']],
+    ['Saída', ['trailing_ativo', 'trailing_unidade', 'trailing_arma_r', 'trailing_dist_r', 'trailing_dist', 'tp_ativo', 'tp_n', 'tp_fracoes', 'tp_min_r', 'tp_max_r', 'tp_forca_min', 'tp_fallback_r', 'tp_resto_livre', 'auto_fechar_saida', 'alvo_roe']],
     ['Mercado', ['timeframe', 'timeframes', 'ativos']]
   ];
   var FORA = { auto_trade: 1, trava_dia_em: 1, telegram_token: 1, telegram_chat_id: 1 };
   var RISCO = { risco_por_trade: 1, alavancagem_padrao: 1, auto_lev_modo: 1, auto_lev_min: 1, auto_lev_max: 1, auto_lev_margem_frac: 1, auto_max_posicoes: 1, auto_max_valor_frac: 1, limite_perda_dia: 1, risco_aberto_max: 1, exposicao_max: 1 };
-  var NOMES = { risco_por_trade: 'Risco por trade', alavancagem_padrao: 'Alavancagem padrão', auto_lev_modo: 'Modo da alavancagem', auto_lev_min: 'Alavancagem mínima', auto_lev_max: 'Alavancagem máxima', auto_lev_margem_frac: 'Margem por trade (modo risco)', auto_max_posicoes: 'Máx. posições', auto_max_valor_frac: 'Máx. margem por trade', limite_perda_dia: 'Trava diária (perda máx.)', risco_aberto_max: 'Teto de risco aberto', exposicao_max: 'Teto de margem', auto_conviccao_min: 'Convicção mínima do auto', min_conviccao: 'Convicção mínima do sinal', adx_min: 'ADX mínimo', min_fatores: 'Fatores mínimos', exigir_fluxo: 'Exigir fluxo taker a favor', reversao_ativa: 'Sinais de reversão', adx_max_rev: 'ADX máx. na reversão', tendencia_filtro: 'Filtro de tendência diária', auto_freshness_min: 'Idade máx. do sinal (min)', auto_cooldown_min: 'Cooldown por par (min)', exec_modo: 'Modo de execução', exec_ordem_ttl_s: 'Validade da ordem (s)', taxa_maker: 'Taxa maker', exec_maker_off: 'Afastamento da ordem', taxa_por_lado: 'Taxa taker por lado', trailing_ativo: 'Trailing', trailing_unidade: 'Unidade do trailing', trailing_arma_r: 'Trailing arma em (R)', trailing_dist_r: 'Distância do trailing (R)', trailing_dist: 'Distância do trailing (% preço)', tp_ativo: 'TP por estrutura', tp_n: 'Nº de alvos', tp_fracoes: 'Frações dos alvos', tp_min_r: 'Alvo mínimo (R)', tp_max_r: 'Alvo máximo (R)', tp_forca_min: 'Força mínima do nível', tp_fallback_r: 'Alvo de reserva (R)', auto_fechar_saida: 'Fechar pelo gestor de saída', alvo_roe: 'Alvo de ROE', timeframe: 'Tempo gráfico principal', timeframes: 'Tempos gráficos varridos', ativos: 'Pares varridos' };
+  var NOMES = { risco_por_trade: 'Risco por trade', alavancagem_padrao: 'Alavancagem padrão', auto_lev_modo: 'Modo da alavancagem', auto_lev_min: 'Alavancagem mínima', auto_lev_max: 'Alavancagem máxima', auto_lev_margem_frac: 'Margem por trade (modo risco)', auto_max_posicoes: 'Máx. posições', auto_max_valor_frac: 'Máx. margem por trade', limite_perda_dia: 'Trava diária (perda máx.)', risco_aberto_max: 'Teto de risco aberto', exposicao_max: 'Teto de margem', auto_conviccao_min: 'Convicção mínima do auto', min_conviccao: 'Convicção mínima do sinal', adx_min: 'ADX mínimo', min_fatores: 'Fatores mínimos', exigir_fluxo: 'Exigir fluxo taker a favor', reversao_ativa: 'Sinais de reversão', adx_max_rev: 'ADX máx. na reversão', tendencia_filtro: 'Filtro de tendência diária', auto_freshness_min: 'Idade máx. do sinal (min)', auto_cooldown_min: 'Cooldown por par (min)', exec_modo: 'Modo de execução', exec_ordem_ttl_s: 'Validade da ordem (s)', taxa_maker: 'Taxa maker', exec_maker_off: 'Afastamento da ordem', taxa_por_lado: 'Taxa taker por lado', trailing_ativo: 'Trailing', trailing_unidade: 'Unidade do trailing', trailing_arma_r: 'Trailing arma em (R)', trailing_dist_r: 'Distância do trailing (R)', trailing_dist: 'Distância do trailing (% preço)', tp_ativo: 'TP por estrutura', tp_n: 'Nº de alvos', tp_fracoes: 'Frações dos alvos', tp_min_r: 'Alvo mínimo (R)', tp_max_r: 'Alvo máximo (R)', tp_forca_min: 'Força mínima do nível', tp_fallback_r: 'Alvo de reserva (R)', tp_resto_livre: 'Resto sem alvo depois do último TP', auto_fechar_saida: 'Fechar pelo gestor de saída', alvo_roe: 'Alvo de ROE', timeframe: 'Tempo gráfico principal', timeframes: 'Tempos gráficos varridos', ativos: 'Pares varridos' };
   /* frações exibidas como % (o banco guarda 0.03; a tela mostra 3) */
   var PCT = { risco_por_trade: 1, limite_perda_dia: 1, risco_aberto_max: 1, exposicao_max: 1, auto_lev_margem_frac: 1, auto_max_valor_frac: 1, taxa_maker: 1, taxa_por_lado: 1, exec_maker_off: 1, trailing_dist: 1 };
 
@@ -205,7 +205,7 @@
     var ult = '—';
     if (a.ts) ult = A.hhmm(a.ts) + ' · ' + ((a.abertos || []).length ? a.abertos.length + ' aberto(s)' : (a.fechados || []).length ? a.fechados.length + ' fechado(s)' : (a.motivo || 'nada a fazer'));
     else if (a.motivo) ult = a.motivo;
-    var rows = [['Modo', cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado'], ['Conta', A.CONTA === 'B' ? 'Conta B' : 'Paper A'], ['Última ação do auto', ult],
+    var rows = [['Modo', cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado'], ['Conta', A.NOME_CONTA], ['Última ação do auto', ult],
       ['Ordens descansando', String((e.ordens || []).length)], ['Posições abertas', String((e.posicoes || []).length)], ['Trava diária', rg.trava_dia ? 'disparada' : 'livre']];
     if (st) {
       var ini = A.ts(st.iniciado), up = ini ? Math.max(0, (Date.now() - ini) / 3600000) : null;
@@ -219,7 +219,7 @@
     var e = A.estado; if (!e) return; var cfg = e.config || {}, liga = !on(e);
     if (liga) {
       var ok = await A.dialogo({ titulo: 'Ligar o Apollo', ok: 'Ligar',
-        corpo: '<p>Ele passa a abrir e fechar posições sozinho na <b>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</b> com a config gravada agora' + (S.mudancas && Object.keys(S.mudancas).length ? ' (as alterações não salvas do editor <b>não</b> entram)' : '') + ':</p><div class="diff">' +
+        corpo: '<p>Ele passa a abrir e fechar posições sozinho na <b>' + A.NOME_CONTA + '</b> com a config gravada agora' + (S.mudancas && Object.keys(S.mudancas).length ? ' (as alterações não salvas do editor <b>não</b> entram)' : '') + ':</p><div class="diff">' +
           ['risco_por_trade', 'auto_conviccao_min', 'auto_max_posicoes', 'auto_lev_modo', 'alavancagem_padrao', 'exec_modo'].map(function (k) { return '<div><span>' + nome(k) + '</span><b>' + A.esc(mostra(k, cfg[k], S.cat && S.cat.parametros[k])) + '</b></div>'; }).join('') + '</div>' });
       if (!ok) return;
     }
@@ -308,7 +308,7 @@
   async function salvar() {
     var m = S.mudancas, ks = Object.keys(m); if (!ks.length) return;
     var cfg = (S.estado || {}).config || {}, P = S.cat.parametros, risco = ks.some(function (k) { return RISCO[k]; });
-    var corpo = '<p>Grava ' + ks.length + (ks.length === 1 ? ' chave' : ' chaves') + ' na <b>' + (A.CONTA === 'B' ? 'Conta B' : 'Paper A') + '</b> pelo <span class="mono">POST /config</span>, validado pelo catálogo, e fica na auditoria.</p>' +
+    var corpo = '<p>Grava ' + ks.length + (ks.length === 1 ? ' chave' : ' chaves') + ' na <b>' + A.NOME_CONTA + '</b> pelo <span class="mono">POST /config</span>, validado pelo catálogo, e fica na auditoria.</p>' +
       '<div class="diff">' + ks.map(function (k) { return '<div><span>' + A.esc(nome(k)) + (RISCO[k] ? ' <span class="tag-r">toca-risco</span>' : '') + '</span><span>' + A.esc(mostra(k, cfg[k], P[k])) + ' → <b>' + A.esc(mostra(k, m[k], P[k])) + '</b></span></div>'; }).join('') + '</div>' +
       (risco ? '<div class="aviso">Pelo menos uma destas chaves mexe em risco. Apertar guarda pode; afrouxar é decisão do dono (CLAUDE.md §2).</div>' : '');
     if (!(await A.dialogo({ titulo: 'Revisar alterações', corpo: corpo, ok: 'Gravar', perigo: risco }))) return;

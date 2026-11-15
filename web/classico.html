@@ -203,8 +203,8 @@
   .conta-sel{display:flex;border:1px solid var(--line,#2a2f3a);border-radius:8px;overflow:hidden;margin-left:12px}
   .conta-sel button{background:transparent;color:inherit;border:0;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer;opacity:.65}
   .conta-sel button[aria-pressed="true"]{opacity:1;font-weight:600;background:rgba(255,255,255,.08)}
-  body.conta-b .conta-sel button[data-conta="B"][aria-pressed="true"]{background:#7c3aed;color:#fff}
-  body.conta-b .topbar{box-shadow:inset 0 -2px 0 #7c3aed}
+  body.conta-teste .conta-sel button[aria-pressed="true"]{background:#7c3aed;color:#fff}
+  body.conta-teste .topbar{box-shadow:inset 0 -2px 0 #7c3aed}
 
   /* ---------- tab bar: navega entre blocos de dado ----------
      Ativo = --txt peso 600 + sublinhado de 2px em --accent. Sem fundo, sem pilula. */
@@ -687,6 +687,7 @@
   <div class="conta-sel" role="group" aria-label="Conta">
     <button type="button" data-conta="A" onclick="trocaConta('A')" title="Produção: as regras de hoje">A · Produção</button>
     <button type="button" data-conta="B" onclick="trocaConta('B')" title="Teste B: as regras dos backtests, banca própria">B · Teste</button>
+    <button type="button" data-conta="C" onclick="trocaConta('C')" title="Teste C: a conta A sem TP2 e TP3, banca própria">C · Teste</button>
   </div>
   <!-- Os dois botoes de vista mantem class="tab" e data-v: aba() mira
        document.querySelectorAll('.tab') e liga o .on por dataset.v. -->
@@ -893,8 +894,9 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 // [AB-1] Conta A (produção) ou B (teste A/B). A B é outra instância do bot, com banca própria,
 // que o backend expõe em /testeB/...: trocar de conta é só trocar o prefixo de TODAS as rotas.
 // Fica no localStorage por ser preferência deste navegador; sem storage, cai na A.
-const CONTA=(()=>{try{return localStorage.getItem('cbConta')==='B'?'B':'A';}catch{return 'A';}})();
-const API=(window.API_BASE||'').replace(/\/+$/,'')+(CONTA==='B'?'/testeB':'');
+// [AB-2] A C é a terceira instância, em /testeC/...: a conta A sem TP2 e TP3.
+const CONTA=(()=>{try{const c=localStorage.getItem('cbConta');return c==='B'||c==='C'?c:'A';}catch{return 'A';}})();
+const API=(window.API_BASE||'').replace(/\/+$/,'')+(CONTA==='A'?'':'/teste'+CONTA);
 function trocaConta(c){ if(c===CONTA) return; try{localStorage.setItem('cbConta',c);}catch{} location.reload(); }
 let _cred=localStorage.getItem('cbAuth')||'';
 
@@ -1899,7 +1901,7 @@ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch
 // [AB-1] marca a conta ativa: botão pressionado, faixa roxa na B e o título da aba do navegador,
 // para não haver dúvida de qual banca está na tela antes de apertar Pânico ou Resetar.
 document.querySelectorAll('.conta-sel button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.conta===CONTA)));
-if(CONTA==='B'){ document.body.classList.add('conta-b'); document.title='[Teste B] '+document.title; }
+if(CONTA!=='A'){ document.body.classList.add('conta-teste'); document.title='[Teste '+CONTA+'] '+document.title; }
 
 cargaInicial(); iniciarPolling();
 // pausa o polling quando a aba fica oculta (economia de CPU/rede; sem rebuilds inúteis)
