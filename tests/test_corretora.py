@@ -389,6 +389,14 @@ def test_status_da_condicional_vem_do_algo_status():
     assert C.normalizar_ordem(o)["status"] == "cancelada"
 
 
+def test_trailing_le_a_ativacao_do_campo_que_a_binance_usa():
+    """Demo, 16/11: a ordem de trailing volta com `activatePrice`, sem stopPrice/triggerPrice."""
+    o = {"id": "7", "clientOrderId": "tr", "symbol": "AAVE/USDT:USDT", "status": "open", "side": "sell",
+         "type": "market", "stopPrice": None,
+         "info": {"algoId": "7", "algoStatus": "NEW", "orderType": "TRAILING_STOP_MARKET", "activatePrice": "108.68"}}
+    assert C.normalizar_ordem(o)["gatilho"] == 108.68
+
+
 def test_cancelar_o_que_nao_existe_devolve_false():
     ex = _ExFake()
     b = _bin(ex)

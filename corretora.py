@@ -153,7 +153,8 @@ def normalizar_ordem(o):
         "preenchido": _f(o.get("filled")) or _f(info.get("executedQty")) or 0.0,
         "preco": _f(o.get("price")),
         "preco_medio": _f(o.get("average")) or _f(info.get("avgPrice")) or None,
-        "gatilho": _f(o.get("stopPrice")) or _f(info.get("triggerPrice")) or _f(info.get("stopPrice")),
+        "gatilho": (_f(o.get("stopPrice")) or _f(info.get("triggerPrice")) or _f(info.get("stopPrice"))
+                    or _f(info.get("activatePrice"))),      # trailing: a Binance chama de activatePrice
         "reduce_only": bool(o.get("reduceOnly") or info.get("reduceOnly")),
         "close_position": str(info.get("closePosition")).lower() == "true",
         "ts": ms_para_sp(o.get("timestamp") or info.get("updateTime") or info.get("createTime")),
