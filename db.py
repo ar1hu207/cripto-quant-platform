@@ -177,6 +177,13 @@ CONFIG_PADRAO = {
     "auto_fechar_saida": "1",     # bot fecha sozinho em reversão com lucro (gestor de saída)
     "auto_freshness_min": "12",   # só opera sinais com até N minutos (price/stop envelhecem)
     "auto_cooldown_min": "30",    # após fechar um ativo, não reabre por N minutos (evita churn)
+    # [RAJ-1] Teto de RAJADA: no máximo N entradas do MESMO lado dentro da janela. Nasce
+    # desligado (0) e NÃO foi medido: é hipótese tirada de 17/11 (quatro SHORTs em 14 minutos na
+    # mínima da manhã, três stops, trava do dia antes das 9h). Não é o teto por direção que o
+    # T12 reprovou -- aquele conta posição aberta, este conta ritmo de entrada. Ver
+    # `autotrader.auto_executar`. Ligar é decisão do dono, e o lugar é uma conta de teste.
+    "auto_rajada_max": "0",          # 0 = desligado | N = máx. de entradas por lado na janela
+    "auto_rajada_janela_min": "30",  # a janela, em minutos (> auto_freshness_min, de propósito)
     # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
     # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
     # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o
