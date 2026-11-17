@@ -205,6 +205,37 @@ def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0, at
     return round(valor, 2)
 
 
+def _entradas_recentes(agora, janela_min):
+    """[RAJ-1] Quantas entradas nasceram em cada lado nos últimos `janela_min` minutos.
+
+    Conta a DECISÃO de entrar, e por isso lê duas fontes:
+      * `ordens` pendentes ou preenchidas, pelo `criada_em` -- em `post_only` a ordem é o
+        instante em que o bot decidiu; a posição nasce segundos ou minutos depois, e contar
+        pelo preenchimento deixaria três ordens colocadas no mesmo ciclo passarem juntas;
+      * `posicoes` que NÃO vieram de ordem (entrada a mercado), pelo `aberto_em`.
+    Posição já FECHADA continua contando, de propósito: em 17/11 o stop bateu 18 minutos
+    depois da entrada, e uma rajada cujos stops já bateram ainda é a mesma rajada. Ordem
+    expirada ou cancelada não conta -- nunca virou exposição. Entrada manual conta: o teto
+    só barra o bot, mas o que o dono abriu à mão é aposta no mesmo lado do mesmo jeito.
+
+    O comparador é string, como no cooldown: `criada_em`/`aberto_em` são `str(pd.Timestamp)`
+    naive de São Paulo (CLAUDE.md §1) e o formato ISO ordena lexicograficamente."""
+    corte = str(agora - pd.Timedelta(minutes=janela_min))
+    n = {"LONG": 0, "SHORT": 0}
+    with db.conectar() as con:
+        linhas = list(con.execute(
+            "SELECT direcao, COUNT(*) AS n FROM ordens "
+            "WHERE status IN ('pendente','preenchida') AND criada_em >= ? GROUP BY direcao", (corte,)))
+        linhas += list(con.execute(
+            "SELECT direcao, COUNT(*) AS n FROM posicoes WHERE aberto_em >= ? "
+            "AND id NOT IN (SELECT posicao_id FROM ordens WHERE posicao_id IS NOT NULL) "
+            "GROUP BY direcao", (corte,)))
+    for r in linhas:
+        lado = str(r["direcao"] or "").upper()
+        n[lado] = n.get(lado, 0) + r["n"]
+    return n
+
+
 def auto_executar(saidas=None):
     """Roda 1 ciclo do auto-trader. `saidas` = lista do avaliar_saida (pra auto-fechar).
     Retorna resumo das ações (pra UI/log). Sem efeito se auto_trade desligado."""
@@ -296,11 +327,45 @@ def auto_executar(saidas=None):
 
     modo_tend = str(cfg.get("tendencia_filtro", "off") or "off").strip().lower()
     res["contra_tendencia"] = []
+    # [RAJ-1] Teto de rajada: no máximo `auto_rajada_max` entradas do MESMO lado dentro de
+    # `auto_rajada_janela_min` minutos. 0 = desligado, e é como nasce.
+    #
+    # A causa que ele ataca: os sinais de vários ativos disparam JUNTOS, porque leem a mesma
+    # vela do mesmo mercado (T42: 24 ativos são ~2 apostas, e na queda a correlação quase dobra). Em
+    # 17/11 quatro SHORTs de rompimento saíram em 14 minutos, na vela que fez a mínima da manhã;
+    # cada um cabia sozinho em todos os tetos, e os três stops somaram a trava do dia. Nenhuma
+    # guarda via que eram a mesma informação contada quatro vezes -- `auto_max_posicoes` conta
+    # vagas e `risco_aberto_max` soma risco, mas nenhum dos dois olha QUANDO.
+    #
+    # NÃO é o teto por direção, que o T12 e o histórico de setembro reprovaram: aquele limita
+    # quantas posições do mesmo lado ficam abertas, e corta o dia de tendência, que é onde o
+    # motor ganha. Este limita o ritmo: passada a janela o lado abre de novo, e uma tendência
+    # que continua dando sinal continua sendo operada.
+    #
+    # NÃO FOI MEDIDO. Nasce desligado porque é hipótese tirada de um dia ruim, e regra ajustada
+    # a um dia ruim é o que a casa não liga sem régua. A versão-sintoma seria baixar
+    # `auto_max_posicoes` ou afrouxar `limite_perda_dia`: a primeira corta a tendência junto com
+    # a rajada, a segunda remove o freio que segurou o dia.
+    #
+    # O sinal barrado NÃO é consumido (segue 'novo'), como no [TD-1], e a vaga vai para o
+    # próximo candidato -- que pode ser do outro lado. A janela padrão (30 min) passa de
+    # `auto_freshness_min` (12) em 18 minutos: um sinal barrado por entradas da mesma vela de
+    # 15m, ou da anterior, envelhece antes de a janela abrir, então barrar não vira "entrar
+    # atrasado no mesmo movimento". Barrado por entrada mais antiga que isso, ele ainda abre
+    # quando a janela andar: é teto de ritmo, não veto.
+    rajada_max = int(simulador._cfg_float(cfg, "auto_rajada_max", 0.0))
+    rajada = (_entradas_recentes(agora, simulador._cfg_float(cfg, "auto_rajada_janela_min", 30.0))
+              if rajada_max > 0 else None)
+    res["rajada"] = []
     vistos = set()
     for s in cands:
         if slots <= 0 or budget < min_valor:
             break
         if s["ativo"] in vistos:                          # 1 entrada por ativo por ciclo
+            continue
+        lado_s = str(s["direcao"] or "").upper()
+        if rajada is not None and rajada.get(lado_s, 0) >= rajada_max:
+            res["rajada"].append(s["ativo"])
             continue
         # [TD-1] Só a favor da tendência do diário (T38). Dentro do laço, e não na lista de
         # candidatos, para que o slot recusado vá para o próximo sinal -- foi assim que o
@@ -347,6 +412,8 @@ def auto_executar(saidas=None):
             vistos.add(s["ativo"])
             slots -= 1
             budget -= valor
+            if rajada is not None:                        # [RAJ-1] a entrada deste ciclo já conta
+                rajada[lado_s] = rajada.get(lado_s, 0) + 1
             with db.conectar() as con:                    # consome os outros 'novo' do ativo (anti-churn)
                 con.execute("UPDATE sinais SET status='pulado' WHERE ativo=? AND status='novo' AND id<>?",
                             (s["ativo"], s["id"]))

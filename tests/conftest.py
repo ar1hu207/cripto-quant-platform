@@ -33,6 +33,21 @@ import pytest                                                    # noqa: E402
 
 import db                                                        # noqa: E402
 import simulador                                                 # noqa: E402
+import tendencia                                                 # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _diario_sem_rede(monkeypatch):
+    """[CD-1] O scan passou a ler o diario do ativo para ANOTAR o sinal
+    (`signal_engine._anotar_diario`), e essa leitura e rede de verdade (`mercado.ex_spot`), por
+    um caminho que os dubles de `signal_engine.ex` nao cobrem. Sem isto, todo teste que roda o
+    scan e grava um sinal falaria com a Binance -- lento, e verde ou vermelho conforme a rede
+    do dia. Aqui o diario FALHA por padrao, que e o caso que o scan trata gravando NULL; quem
+    precisa de diario (tests/test_tendencia.py, tests/test_contexto_diario.py) troca
+    `tendencia._velas_1d` pelo proprio duble, por cima deste."""
+    def sem_diario(ativo):
+        raise ConnectionError("suite: o diario nao sai para a rede")
+    monkeypatch.setattr(tendencia, "_velas_1d", sem_diario)
 
 
 @pytest.fixture

@@ -479,6 +479,10 @@ CONFIG_CATALOGO = {
     "auto_fechar_saida":    ("bool",),
     "auto_freshness_min":   ("float", 0.5, 1440.0),
     "auto_cooldown_min":    ("float", 0.0, 1440.0),
+    # [RAJ-1] teto de rajada (autotrader.auto_executar). 0 em `auto_rajada_max` = desligado. A
+    # janela não admite 0: "N entradas em zero minutos" não barra nada e leria como ligado.
+    "auto_rajada_max":      ("int", 0, 20),
+    "auto_rajada_janela_min": ("float", 1.0, 1440.0),
     "auto_lev_modo":        ("enum", ("conviccao", "fixo", "risco")),
     "auto_lev_margem_frac": ("float", 0.0, 1.0),      # [LEV-1] 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min":         ("float", 1.0, 50.0),
@@ -674,6 +678,23 @@ CONFIG_RACIONAL = {
         "perfil conservador só entrega os 5 slots com stops largos. Subir este teto no perfil "
         "resolveria a aritmética AFROUXANDO uma guarda, o que é decisão do dono; fica medido "
         "em `tests/test_config.py` em vez de resolvido por conta própria."),
+    "auto_rajada_max": (
+        "VIVO 0 = DESLIGADO. Com N > 0, o bot abre no máximo N entradas do MESMO lado dentro "
+        "de `auto_rajada_janela_min` minutos; a vaga barrada vai para o próximo candidato e o "
+        "sinal barrado não é consumido. Nasceu de 17/11: quatro SHORTs de rompimento em 14 "
+        "minutos, na vela que fez a mínima da manhã, três stops e a trava do dia antes das 9h "
+        "-- a mesma informação contada quatro vezes, que nenhum teto via porque todos contam "
+        "vaga ou risco e nenhum conta QUANDO. ⚠️ NÃO FOI MEDIDO: é hipótese de um dia ruim, e "
+        "o histórico real de 02 a 15/11 não aponta um lado (entradas em bloco: +3,5R em 4 na "
+        "conta A, −2,1R em 2 na B). Não é o teto por direção, que o T12 e o histórico de setembro "
+        "reprovaram por cortar o dia de tendência: aquele limita posição aberta, este limita "
+        "ritmo, e passada a janela o lado abre de novo. Ligar é apertar, não afrouxar -- mas "
+        "apertar sem medida também custa, e o lugar de ligar primeiro é uma conta de teste."),
+    "auto_rajada_janela_min": (
+        "VIVO 30 minutos; só vale com `auto_rajada_max` > 0. Maior que `auto_freshness_min` "
+        "(12) de propósito: um sinal barrado por entradas da mesma vela de 15m envelhece antes "
+        "de a janela abrir, então barrar não vira entrar atrasado no mesmo movimento. Baixar "
+        "para perto de 12 transforma o teto em atraso."),
 }
 
 
