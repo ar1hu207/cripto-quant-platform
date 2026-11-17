@@ -30,15 +30,18 @@ import time
 import pandas as pd
 
 import mercado
-from indicadores import ema
+from indicadores import ema, rsi
 
 MODOS = ("off", "d1", "d2")
 DIA_MS = 86_400_000
 MIN_VELAS = 50
 LIMITE = 500        # EMA50 com 500 velas: o peso do valor inicial some (49/51)^450 ~ 1e-8
+RSI_N = 14          # [CD-1] o RSI do diário anotado no sinal
+RET_DIAS = 7        # [CD-1] retorno acumulado dos últimos N dias fechados
 
-# ativo -> (dia UTC em que foi calculado, {"d1": lado, "d2": lado}). O diário só muda na
-# virada do dia UTC, então uma requisição por ativo por dia basta.
+# ativo -> (dia UTC em que foi calculado, {"d1": lado, "d2": lado}, contexto). O diário só
+# muda na virada do dia UTC, então uma requisição por ativo por dia basta -- e ela serve aos
+# dois leitores: o filtro de lado [TD-1] e a anotação do sinal [CD-1].
 _cache = {}
 
 
@@ -59,7 +62,27 @@ def lados(raw, agora_ms):
     return {"d1": d1, "d2": d2}
 
 
-def lado(ativo, modo, agora_ms=None):
+def contexto_de(raw, agora_ms):
+    """[CD-1] Quão esticado o diário do ativo está, só com velas FECHADAS: o RSI de 14 dias e
+    o retorno acumulado dos últimos 7 dias, em %. `None` em cada campo que a história não
+    alcança -- ausência de medição, nunca zero (RSI 0 e retorno 0 são leituras de verdade).
+
+    É ANOTAÇÃO, não regra: nada no motor lê isto para decidir. Existe porque em 17/11 o motor
+    vendeu rompimentos de suporte no fundo de uma queda de 15% em 7 dias, com o RSI diário
+    médio em 30, e nenhuma coluna do sinal guardava esse estado para alguém conferir depois
+    se "esticado no diário" separa sinal bom de ruim. As versões mecânicas dessa leitura já
+    reprovaram fora da amostra (extensão de 24h, comprar pânico, filtro de regime), então o
+    juiz que sobra é o registro ao vivo -- e ele só julga o que foi gravado."""
+    c = pd.Series([float(v[4]) for v in raw if v[0] + DIA_MS <= agora_ms])
+    r = float(rsi(c, RSI_N).iloc[-1]) if len(c) > RSI_N else float("nan")
+    ret = None
+    if len(c) > RET_DIAS and c.iloc[-1 - RET_DIAS] > 0:
+        ret = round((float(c.iloc[-1]) / float(c.iloc[-1 - RET_DIAS]) - 1) * 100, 2)
+    return {"rsi": None if r != r else round(r, 1), "ret7": ret}      # r != r: NaN
+
+
+def _do_dia(ativo, agora_ms=None):
+    """A entrada do cache deste ativo para o dia UTC corrente; busca o diário se for preciso."""
     agora_ms = time.time() * 1000 if agora_ms is None else agora_ms
     dia = int(agora_ms // DIA_MS)
     ent = _cache.get(ativo)
@@ -71,9 +94,19 @@ def lado(ativo, modo, agora_ms=None):
         # deste módulo: o auto-trader pula o candidato no ciclo e tenta de novo no próximo.
         if not raw:
             raise RuntimeError(f"a corretora devolveu o diário de {ativo} vazio")
-        ent = (dia, lados(raw, agora_ms))
+        ent = (dia, lados(raw, agora_ms), contexto_de(raw, agora_ms))
         _cache[ativo] = ent
-    return ent[1][modo]
+    return ent
+
+
+def lado(ativo, modo, agora_ms=None):
+    return _do_dia(ativo, agora_ms)[1][modo]
+
+
+def contexto(ativo, agora_ms=None):
+    """[CD-1] `{"rsi", "ret7"}` do diário do ativo. Levanta em falha de rede, como `lado`:
+    quem decide o que fazer com a ausência é quem chama (o scan grava NULL e segue)."""
+    return _do_dia(ativo, agora_ms)[2]
 
 
 def permite(ativo, direcao, modo, agora_ms=None):

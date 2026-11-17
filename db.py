@@ -24,7 +24,12 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- contrafactual; sem ele o desfecho comecaria de um preco de ate 1 TF atras.
   vela_ms INTEGER, fluxo_comprador REAL, rejeicao TEXT,
   desfecho TEXT, desfecho_ts TEXT,   -- alvo|stop|aberto (24h sem tocar nenhum dos dois)
-  preco_1h REAL, preco_4h REAL, preco_24h REAL);
+  preco_1h REAL, preco_4h REAL, preco_24h REAL,
+  -- [CD-1] O estado do DIARIO do ativo no instante do sinal: RSI de 14 dias e retorno dos
+  -- ultimos 7 dias fechados, em %. E anotacao -- nenhuma regra le estas colunas. Servem para
+  -- cruzar depois com `desfecho` e com `trades` e responder, no registro ao vivo, se "esticado
+  -- no diario" separa sinal bom de ruim. NULL = nao medido (rede, ou sinal anterior a coluna).
+  rsi_d1 REAL, ret7_d1 REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -382,7 +387,8 @@ def _migrar(c):
     faltantes = {"sinais": [("tf", "TEXT"), ("tipo", "TEXT"),
                             ("vela_ms", "INTEGER"), ("fluxo_comprador", "REAL"), ("rejeicao", "TEXT"),
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
-                            ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL")],
+                            ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL"),
+                            ("rsi_d1", "REAL"), ("ret7_d1", "REAL")],   # [CD-1] contexto do diario
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),

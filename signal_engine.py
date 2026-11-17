@@ -23,6 +23,7 @@ import db
 from logbot import log
 import mercado
 import alvos
+import tendencia
 from scoring import preparar, pontuar, pontuar_reversao
 
 ex = mercado.ex_spot                # [memoria] o cliente do processo, nao uma copia (~110 MB cada)
@@ -420,14 +421,32 @@ def _repetido(con, s, ativo, tf, status, ts):
                 or abs(s["conviccao"] - ult["conviccao"]) >= 10)
 
 
+def _anotar_diario(s, ativo):
+    """[CD-1] Anota no sinal o estado do DIÁRIO do ativo (`rsi_d1`, `ret7_d1`). Não decide nada.
+
+    Roda ANTES de abrir a conexão do `_gravar`, porque a primeira leitura do dia de cada ativo
+    é uma requisição (`tendencia` guarda o resto do dia UTC): rede não fica dentro de
+    transação. Falha de rede aqui NÃO pode custar o sinal -- é o contrário do filtro [TD-1],
+    onde não saber o lado é motivo para não abrir. Uma anotação que derrubasse a varredura
+    trocaria um dado de pesquisa pela fila inteira; sem ela o sinal sai com as duas colunas
+    NULL, que é ausência de medição e não zero."""
+    try:
+        ctx = tendencia.contexto(ativo)
+    except Exception as e:
+        log(f"[CD-1] diário de {ativo} indisponível, sinal sem anotação: {type(e).__name__}: {str(e)[:100]}")
+        return
+    s["rsi_d1"], s["ret7_d1"] = ctx["rsi"], ctx["ret7"]
+
+
 def _gravar(con, ts, s, ativo, tf, status, rejeicao):
     """INSERT único pros dois grupos — a mesma linha, o mesmo dedupe, só o status muda.
     É o que permite comparar os dois depois sem discutir se a amostragem foi diferente."""
     con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
-                "status,vela_ms,fluxo_comprador,rejeicao) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
                  s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
-                 s.get("fluxo_comprador"), rejeicao))
+                 s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1")))
 
 
 def _desfecho(sinal, velas):
@@ -589,10 +608,12 @@ def _varrer():
                     if s.get("rejeitado_por") == "fluxo":
                         # [Q-4] a rejeição por fluxo é o único dado que valida o portão, e ela
                         # só existe agora: não há book/taker histórico pra reconstruir depois.
+                        _anotar_diario(s, a)             # [CD-1] os DOIS grupos, como o fluxo
                         with db.conectar() as con:
                             if not _repetido(con, s, a, tf, REJEITADO_FLUXO, ts):
                                 _gravar(con, ts, s, a, tf, REJEITADO_FLUXO, motivo_rej)
                     continue
+                _anotar_diario(s, a)                     # [CD-1] anota; não filtra
                 with db.conectar() as con:
                     if not _repetido(con, s, a, tf, "novo", ts):
                         _gravar(con, ts, s, a, tf, "novo", None)
