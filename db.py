@@ -29,7 +29,13 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- ultimos 7 dias fechados, em %. E anotacao -- nenhuma regra le estas colunas. Servem para
   -- cruzar depois com `desfecho` e com `trades` e responder, no registro ao vivo, se "esticado
   -- no diario" separa sinal bom de ruim. NULL = nao medido (rede, ou sinal anterior a coluna).
-  rsi_d1 REAL, ret7_d1 REAL);
+  rsi_d1 REAL, ret7_d1 REAL,
+  -- [AG-1] Agitacao do ativo contra o normal DELE: distancia do stop deste sinal (3xATR/preco)
+  -- dividida pela mediana da mesma distancia nos ate 200 sinais anteriores do mesmo
+  -- ativo+tf+tipo (`signal_engine._agitacao`). 1,0 = normal; 1,5 = ATR 50% acima do normal.
+  -- NULL = menos de 30 sinais anteriores (nao ha normal), ou sinal anterior a coluna. So a
+  -- chave `auto_agitacao_corte` le esta coluna, e ela nasce desligada.
+  atr_rel REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -395,7 +401,8 @@ def _migrar(c):
                             ("vela_ms", "INTEGER"), ("fluxo_comprador", "REAL"), ("rejeicao", "TEXT"),
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL"),
-                            ("rsi_d1", "REAL"), ("ret7_d1", "REAL")],   # [CD-1] contexto do diario
+                            ("rsi_d1", "REAL"), ("ret7_d1", "REAL"),    # [CD-1] contexto do diario
+                            ("atr_rel", "REAL")],                       # [AG-1] agitacao vs normal
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),
@@ -444,6 +451,14 @@ INDICES = [
     # indice so: o filtro e a ordem. Sem ele, "quando o auto_trade mudou" e full scan sobre uma
     # tabela append-only -- pequena hoje, e que so cresce.
     "CREATE INDEX IF NOT EXISTS idx_cfg_aud_chave ON config_auditoria(chave, id DESC)",
+    # [AG-1] `signal_engine._agitacao` le, a cada sinal gravado, os ultimos sinais do mesmo
+    # ativo+tf+tipo. Sem indice isso e uma varredura de `sinais` de tras para frente por INSERT:
+    # ~3 ms com 20 mil linhas, irrelevante ao vivo (~130 sinais por dia) e quadratico no
+    # `pesquisa/backtest_portfolio`, que grava dezenas de milhares numa rodada (medido: 20 mil
+    # sinais em 64 s sem o indice). O rowid fecha a chave do indice, entao o `ORDER BY id DESC`
+    # sai dele sem ordenar. O dedupe do `_repetido` filtra pelas mesmas tres colunas e passa a
+    # usa-lo tambem.
+    "CREATE INDEX IF NOT EXISTS idx_sinais_par ON sinais(ativo, tf, tipo)",
 ]
 
 
