@@ -10,6 +10,7 @@ Rodar:  python signal_engine.py               (loop)
         python signal_engine.py --cronometro  ([F-13] cronometra um ciclo do worker, COM rede)
         python signal_engine.py --cronometro --repetir 2   (o 2o ciclo ja e o REGIME: [F-10])
 """
+import statistics
 import sys
 import threading
 import time
@@ -438,15 +439,86 @@ def _anotar_diario(s, ativo):
     s["rsi_d1"], s["ret7_d1"] = ctx["rsi"], ctx["ret7"]
 
 
+# [AG-1] O "normal" de um ativo são os sinais ANTERIORES dele: até AGITACAO_JANELA velas de sinal
+# do mesmo ativo+tf+tipo, e no mínimo AGITACAO_MIN. São os dois números com que a medida foi
+# feita em 18/11 (mediana dos 200 sinais anteriores, mínimo de 30). Não são config de usuário:
+# mudá-los muda o que `atr_rel` significa, e coluna gravada com outra janela não se compara com
+# a de antes.
+AGITACAO_JANELA = 200
+AGITACAO_MIN = 30
+
+
+def _dist_stop(preco, stop):
+    """Distância relativa preço→stop de um sinal, ou None se não há geometria medível."""
+    try:
+        preco, stop = float(preco), float(stop)
+    except (TypeError, ValueError):
+        return None
+    if preco <= 0 or stop <= 0 or preco == stop:
+        return None
+    return abs(preco - stop) / preco
+
+
+def _agitacao(con, s, ativo, tf):
+    """[AG-1] Quão agitado o ativo está contra o normal DELE, no instante do sinal.
+
+    A distância do stop do sinal é `k x ATR / preço` (`scoring`: k = 3 na tendência, 2,5 na
+    reversão), então a razão entre duas distâncias do mesmo tipo é a razão entre os ATR% -- e
+    por isso a conta sai das colunas que `sinais` já tem, sem coluna de ATR e valendo desde o
+    primeiro dia para o histórico que o banco já guarda. Devolve a distância deste sinal
+    dividida pela mediana da distância nas velas de sinal anteriores do mesmo ativo+tf+tipo.
+
+    Uma vela conta UMA vez: o mesmo candle costuma aparecer nas duas linhagens (fila e
+    rejeitado por fluxo) e de novo quando a convicção varia, e contá-lo três vezes puxaria a
+    mediana para ele. A vela do próprio sinal fica de fora pelo mesmo motivo -- senão a rejeição
+    gravada um minuto antes entraria no "normal" do sinal que a sucede. Linha sem `vela_ms`
+    (anterior ao [Q-4], ou gravada por teste) conta sozinha.
+
+    None = não há normal ainda (menos de AGITACAO_MIN velas) ou o sinal não tem geometria. É
+    ausência de medição, e quem lê a coluna trata como "sem bandeira", nunca como calmo."""
+    dist = _dist_stop(s.get("preco"), s.get("stop_sugerido"))
+    if dist is None:
+        return None
+    vela, vistas, dists = s.get("vela_ms"), set(), []
+    for r in con.execute(
+            "SELECT preco, stop_sugerido, vela_ms FROM sinais WHERE ativo=? AND tf=? AND tipo=? "
+            "ORDER BY id DESC LIMIT ?", (ativo, tf, s["tipo"], 3 * AGITACAO_JANELA)):
+        v = r["vela_ms"]
+        if v is not None:
+            if v == vela or v in vistas:
+                continue
+            vistas.add(v)
+        d = _dist_stop(r["preco"], r["stop_sugerido"])
+        if d is not None:
+            dists.append(d)
+            if len(dists) >= AGITACAO_JANELA:
+                break
+    if len(dists) < AGITACAO_MIN:
+        return None
+    return round(dist / statistics.median(dists), 4)
+
+
 def _gravar(con, ts, s, ativo, tf, status, rejeicao):
     """INSERT único pros dois grupos — a mesma linha, o mesmo dedupe, só o status muda.
-    É o que permite comparar os dois depois sem discutir se a amostragem foi diferente."""
+    É o que permite comparar os dois depois sem discutir se a amostragem foi diferente.
+
+    [AG-1] A agitação é calculada AQUI, e não no scan como o [CD-1], por dois motivos: ela só lê
+    o banco (não há rede para tirar de dentro da transação), e `pesquisa/backtest_portfolio`
+    chama esta função direto -- anotando aqui, o backtest grava a mesma coluna que o vivo e a
+    chave `auto_agitacao_corte` pode ser medida lá sem código novo. Antes do INSERT, para o
+    sinal não entrar no próprio normal. Falha na conta não custa o sinal: grava NULL e segue."""
+    try:
+        atr_rel = _agitacao(con, s, ativo, tf)
+    except Exception as e:
+        log(f"[AG-1] agitação de {ativo} {tf} não calculada, sinal sem anotação: "
+            f"{type(e).__name__}: {str(e)[:100]}")
+        atr_rel = None
     con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
-                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
                  s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
-                 s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1")))
+                 s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1"), atr_rel))
 
 
 def _desfecho(sinal, velas):

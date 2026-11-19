@@ -29,7 +29,13 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- ultimos 7 dias fechados, em %. E anotacao -- nenhuma regra le estas colunas. Servem para
   -- cruzar depois com `desfecho` e com `trades` e responder, no registro ao vivo, se "esticado
   -- no diario" separa sinal bom de ruim. NULL = nao medido (rede, ou sinal anterior a coluna).
-  rsi_d1 REAL, ret7_d1 REAL);
+  rsi_d1 REAL, ret7_d1 REAL,
+  -- [AG-1] Agitacao do ativo contra o normal DELE: distancia do stop deste sinal (3xATR/preco)
+  -- dividida pela mediana da mesma distancia nos ate 200 sinais anteriores do mesmo
+  -- ativo+tf+tipo (`signal_engine._agitacao`). 1,0 = normal; 1,5 = ATR 50% acima do normal.
+  -- NULL = menos de 30 sinais anteriores (nao ha normal), ou sinal anterior a coluna. So a
+  -- chave `auto_agitacao_corte` le esta coluna, e ela nasce desligada.
+  atr_rel REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -184,6 +190,15 @@ CONFIG_PADRAO = {
     # `autotrader.auto_executar`. Ligar é decisão do dono, e o lugar é uma conta de teste.
     "auto_rajada_max": "0",          # 0 = desligado | N = máx. de entradas por lado na janela
     "auto_rajada_janela_min": "30",  # a janela, em minutos (> auto_freshness_min, de propósito)
+    # [AG-2] Tamanho menor no ativo AGITADO acima do normal dele. Nasce desligado (corte 0).
+    # Ligado, o sinal de tendência com `sinais.atr_rel` >= corte abre com `risco_por_trade` x
+    # `auto_agitacao_frac`; o resto do trade (stop, alavancagem, tetos) não muda. Medido em
+    # 18/11 nos trades da regra de produção: o terço mais agitado rendeu −0,14R por trade em
+    # 2023-26 e −0,11R em 2020-22, contra +0,23R e +0,06R do terço calmo; o corte desse terço
+    # foi 1,18. Ressalvas no racional do `GET /catalogo`: 2026 inverteu, e é a mesma família do
+    # medidor M1. Só reduz -- a fração não passa de 1. Ligar é decisão do dono.
+    "auto_agitacao_corte": "0",      # 0 = desligado | 1.18 = o corte medido (terço de cima)
+    "auto_agitacao_frac": "0.5",     # fração do risco no sinal agitado (0,5 = meio tamanho)
     # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
     # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
     # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o
@@ -395,7 +410,8 @@ def _migrar(c):
                             ("vela_ms", "INTEGER"), ("fluxo_comprador", "REAL"), ("rejeicao", "TEXT"),
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL"),
-                            ("rsi_d1", "REAL"), ("ret7_d1", "REAL")],   # [CD-1] contexto do diario
+                            ("rsi_d1", "REAL"), ("ret7_d1", "REAL"),    # [CD-1] contexto do diario
+                            ("atr_rel", "REAL")],                       # [AG-1] agitacao vs normal
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),
@@ -444,6 +460,14 @@ INDICES = [
     # indice so: o filtro e a ordem. Sem ele, "quando o auto_trade mudou" e full scan sobre uma
     # tabela append-only -- pequena hoje, e que so cresce.
     "CREATE INDEX IF NOT EXISTS idx_cfg_aud_chave ON config_auditoria(chave, id DESC)",
+    # [AG-1] `signal_engine._agitacao` le, a cada sinal gravado, os ultimos sinais do mesmo
+    # ativo+tf+tipo. Sem indice isso e uma varredura de `sinais` de tras para frente por INSERT:
+    # ~3 ms com 20 mil linhas, irrelevante ao vivo (~130 sinais por dia) e quadratico no
+    # `pesquisa/backtest_portfolio`, que grava dezenas de milhares numa rodada (medido: 20 mil
+    # sinais em 64 s sem o indice). O rowid fecha a chave do indice, entao o `ORDER BY id DESC`
+    # sai dele sem ordenar. O dedupe do `_repetido` filtra pelas mesmas tres colunas e passa a
+    # usa-lo tambem.
+    "CREATE INDEX IF NOT EXISTS idx_sinais_par ON sinais(ativo, tf, tipo)",
 ]
 
 
