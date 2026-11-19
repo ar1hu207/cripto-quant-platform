@@ -213,6 +213,11 @@ CONFIG_PADRAO = {
     # os mesmos SHORTs fizeram +20,7R ao vivo na conta A em novembro. Ver `autotrader._esticado`.
     "auto_esticado_modo": "off",     # off | meio (metade do risco) | veto (não vende)
     "auto_esticado_ret7": "-10",     # o corte, em % dos últimos 7 dias fechados
+    # [DV-2] Não abrir com a volatilidade implícita do BTC (DVOL) de ontem no percentil >= corte
+    # dos 180 dias anteriores (`sinais.dvol_pct`, [DV-1]). Nasce desligado. Medido em 19/11 (T61,
+    # T63): +0,54R/trade na descoberta, +0,25R na reserva, e a carteira melhora. Ver
+    # `autotrader._dvol_alto`. Ligar é decisão do dono, e o lugar é uma conta de teste.
+    "auto_dvol_corte": "0",          # 0 = desligado | 0.8 = o corte medido
     # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
     # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
     # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o
