@@ -246,6 +246,45 @@ def _fracao_agitacao(cfg, s):
     return frac if 0 < frac <= 1 else 1.0
 
 
+ESTICADO_MEIO = 0.5
+
+
+def _esticado(modo, corte, s):
+    """[EST-1] `(fração do risco, ret7)` para este sinal: 1,0 (abre inteiro), 0,5 (meio) ou
+    0,0 (veto). Levanta se o diário não vier -- quem chama pula o sinal no ciclo.
+
+    Vale só para SHORT de tendência, e só com `auto_esticado_modo` em `meio` ou `veto`: quando
+    o retorno dos últimos 7 dias FECHADOS do ativo (`tendencia.contexto`, a mesma conta que o
+    [CD-1] grava em `sinais.ret7_d1`) é <= `auto_esticado_ret7` (−10%).
+
+    A causa que ele ataca: a entrada de tendência vende rompimento de suporte do gráfico de
+    15m/30m/1h, e esse gráfico não sabe que o diário já caiu 15% na semana. Vendido ali, o
+    trade é o último da fila de vendedores e o primeiro a apanhar no repique -- 17/11 e 18/11
+    foram isso (BNB e SUI stopados nas três contas). Medido em 19/11 (T54) nos trades da regra
+    de produção: SHORT com 7d <= −10% rendeu −0,344R por trade em 2023-26 [−0,597; −0,060] e
+    −0,395R em 2020-22 [−0,622; −0,178]. O LONG esticado para cima NÃO é pior, então a regra
+    não é simétrica de propósito.
+
+    O outro lado, e é por isso que existe `meio` e não só `veto`: ao vivo, de 02/11 a 18/11,
+    esses mesmos SHORTs renderam +20,7R na conta A e +7,2R na B (−4,7R na C) -- novembro foi
+    uma queda que continuou --, e em 2026 o histórico fica perto de zero (−0,04R). Vetar teria
+    tirado o lucro do mês; meio tamanho paga metade da conta nos dois cenários.
+
+    Reversão fica de fora: a medida foi feita só na tendência. `ret7` ausente (moeda com menos
+    de 8 dias de diário) abre inteiro: ausência de medição não é bandeira.
+
+    A versão-sintoma, que não foi feita: baixar `risco_por_trade` ou ligar um filtro macro
+    (DXY, S&P, petróleo -- o T27 reprovou os 15 filtros e os 8 gatilhos). A primeira encolhe
+    toda venda, inclusive a que vende o topo; a segunda não separou nada."""
+    if modo not in ("meio", "veto") or str(s.get("direcao") or "").upper() != "SHORT" \
+            or s.get("tipo") != "tendencia":
+        return 1.0, None
+    r7 = tendencia.contexto(s["ativo"]).get("ret7")
+    if r7 is None or not r7 <= corte:
+        return 1.0, r7
+    return (0.0 if modo == "veto" else ESTICADO_MEIO), r7
+
+
 def _entradas_recentes(agora, janela_min):
     """[RAJ-1] Quantas entradas nasceram em cada lado nos últimos `janela_min` minutos.
 
@@ -399,6 +438,10 @@ def auto_executar(saidas=None):
               if rajada_max > 0 else None)
     res["rajada"] = []
     res["agitacao"] = []                              # [AG-2] quem abriu com o risco reduzido
+    # [EST-1] Venda com o diário já esticado para baixo. Ver `_esticado`.
+    modo_est = str(cfg.get("auto_esticado_modo", "off") or "off").strip().lower()
+    corte_est = simulador._cfg_float(cfg, "auto_esticado_ret7", -10.0)
+    res["esticado"] = []                              # [EST-1] {ativo, ret7, acao: veto|meio}
     vistos = set()
     for s in cands:
         if slots <= 0 or budget < min_valor:
@@ -421,6 +464,16 @@ def auto_executar(saidas=None):
             except Exception as e:
                 res["rejeitados"].append({"ativo": s["ativo"], "erro": f"tendência n/d: {e}"})
                 continue
+        # [EST-1] Rede falhou: pula no ciclo, como o [TD-1] -- com a chave ligada, abrir sem
+        # saber o diário seria abrir inteira justamente a venda que ela existe para segurar.
+        try:
+            frac_est, r7 = _esticado(modo_est, corte_est, s)
+        except Exception as e:
+            res["rejeitados"].append({"ativo": s["ativo"], "erro": f"diário n/d: {e}"})
+            continue
+        if frac_est == 0.0:                               # veto: o sinal segue 'novo', a vaga anda
+            res["esticado"].append({"ativo": s["ativo"], "ret7": r7, "acao": "veto"})
+            continue
         # [P1-11] a lev sai da convicção e passa pelo cap geométrico ANTES de dimensionar: a
         # margem tem de ser calculada sobre a alavancagem que vai ser aberta de fato. O
         # `simulador.abrir` recompõe o stop mantendo a distância RELATIVA do sinal (`stop_rel`),
@@ -431,7 +484,7 @@ def auto_executar(saidas=None):
         # alavancagem fica a do trade inteiro, de propósito: é o mesmo trade com menos
         # dinheiro, e a geometria stop/liquidação que o `_cap_geometrico` garantiu não muda.
         frac_ag = _fracao_agitacao(cfg, s)
-        valor = _tamanho(banca, risco_frac * frac_ag, lev, s["preco"], s["stop_sugerido"], max_frac,
+        valor = _tamanho(banca, risco_frac * frac_ag * frac_est, lev, s["preco"], s["stop_sugerido"], max_frac,
                          ativo=s["ativo"])
         if valor <= 0:                                    # banca não comporta: pula
             continue
@@ -464,6 +517,10 @@ def auto_executar(saidas=None):
                 res["agitacao"].append(s["ativo"])
                 log(f"[AG-2] {s['ativo']} agitado (atr_rel {s.get('atr_rel')}): "
                     f"risco x{frac_ag:g}, valor R${valor:.2f}")
+            if frac_est < 1.0:                            # [EST-1] idem
+                res["esticado"].append({"ativo": s["ativo"], "ret7": r7, "acao": "meio"})
+                log(f"[EST-1] {s['ativo']} SHORT com o diário em {r7:+.1f}% em 7d: "
+                    f"risco x{frac_est:g}, valor R${valor:.2f}")
             with db.conectar() as con:                    # consome os outros 'novo' do ativo (anti-churn)
                 con.execute("UPDATE sinais SET status='pulado' WHERE ativo=? AND status='novo' AND id<>?",
                             (s["ativo"], s["id"]))
