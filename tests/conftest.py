@@ -34,6 +34,7 @@ import pytest                                                    # noqa: E402
 import db                                                        # noqa: E402
 import simulador                                                 # noqa: E402
 import tendencia                                                 # noqa: E402
+import dvol                                                      # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +49,21 @@ def _diario_sem_rede(monkeypatch):
     def sem_diario(ativo):
         raise ConnectionError("suite: o diario nao sai para a rede")
     monkeypatch.setattr(tendencia, "_velas_1d", sem_diario)
+
+
+@pytest.fixture(autouse=True)
+def _dvol_sem_rede(monkeypatch):
+    """[DV-1] O scan passou a ler o DVOL da Deribit para ANOTAR o sinal
+    (`signal_engine._anotar_dvol`). Mesmo motivo do `_diario_sem_rede`: sem isto, todo teste que
+    roda o scan falaria com a Deribit. Aqui a leitura FALHA por padrao (o scan grava NULL); quem
+    precisa de DVOL (tests/test_dvol.py) troca `dvol._baixar` pelo proprio duble. O cache e
+    zerado nos dois sentidos, porque ele vive no modulo e sobreviveria de um teste ao outro."""
+    def sem_dvol(agora_ms):
+        raise ConnectionError("suite: o DVOL nao sai para a rede")
+    dvol._cache.clear()
+    monkeypatch.setattr(dvol, "_baixar", sem_dvol)
+    yield
+    dvol._cache.clear()
 
 
 @pytest.fixture

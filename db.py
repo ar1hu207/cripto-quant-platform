@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- [SR-3] Distancia, em R do sinal, ao nivel INTACTO do 4h mais proximo a frente (resistencia
   -- acima do LONG, suporte abaixo do SHORT; `alvos.parede_r`). 99 = nenhum nivel intacto nos
   -- ultimos 50 dias. NULL = nao medido. Anotacao: nenhuma regra le esta coluna (T58, 19/11).
-  parede_4h REAL);
+  parede_4h REAL,
+  -- [DV-1] Percentil do DVOL (volatilidade implicita do BTC, Deribit) de ONTEM contra os 180
+  -- dias anteriores (`dvol.contexto`), 0..1. O mesmo para todos os sinais do dia: e leitura do
+  -- mercado, nao do ativo. NULL = Deribit fora do ar, ou sinal anterior a coluna. So a chave
+  -- `auto_dvol_corte` le esta coluna, e ela nasce desligada.
+  dvol_pct REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -425,7 +430,8 @@ def _migrar(c):
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL"),
                             ("rsi_d1", "REAL"), ("ret7_d1", "REAL"),    # [CD-1] contexto do diario
                             ("atr_rel", "REAL"),                        # [AG-1] agitacao vs normal
-                            ("parede_4h", "REAL")],                     # [SR-3] nivel do 4h a frente
+                            ("parede_4h", "REAL"),                      # [SR-3] nivel do 4h a frente
+                            ("dvol_pct", "REAL")],                      # [DV-1] DVOL de ontem
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),

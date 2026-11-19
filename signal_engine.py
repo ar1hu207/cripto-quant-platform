@@ -24,6 +24,7 @@ import db
 from logbot import log
 import mercado
 import alvos
+import dvol
 import tendencia
 from scoring import preparar, pontuar, pontuar_reversao
 
@@ -458,6 +459,20 @@ def _anotar_parede(s, ativo):
         log(f"[SR-3] 4h de {ativo} indisponível, sinal sem parede: {type(e).__name__}: {str(e)[:100]}")
 
 
+def _anotar_dvol(s):
+    """[DV-1] Anota no sinal o percentil do DVOL de ontem (`dvol.contexto`). Não decide nada: só
+    a chave `auto_dvol_corte` lê a coluna, e ela nasce desligada.
+
+    Mesma disciplina do [CD-1]: fora da transação do `_gravar` (a primeira leitura do dia UTC é
+    uma requisição à Deribit; o resto do dia sai do cache), e falha aqui NÃO custa o sinal --
+    grava NULL e segue. Uma anotação que derrubasse a varredura trocaria um dado de pesquisa
+    pela fila inteira."""
+    try:
+        s["dvol_pct"] = dvol.contexto()["pct"]
+    except Exception as e:
+        log(f"[DV-1] DVOL indisponível, sinal sem anotação: {type(e).__name__}: {str(e)[:100]}")
+
+
 # [AG-1] O "normal" de um ativo são os sinais ANTERIORES dele: até AGITACAO_JANELA velas de sinal
 # do mesmo ativo+tf+tipo, e no mínimo AGITACAO_MIN. São os dois números com que a medida foi
 # feita em 18/11 (mediana dos 200 sinais anteriores, mínimo de 30). Não são config de usuário:
@@ -533,12 +548,12 @@ def _gravar(con, ts, s, ativo, tf, status, rejeicao):
             f"{type(e).__name__}: {str(e)[:100]}")
         atr_rel = None
     con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
-                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h,dvol_pct) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
                  s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
                  s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1"), atr_rel,
-                 s.get("parede_4h")))
+                 s.get("parede_4h"), s.get("dvol_pct")))
 
 
 def _desfecho(sinal, velas):
@@ -702,12 +717,14 @@ def _varrer():
                         # só existe agora: não há book/taker histórico pra reconstruir depois.
                         _anotar_diario(s, a)             # [CD-1] os DOIS grupos, como o fluxo
                         _anotar_parede(s, a)             # [SR-3] idem
+                        _anotar_dvol(s)                  # [DV-1] idem
                         with db.conectar() as con:
                             if not _repetido(con, s, a, tf, REJEITADO_FLUXO, ts):
                                 _gravar(con, ts, s, a, tf, REJEITADO_FLUXO, motivo_rej)
                     continue
                 _anotar_diario(s, a)                     # [CD-1] anota; não filtra
                 _anotar_parede(s, a)                     # [SR-3] anota; não filtra
+                _anotar_dvol(s)                          # [DV-1] anota; não filtra
                 with db.conectar() as con:
                     if not _repetido(con, s, a, tf, "novo", ts):
                         _gravar(con, ts, s, a, tf, "novo", None)
