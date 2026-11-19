@@ -38,10 +38,13 @@ def pontuar(df, i):
         score += 5 + min((adxv - 25) / 25, 1) * 35
         motivos.append(f"ADX {adxv:.0f}")
     score += min(abs(er - el) / c * 100 / 2, 1) * 10
+    # [SR-1] O rótulo diz o que a conta é: o Donchian 20 do gráfico do sinal (no 15m, a máxima/mínima
+    # das últimas 5 horas). Dizia "rompeu suporte/resistência", e só 25-33% dessas entradas estão
+    # além de um nível do 4h que ainda segurava (T58, 19/11). O número e o peso não mudam.
     if direcao == 1 and not np.isnan(dch_a) and c >= dch_a:
-        score += 22; motivos.append("rompeu resistência")
+        score += 22; motivos.append("rompeu a máxima de 20 velas")
     elif direcao == -1 and not np.isnan(dcl_a) and c <= dcl_a:
-        score += 22; motivos.append("rompeu suporte")
+        score += 22; motivos.append("rompeu a mínima de 20 velas")
     if direcao == 1 and 45 <= r <= 72:
         score += 18; motivos.append(f"RSI {r:.0f}")
     elif direcao == -1 and 28 <= r <= 55:
