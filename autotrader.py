@@ -205,6 +205,47 @@ def _tamanho(banca, risco_frac, lev, entrada, stop, max_frac, min_valor=10.0, at
     return round(valor, 2)
 
 
+def _fracao_agitacao(cfg, s):
+    """[AG-2] Fração do `risco_por_trade` com que este sinal abre: 1,0 ou `auto_agitacao_frac`.
+
+    Com `auto_agitacao_corte` > 0, o sinal de tendência cujo `atr_rel` (`signal_engine._agitacao`:
+    ATR do sinal contra a mediana dos sinais anteriores do mesmo ativo) é >= corte abre com o
+    risco multiplicado pela fração. 0 = desligado, e é como nasce.
+
+    A causa que ele ataca: o motor arrisca o MESMO tanto em todo sinal, e o resultado não é o
+    mesmo. Medido em 18/11 nos trades da regra de produção (15m/30m/1h), com a razão calculada
+    só com sinais anteriores: o terço mais agitado rendeu −0,14R por trade em 2023-26 e −0,11R
+    em 2020-22, o mais calmo +0,23R e +0,06R; a diferença tem IC de 95% fora do zero nas duas
+    janelas e o mesmo sentido em 6 de 7 anos (2026 inverteu). Só 23% e 29% dos 5% melhores
+    trades estavam no terço agitado, então meio tamanho ali corta pouco da cauda que paga a
+    conta. O corte desse terço foi 1,18.
+
+    O que ele NÃO é: remédio de dia lateral. A pergunta que o originou foi essa, e a resposta
+    medida foi que o "caixote" não tem memória (o que as últimas 6/12/24h foram não avisa as
+    próximas) e que reduzir dentro dele inverte de sinal entre as janelas. Nos 10% piores dias
+    esta regra corta ~20% da perda, pouco mais que reduzir tudo por igual; em 17/11 os três
+    SHORTs stopados estavam CALMOS (0,75, 0,77 e 1,08) e passariam inteiros.
+
+    Só reduz: fração fora de (0, 1] deixa a regra inerte em vez de inflar ou zerar o risco, e
+    o catálogo do `POST /config` já recusa esse valor na entrada. Sem `atr_rel` (menos de 30
+    sinais anteriores, ou sinal anterior à coluna) o sinal abre inteiro: ausência de medição
+    não é bandeira. Reversão fica de fora -- a medida foi feita só na tendência.
+
+    A versão-sintoma, que não foi feita: um detector de dia lateral reduzindo o tamanho. É a
+    quinta forma dessa ideia, e as cinco caíram fora da amostra."""
+    corte = simulador._cfg_float(cfg, "auto_agitacao_corte", 0.0)
+    if corte <= 0 or s.get("tipo") != "tendencia":
+        return 1.0
+    try:
+        rel = float(s.get("atr_rel"))
+    except (TypeError, ValueError):
+        return 1.0
+    if not rel >= corte:                        # NaN cai aqui: comparação falsa, sinal inteiro
+        return 1.0
+    frac = simulador._cfg_float(cfg, "auto_agitacao_frac", 0.5)
+    return frac if 0 < frac <= 1 else 1.0
+
+
 def _entradas_recentes(agora, janela_min):
     """[RAJ-1] Quantas entradas nasceram em cada lado nos últimos `janela_min` minutos.
 
@@ -357,6 +398,7 @@ def auto_executar(saidas=None):
     rajada = (_entradas_recentes(agora, simulador._cfg_float(cfg, "auto_rajada_janela_min", 30.0))
               if rajada_max > 0 else None)
     res["rajada"] = []
+    res["agitacao"] = []                              # [AG-2] quem abriu com o risco reduzido
     vistos = set()
     for s in cands:
         if slots <= 0 or budget < min_valor:
@@ -385,7 +427,11 @@ def auto_executar(saidas=None):
         # então a garantia "liquidação atrás do stop" sobrevive ao preço de entrada ao vivo.
         stop_dist = _stop_dist(s["preco"], s["stop_sugerido"])
         lev = _alavancagem(cfg, s["conviccao"], stop_dist, s["ativo"])
-        valor = _tamanho(banca, risco_frac, lev, s["preco"], s["stop_sugerido"], max_frac,
+        # [AG-2] O ativo agitado acima do normal dele abre com uma fração do risco. A
+        # alavancagem fica a do trade inteiro, de propósito: é o mesmo trade com menos
+        # dinheiro, e a geometria stop/liquidação que o `_cap_geometrico` garantiu não muda.
+        frac_ag = _fracao_agitacao(cfg, s)
+        valor = _tamanho(banca, risco_frac * frac_ag, lev, s["preco"], s["stop_sugerido"], max_frac,
                          ativo=s["ativo"])
         if valor <= 0:                                    # banca não comporta: pula
             continue
@@ -414,6 +460,10 @@ def auto_executar(saidas=None):
             budget -= valor
             if rajada is not None:                        # [RAJ-1] a entrada deste ciclo já conta
                 rajada[lado_s] = rajada.get(lado_s, 0) + 1
+            if frac_ag < 1.0:                             # [AG-2] fica escrito: não age em silêncio
+                res["agitacao"].append(s["ativo"])
+                log(f"[AG-2] {s['ativo']} agitado (atr_rel {s.get('atr_rel')}): "
+                    f"risco x{frac_ag:g}, valor R${valor:.2f}")
             with db.conectar() as con:                    # consome os outros 'novo' do ativo (anti-churn)
                 con.execute("UPDATE sinais SET status='pulado' WHERE ativo=? AND status='novo' AND id<>?",
                             (s["ativo"], s["id"]))

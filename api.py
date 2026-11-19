@@ -483,6 +483,11 @@ CONFIG_CATALOGO = {
     # janela não admite 0: "N entradas em zero minutos" não barra nada e leria como ligado.
     "auto_rajada_max":      ("int", 0, 20),
     "auto_rajada_janela_min": ("float", 1.0, 1440.0),
+    # [AG-2] tamanho menor no ativo agitado (autotrader._fracao_agitacao). Corte 0 = desligado.
+    # A fração não passa de 1 nem chega a 0: a chave só REDUZ o risco de um sinal, e "reduzir a
+    # zero" é não operar, que é outra decisão e tem outra chave.
+    "auto_agitacao_corte":  ("float", 0.0, 10.0),
+    "auto_agitacao_frac":   ("float", 0.1, 1.0),
     "auto_lev_modo":        ("enum", ("conviccao", "fixo", "risco")),
     "auto_lev_margem_frac": ("float", 0.0, 1.0),      # [LEV-1] 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min":         ("float", 1.0, 50.0),
@@ -695,6 +700,25 @@ CONFIG_RACIONAL = {
         "(12) de propósito: um sinal barrado por entradas da mesma vela de 15m envelhece antes "
         "de a janela abrir, então barrar não vira entrar atrasado no mesmo movimento. Baixar "
         "para perto de 12 transforma o teto em atraso."),
+    "auto_agitacao_corte": (
+        "VIVO 0 = DESLIGADO. Com corte > 0, o sinal de tendência cujo `atr_rel` (ATR do sinal "
+        "dividido pela mediana dos até 200 sinais anteriores do mesmo ativo e gráfico) é >= "
+        "corte abre com `risco_por_trade` x `auto_agitacao_frac`. O valor medido é 1,18: o "
+        "terço mais agitado dos trades da regra de produção. MEDIDO em 18/11 em duas janelas: "
+        "esse terço rendeu −0,14R por trade em 2023-26 e −0,11R em 2020-22, contra +0,23R e "
+        "+0,06R do terço calmo (diferença com IC de 95% fora do zero nas duas, mesmo sentido em "
+        "6 de 7 anos). ⚠️ Ressalvas: 2026 foi o ano que inverteu; é a mesma família do medidor "
+        "M1/ATR% que passou no lacrado em 02/11, nas mesmas janelas, então concorda com ele e "
+        "não é prova nova; é R por trade, e na carteira o T28 não separou tamanho por ATR% do "
+        "ruído. NÃO é proteção de dia lateral: nos 10% piores dias corta ~20% da perda, e em "
+        "17/11 os três SHORTs stopados estavam calmos. Sem 30 sinais anteriores do ativo no "
+        "banco o sinal não tem `atr_rel` e abre inteiro. Ligar é apertar; o lugar de ligar "
+        "primeiro é uma conta de teste, depois de ler `sinais.atr_rel` contra o desfecho."),
+    "auto_agitacao_frac": (
+        "VIVO 0,5 (meio tamanho); só vale com `auto_agitacao_corte` > 0. É a fração do risco no "
+        "sinal agitado, e foi com 0,5 que a conta de 18/11 foi feita: a soma de R foi de +2.247 "
+        "para +2.820 em 2023-26 e de −4.304 para −2.008 em 2020-22, com 23% e 29% dos 5% "
+        "melhores trades no terço reduzido. 1 = não reduz. Abaixo de 0,5 não foi medido."),
 }
 
 

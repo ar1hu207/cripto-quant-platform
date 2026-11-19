@@ -190,6 +190,15 @@ CONFIG_PADRAO = {
     # `autotrader.auto_executar`. Ligar é decisão do dono, e o lugar é uma conta de teste.
     "auto_rajada_max": "0",          # 0 = desligado | N = máx. de entradas por lado na janela
     "auto_rajada_janela_min": "30",  # a janela, em minutos (> auto_freshness_min, de propósito)
+    # [AG-2] Tamanho menor no ativo AGITADO acima do normal dele. Nasce desligado (corte 0).
+    # Ligado, o sinal de tendência com `sinais.atr_rel` >= corte abre com `risco_por_trade` x
+    # `auto_agitacao_frac`; o resto do trade (stop, alavancagem, tetos) não muda. Medido em
+    # 18/11 nos trades da regra de produção: o terço mais agitado rendeu −0,14R por trade em
+    # 2023-26 e −0,11R em 2020-22, contra +0,23R e +0,06R do terço calmo; o corte desse terço
+    # foi 1,18. Ressalvas no racional do `GET /catalogo`: 2026 inverteu, e é a mesma família do
+    # medidor M1. Só reduz -- a fração não passa de 1. Ligar é decisão do dono.
+    "auto_agitacao_corte": "0",      # 0 = desligado | 1.18 = o corte medido (terço de cima)
+    "auto_agitacao_frac": "0.5",     # fração do risco no sinal agitado (0,5 = meio tamanho)
     # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
     # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
     # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o
