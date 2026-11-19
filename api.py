@@ -528,6 +528,7 @@ CONFIG_CATALOGO = {
     "tp_forca_min":         ("float", 0.0, 20.0),
     "tp_fallback_r":        ("lista_num", 0.0, alvos.R_MAX, 5),
     "tp_resto_livre":       ("bool",),
+    "tp_so_intactos":       ("bool",),          # [SR-2]
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
@@ -739,6 +740,12 @@ CONFIG_RACIONAL = {
         "VIVO −10 (%); só vale com `auto_esticado_modo` ligado. É o corte que o T54 fixou antes "
         "de rodar (junto com RSI diário < 30, que deu o mesmo sentido). Outros cortes não foram "
         "medidos: mexer aqui é escolher sem régua."),
+    "tp_so_intactos": (
+        "1 = os alvos de TP só usam topos e fundos que nenhum fechamento posterior atravessou "
+        "(1h e 4h; Fibonacci não muda). 0 = como era: todo pivô conta, e no T58 (19/11) 73% "
+        "deles já tinham sido rompidos -- alvo mirado num nível que já não segurou nada. O "
+        "replay T64 mediu o efeito no TP1 antes de ligar. Só vale para posição aberta depois "
+        "da mudança: o plano de TP é calculado uma vez, na abertura."),
 }
 
 

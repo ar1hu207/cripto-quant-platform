@@ -63,6 +63,29 @@ def pivos(df, k=3):
     return topos, fundos
 
 
+def pivos_intactos(df, k=3):
+    """[SR-2] Os pivôs de `pivos` que o mercado ainda NÃO atravessou: topo sem nenhum fechamento
+    posterior acima dele, fundo sem nenhum fechamento posterior abaixo.
+
+    Por que existe: um fundo que já foi furado por um fechamento não é mais suporte -- o preço
+    passou por ele, e tratá-lo como alvo é mirar num nível que já não segurou nada. Medido em 19/11
+    (T58): 73,5% (2023-26) e 73,8% (2020-22) dos pivôs do 4h que `calcular` usava estavam nessa
+    situação. Pavio além do nível não conta: é fechamento, como em `tendencia` e no T58."""
+    janela = 2 * k + 1
+    h, l, c = df["high"].values, df["low"].values, df["close"].values
+    hi = df["high"].rolling(janela, center=True).max().values
+    lo = df["low"].rolling(janela, center=True).min().values
+    n = len(df)
+    if not n:
+        return [], []
+    # maior/menor fechamento DEPOIS de cada vela (a própria fica de fora)
+    pos_max = np.append(np.maximum.accumulate(c[::-1])[::-1][1:], -np.inf)
+    pos_min = np.append(np.minimum.accumulate(c[::-1])[::-1][1:], np.inf)
+    topos = [float(h[i]) for i in range(n) if h[i] == hi[i] and pos_max[i] <= h[i]]
+    fundos = [float(l[i]) for i in range(n) if l[i] == lo[i] and pos_min[i] >= l[i]]
+    return topos, fundos
+
+
 # [SR-3] Distância do sinal ao nível intacto do 4h mais próximo À FRENTE, em R. Os números são os
 # do T58 e não são config: mudá-los muda o que a coluna `sinais.parede_4h` significa.
 PAREDE_DIAS = 50          # pivôs formados nos últimos 50 dias (= as 300 velas de 4h dos alvos)
@@ -216,8 +239,9 @@ def calcular(pos, raw_1h, raw_4h, cfg):
     if r <= 0:                                        # sem stop não há R: usa 3 ATR (= o stop do motor)
         r = 3 * atr1h
     niveis = []
+    achar = pivos_intactos if cfg.get("so_intactos") else pivos      # [SR-2]
     for df, peso in ((df4, 2), (df1, 1)):
-        topos, fundos = pivos(df)
+        topos, fundos = achar(df)
         niveis += [(p, peso) for p in topos + fundos]
     niveis += [(p, 1) for p in fibonacci(df4.tail(120))]
     zs = zonas(niveis, 0.35 * atr1h)
@@ -275,7 +299,8 @@ def cfg_tp(cfg):
             "tp_forca_min": f("tp_forca_min", 2.0),
             "tp_fracoes": lista("tp_fracoes", "0.34,0.33,0.33", FRAC_MAX),
             "tp_fallback_r": lista("tp_fallback_r", "2,4,6", R_MAX),
-            "resto_livre": str(cfg.get("tp_resto_livre", "0")) in ("1", "true", "True")}
+            "resto_livre": str(cfg.get("tp_resto_livre", "0")) in ("1", "true", "True"),
+            "so_intactos": str(cfg.get("tp_so_intactos", "0")) in ("1", "true", "True")}
 
 
 def ler(pos):

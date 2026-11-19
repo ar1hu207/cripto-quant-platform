@@ -279,6 +279,10 @@ CONFIG_PADRAO = {
     # alvo, por conta do trailing (T50/T51: TP2 e TP3 são teto, e o teto custa a cauda).
     # 0 = o último TP leva tudo o que restou, como no TP-1. Nasce desligado.
     "tp_resto_livre": "0",
+    # [SR-2] 1 = os alvos só usam pivôs que o mercado ainda não atravessou (nenhum fechamento
+    # posterior além). T58: 73% dos pivôs que os alvos usavam já estavam rompidos. Nasce
+    # desligado; o replay do T64 decide se liga nas contas com TP. Ver `alvos.pivos_intactos`.
+    "tp_so_intactos": "0",
     # [TD-1] Só entra a favor da tendência do DIÁRIO do próprio ativo (T38). Nasce desligado;
     # a conta B liga. d1 = EMA20 e close do lado certo da EMA50; d2 = só o cruzamento.
     "tendencia_filtro": "off",    # off | d1 | d2 -- ver tendencia.py
