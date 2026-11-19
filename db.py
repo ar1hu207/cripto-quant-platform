@@ -199,6 +199,11 @@ CONFIG_PADRAO = {
     # medidor M1. Só reduz -- a fração não passa de 1. Ligar é decisão do dono.
     "auto_agitacao_corte": "0",      # 0 = desligado | 1.18 = o corte medido (terço de cima)
     "auto_agitacao_frac": "0.5",     # fração do risco no sinal agitado (0,5 = meio tamanho)
+    # [EST-1] SHORT de tendência com o diário do ativo já caído: 7 dias fechados <= corte.
+    # Nasce desligado. Medido em 19/11 (T54): −0,34R/trade em 2023-26 e −0,40R em 2020-22, mas
+    # os mesmos SHORTs fizeram +20,7R ao vivo na conta A em novembro. Ver `autotrader._esticado`.
+    "auto_esticado_modo": "off",     # off | meio (metade do risco) | veto (não vende)
+    "auto_esticado_ret7": "-10",     # o corte, em % dos últimos 7 dias fechados
     # [N-10] Nasce "fixo" desde 2026-08-29, e o motivo e MEDICAO, nao prudencia. O [Q-13]
     # testou a premissa da escala em 2.945 sinais de tendencia com desfecho marcado: os que
     # bateram no STOP tinham conviccao MAIOR (67,10 contra 66,47 dos que bateram no alvo), e o

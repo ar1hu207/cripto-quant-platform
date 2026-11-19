@@ -488,7 +488,11 @@ CONFIG_CATALOGO = {
     # zero" é não operar, que é outra decisão e tem outra chave.
     "auto_agitacao_corte":  ("float", 0.0, 10.0),
     "auto_agitacao_frac":   ("float", 0.1, 1.0),
-    "auto_lev_modo":        ("enum", ("conviccao", "fixo", "risco")),
+    # [EST-1] O corte é queda: positivo faria a regra pegar toda venda, e abaixo de −50% em 7
+    # dias não sobra amostra para a medida dizer nada.
+    "auto_esticado_modo":   ("enum", ("off", "meio", "veto")),
+    "auto_esticado_ret7":   ("float", -50.0, -1.0),
+    "auto_lev_modo":       ("enum", ("conviccao", "fixo", "risco")),
     "auto_lev_margem_frac": ("float", 0.0, 1.0),      # [LEV-1] 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min":         ("float", 1.0, 50.0),
     "auto_lev_max":         ("float", 1.0, 50.0),
@@ -719,6 +723,22 @@ CONFIG_RACIONAL = {
         "sinal agitado, e foi com 0,5 que a conta de 18/11 foi feita: a soma de R foi de +2.247 "
         "para +2.820 em 2023-26 e de −4.304 para −2.008 em 2020-22, com 23% e 29% dos 5% "
         "melhores trades no terço reduzido. 1 = não reduz. Abaixo de 0,5 não foi medido."),
+    "auto_esticado_modo": (
+        "VIVO off. Vale só para SHORT de tendência quando o diário do ativo já caiu: retorno dos "
+        "últimos 7 dias FECHADOS <= `auto_esticado_ret7` (−10%). `meio` abre com metade do "
+        "`risco_por_trade`; `veto` não vende, e o sinal segue 'novo' com a vaga indo para o "
+        "próximo candidato. MEDIDO em 19/11 (T54) nos trades da regra de produção: esse SHORT "
+        "rendeu −0,344R por trade em 2023-26 (IC [−0,597; −0,060]) e −0,395R em 2020-22 "
+        "([−0,622; −0,178]); o LONG esticado para cima não é pior, por isso a regra só olha a "
+        "venda. ⚠️ O outro lado: ao vivo, de 02/11 a 18/11, esses mesmos SHORTs renderam "
+        "+20,7R na conta A e +7,2R na B (−4,7R na C), e em 2026 o histórico fica perto de zero "
+        "(−0,04R). `veto` teria tirado o lucro de novembro; `meio` paga metade nos dois "
+        "cenários. Diário fora do ar com a chave ligada: o sinal é pulado no ciclo. Moeda com "
+        "menos de 8 dias de diário abre inteira. Reversão fica de fora (não foi medida)."),
+    "auto_esticado_ret7": (
+        "VIVO −10 (%); só vale com `auto_esticado_modo` ligado. É o corte que o T54 fixou antes "
+        "de rodar (junto com RSI diário < 30, que deu o mesmo sentido). Outros cortes não foram "
+        "medidos: mexer aqui é escolher sem régua."),
 }
 
 
