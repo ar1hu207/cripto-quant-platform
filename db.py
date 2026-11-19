@@ -293,6 +293,9 @@ CONFIG_PADRAO = {
     # posterior além). T58: 73% dos pivôs que os alvos usavam já estavam rompidos. Nasce
     # desligado; o replay do T64 decide se liga nas contas com TP. Ver `alvos.pivos_intactos`.
     "tp_so_intactos": "0",
+    # [TP-3] 1 = bateu o TP1, o stop do que sobra vai para o preço de entrada (0x0). Decisão do
+    # dono em 19/11, contra o T51 (ver `simulador._stop_na_entrada_apos_tp1`). Nasce desligado.
+    "tp_stop_entrada": "0",
     # [TD-1] Só entra a favor da tendência do DIÁRIO do próprio ativo (T38). Nasce desligado;
     # a conta B liga. d1 = EMA20 e close do lado certo da EMA50; d2 = só o cruzamento.
     "tendencia_filtro": "off",    # off | d1 | d2 -- ver tendencia.py

@@ -531,6 +531,7 @@ CONFIG_CATALOGO = {
     "tp_fallback_r":        ("lista_num", 0.0, alvos.R_MAX, 5),
     "tp_resto_livre":       ("bool",),
     "tp_so_intactos":       ("bool",),          # [SR-2]
+    "tp_stop_entrada":      ("bool",),          # [TP-3]
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é

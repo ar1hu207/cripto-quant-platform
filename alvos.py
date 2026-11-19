@@ -300,7 +300,8 @@ def cfg_tp(cfg):
             "tp_fracoes": lista("tp_fracoes", "0.34,0.33,0.33", FRAC_MAX),
             "tp_fallback_r": lista("tp_fallback_r", "2,4,6", R_MAX),
             "resto_livre": str(cfg.get("tp_resto_livre", "0")) in ("1", "true", "True"),
-            "so_intactos": str(cfg.get("tp_so_intactos", "0")) in ("1", "true", "True")}
+            "so_intactos": str(cfg.get("tp_so_intactos", "0")) in ("1", "true", "True"),
+            "stop_entrada": str(cfg.get("tp_stop_entrada", "0")) in ("1", "true", "True")}
 
 
 def ler(pos):

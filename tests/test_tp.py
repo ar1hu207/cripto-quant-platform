@@ -343,3 +343,61 @@ def test_tp2_o_painel_diz_que_o_resto_nao_tem_teto(banco):
     pos["tps"] = json.dumps(plano)
     _, texto, _ = signal_engine._plano_do_bot(pos, db.get_config())
     assert "resto sem teto" in texto and "meta final" not in texto
+
+
+# ------------------------------------------------ [TP-3] stop no 0x0 depois do TP1
+
+def _stop(pid):
+    with db.conectar() as c:
+        return dict(c.execute("SELECT status, stop FROM posicoes WHERE id=?", (pid,)).fetchone())
+
+
+def test_tp_stop_entrada_nasce_desligado_e_o_catalogo_aceita_bool():
+    import api
+    assert db.CONFIG_PADRAO["tp_stop_entrada"] == "0"
+    assert alvos.cfg_tp({"tp_ativo": "1"})["stop_entrada"] is False
+    assert api._validar_config("tp_stop_entrada", "1") == "1"
+    with pytest.raises(Exception):
+        api._validar_config("tp_stop_entrada", "talvez")
+
+
+def test_sem_a_chave_o_tp1_nao_mexe_no_stop(tp_ligado):
+    pid = _pos(None, _plano())
+    tp_ligado(94.0)
+    simulador.atualizar()
+    assert _stop(pid) == {"status": "aberta", "stop": 103.0}
+
+
+def test_com_a_chave_o_tp1_leva_o_stop_para_a_entrada_e_a_volta_fecha(tp_ligado):
+    db.set_config("tp_stop_entrada", "1")
+    pid = _pos(None, _plano())
+    tp_ligado(94.0)                                    # TP1 (95) enche
+    simulador.atualizar()
+    assert _stop(pid) == {"status": "aberta", "stop": 100.0}
+    tp_ligado(100.0)                                   # SHORT voltou na entrada
+    simulador.atualizar()
+    assert _stop(pid)["status"] == "fechada"
+    t = _trades()
+    assert [x["motivo_saida"].split("-")[0] for x in t][0] == "tp1"
+    assert len(t) == 2 and t[1]["valor_reais"] == pytest.approx(660.0)
+    assert -0.02 * 660.0 < t[1]["pnl_reais"] < 0      # só a taxa; o stop cheio seria -30% (3% x 10x)
+
+
+def test_tp1_feito_antes_da_chave_tambem_ganha_o_stop_na_entrada(tp_ligado):
+    pl = _plano()
+    pl["niveis"][0]["feito"] = True
+    pid = _pos(None, pl, valor=660.0)
+    db.set_config("tp_stop_entrada", "1")
+    tp_ligado(98.0)                                    # longe dos alvos; só o estado do TP1 conta
+    simulador.atualizar()
+    assert _stop(pid) == {"status": "aberta", "stop": 100.0}
+
+
+def test_stop_ja_alem_da_entrada_nao_volta(tp_ligado):
+    db.set_config("tp_stop_entrada", "1")
+    pid = _pos(None, _plano(), stop=103.0)
+    with db.conectar() as c:                            # trailing já trouxe o stop para 97 (SHORT)
+        c.execute("UPDATE posicoes SET stop=97.0 WHERE id=?", (pid,))
+    tp_ligado(94.0)
+    simulador.atualizar()
+    assert _stop(pid) == {"status": "aberta", "stop": 97.0}
