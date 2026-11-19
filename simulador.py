@@ -859,8 +859,9 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
     já tinha passado quando o plano nasceu -- as posições abertas antes desta regra -- realiza a
     MERCADO, no preço de agora: é o que o operador faria ao ligar a regra.
 
-    **O stop não se mexe aqui.** O T17 mediu que a escada de stop (subir o stop a cada TP) é o
-    que matou a cauda; quem cuida do stop do que sobra continua sendo o trailing.
+    **O stop só se mexe aqui com `tp_stop_entrada`** (ver `_stop_na_entrada_apos_tp1`). Sem a
+    chave, nada muda: o T17 mediu que a escada de stop (subir o stop a cada TP) é o que matou a
+    cauda, e quem cuida do stop do que sobra é o trailing.
 
     **[TP-2] Resto livre.** Num plano com `resto_livre`, o último alvo realiza só a fração
     DELE, e o que sobra fica aberto sem alvo: sai pelo trailing ou pelo stop, onde o movimento
@@ -871,6 +872,7 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
     while True:
         i, t = alvos.proximo(plano)
         if t is None or not alvos.bateu(pos["direcao"], preco, t["preco"]):
+            _stop_na_entrada_apos_tp1(pos, plano, tp)
             return False
         ultimo = i == len(niveis) - 1
         leva_tudo = ultimo and not plano.get("resto_livre")
@@ -895,6 +897,34 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
             pos["risco_abertura"] = pos["risco_abertura"] * (1 - frac)
         pos["valor_reais"] = resto
         pos["tps"] = json.dumps(plano)
+
+
+def _stop_na_entrada_apos_tp1(pos, plano, tp):
+    """[TP-3] Com `tp_stop_entrada`, o TP1 feito leva o stop do que sobra para o preço de entrada.
+
+    Decisão do dono (19/11), contra a medição: o T51 deu banca mediana 2.773 com a regra contra
+    3.970 sem ela, e o replay dos trades reais de novembro troca de sinal entre 2,0R (+314) e o
+    TP1 (−397). Ele escolheu a regra porque tira as posições que vão a +2R e voltam ao stop
+    cheio (seis em novembro, ~R$600). Nasce desligada para não entrar sozinha nas contas B e C.
+
+    Vale por estado, não por evento: olha se o TP1 do plano está `feito`, então também alcança
+    a posição que bateu o TP1 antes da chave ser ligada. É catraca, igual ao trailing: só move o
+    stop se a entrada estiver a favor do stop de agora, e nunca o puxa de volta de um trailing
+    que já passou da entrada. Daqui em diante quem sobe o stop continua sendo o trailing.
+
+    O stop vai no preço EXATO da entrada. Fechar nele custa a taxa dos dois lados, então "0x0"
+    é uma perda pequena e não zero; é o mesmo ponto em que o trailing 3R/3R arma hoje.
+    O `UPDATE` do fim de `_marcar_uma` persiste o stop novo."""
+    if not tp.get("stop_entrada"):
+        return
+    niveis = plano.get("niveis") or []
+    if not (niveis and niveis[0].get("feito")):
+        return
+    e = float(pos["entrada"])
+    d = 1 if pos["direcao"] == "LONG" else -1
+    s = pos["stop"]
+    if not s or (d == 1 and e > s) or (d == -1 and e < s):
+        pos["stop"] = e
 
 
 def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
