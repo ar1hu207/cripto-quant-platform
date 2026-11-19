@@ -488,6 +488,8 @@ CONFIG_CATALOGO = {
     # zero" é não operar, que é outra decisão e tem outra chave.
     "auto_agitacao_corte":  ("float", 0.0, 10.0),
     "auto_agitacao_frac":   ("float", 0.1, 1.0),
+    # [DV-2] veto pelo DVOL (autotrader._dvol_alto). 0 = desligado; o percentil vai de 0 a 1.
+    "auto_dvol_corte":      ("float", 0.0, 1.0),
     # [EST-1] O corte é queda: positivo faria a regra pegar toda venda, e abaixo de −50% em 7
     # dias não sobra amostra para a medida dizer nada.
     "auto_esticado_modo":   ("enum", ("off", "meio", "veto")),
@@ -725,6 +727,17 @@ CONFIG_RACIONAL = {
         "sinal agitado, e foi com 0,5 que a conta de 18/11 foi feita: a soma de R foi de +2.247 "
         "para +2.820 em 2023-26 e de −4.304 para −2.008 em 2020-22, com 23% e 29% dos 5% "
         "melhores trades no terço reduzido. 1 = não reduz. Abaixo de 0,5 não foi medido."),
+    "auto_dvol_corte": (
+        "VIVO 0 = DESLIGADO. Com corte > 0, o sinal de tendência NÃO abre quando o DVOL "
+        "(volatilidade implícita do BTC, Deribit) de ontem está no percentil >= corte dos 180 "
+        "dias anteriores (`sinais.dvol_pct`). O valor medido é 0,8. MEDIDO em 19/11 nos trades da "
+        "regra de produção: +0,54R por trade a favor de não abrir em 2021-10..2023 e +0,25R em "
+        "2024-26 (aberta só depois), positivo em todo ano, nos dois lados, 20 de 20 placebos. Na "
+        "carteira de 1.000 caminhos a mediana subiu 5,3x na config de hoje e 2,9x na B, com DD "
+        "mediano menor. ⚠️ Ressalvas: as duas medidas são da mesma história (2021-26); o efeito "
+        "caiu à metade na reserva; barra ~22% dos sinais, em blocos de dias seguidos (2024: 31%). "
+        "Sem leitura da Deribit o sinal abre. Ligar é apertar; o lugar de ligar primeiro é uma "
+        "conta de teste, depois de ler `sinais.dvol_pct` contra o desfecho."),
     "auto_esticado_modo": (
         "VIVO off. Vale só para SHORT de tendência quando o diário do ativo já caiu: retorno dos "
         "últimos 7 dias FECHADOS <= `auto_esticado_ret7` (−10%). `meio` abre com metade do "

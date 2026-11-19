@@ -285,6 +285,41 @@ def _esticado(modo, corte, s):
     return (0.0 if modo == "veto" else ESTICADO_MEIO), r7
 
 
+def _dvol_alto(cfg, s):
+    """[DV-2] True se este sinal NÃO abre porque as opções do BTC estão caras: `sinais.dvol_pct`
+    (percentil do DVOL de ontem contra os 180 dias anteriores, [DV-1]) >= `auto_dvol_corte`.
+    0 = desligado, e é como nasce.
+
+    A causa que ele ataca: o motor entra igual em qualquer clima, e quando as opções cobram
+    caro o mercado inteiro anda de outro jeito -- os trades da regra de produção nesses dias
+    rendem pior nos DOIS lados. Medido em 19/11 (T61): +0,542R por trade a favor de não abrir
+    em 2021-10..2023 [+0,294; +0,775] e +0,248R em 2024-26 [+0,029; +0,471], aberta só depois;
+    positivo em todo ano de 2022 a 2026; 20 de 20 placebos. Na carteira (T63, 1.000 caminhos,
+    a vaga recusada indo ao próximo candidato): mediana 5,3x na config de hoje e 2,9x na B, DD
+    mediano menor nas duas, e o filtro corta proporcionalmente MENOS dos 5% melhores trades
+    (17-18%) do que do total (22-24%). Não é o ATR% do ativo do [AG-2]: correlação 0,14-0,20.
+
+    Ressalvas: as duas medidas são da mesma história (2021-26), então a carteira confirma que o
+    efeito sobrevive à vaga reaproveitada, não que ele existe; e o efeito caiu à metade da
+    descoberta para a reserva. Por isso nasce desligada.
+
+    Veto inteiro, e não meio tamanho como o [AG-2]: foi o veto que a carteira mediu. Vale para os
+    dois lados e só para tendência (a reversão não foi medida). Sem `dvol_pct` (Deribit fora do
+    ar no scan, ou sinal anterior à coluna) o sinal abre: ausência de medição não é bandeira, e
+    foi assim que a medida tratou o dia sem leitura.
+
+    A versão-sintoma, que não foi feita: baixar `risco_por_trade` nos dias de medo. Encolhe
+    todo trade por igual, e a medida diz que o problema é entrar, não o tamanho."""
+    corte = simulador._cfg_float(cfg, "auto_dvol_corte", 0.0)
+    if corte <= 0 or s.get("tipo") != "tendencia":
+        return False
+    try:
+        p = float(s.get("dvol_pct"))
+    except (TypeError, ValueError):
+        return False
+    return p >= corte                                # NaN cai aqui: comparação falsa, abre
+
+
 def _entradas_recentes(agora, janela_min):
     """[RAJ-1] Quantas entradas nasceram em cada lado nos últimos `janela_min` minutos.
 
@@ -442,6 +477,7 @@ def auto_executar(saidas=None):
     modo_est = str(cfg.get("auto_esticado_modo", "off") or "off").strip().lower()
     corte_est = simulador._cfg_float(cfg, "auto_esticado_ret7", -10.0)
     res["esticado"] = []                              # [EST-1] {ativo, ret7, acao: veto|meio}
+    res["dvol"] = []                                  # [DV-2] {ativo, pct}: não abriu, opções caras
     vistos = set()
     for s in cands:
         if slots <= 0 or budget < min_valor:
@@ -473,6 +509,12 @@ def auto_executar(saidas=None):
             continue
         if frac_est == 0.0:                               # veto: o sinal segue 'novo', a vaga anda
             res["esticado"].append({"ativo": s["ativo"], "ret7": r7, "acao": "veto"})
+            continue
+        # [DV-2] Opções do BTC caras: não abre. Como o veto acima, o sinal segue 'novo' e a vaga
+        # vai para o próximo candidato -- foi assim que a carteira do T63 mediu. Sem rede aqui: a
+        # leitura já está no sinal, gravada pelo scan ([DV-1]).
+        if _dvol_alto(cfg, s):
+            res["dvol"].append({"ativo": s["ativo"], "pct": s.get("dvol_pct")})
             continue
         # [P1-11] a lev sai da convicção e passa pelo cap geométrico ANTES de dimensionar: a
         # margem tem de ser calculada sobre a alavancagem que vai ser aberta de fato. O
