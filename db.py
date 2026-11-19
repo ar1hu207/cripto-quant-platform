@@ -35,7 +35,11 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- ativo+tf+tipo (`signal_engine._agitacao`). 1,0 = normal; 1,5 = ATR 50% acima do normal.
   -- NULL = menos de 30 sinais anteriores (nao ha normal), ou sinal anterior a coluna. So a
   -- chave `auto_agitacao_corte` le esta coluna, e ela nasce desligada.
-  atr_rel REAL);
+  atr_rel REAL,
+  -- [SR-3] Distancia, em R do sinal, ao nivel INTACTO do 4h mais proximo a frente (resistencia
+  -- acima do LONG, suporte abaixo do SHORT; `alvos.parede_r`). 99 = nenhum nivel intacto nos
+  -- ultimos 50 dias. NULL = nao medido. Anotacao: nenhuma regra le esta coluna (T58, 19/11).
+  parede_4h REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -416,7 +420,8 @@ def _migrar(c):
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL"),
                             ("rsi_d1", "REAL"), ("ret7_d1", "REAL"),    # [CD-1] contexto do diario
-                            ("atr_rel", "REAL")],                       # [AG-1] agitacao vs normal
+                            ("atr_rel", "REAL"),                        # [AG-1] agitacao vs normal
+                            ("parede_4h", "REAL")],                     # [SR-3] nivel do 4h a frente
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),

@@ -439,6 +439,25 @@ def _anotar_diario(s, ativo):
     s["rsi_d1"], s["ret7_d1"] = ctx["rsi"], ctx["ret7"]
 
 
+def _anotar_parede(s, ativo):
+    """[SR-3] Anota no sinal a distância, em R, ao nível intacto do 4h mais próximo à frente
+    (`alvos.parede_r`). Não decide nada.
+
+    Mesma disciplina do [CD-1]: roda fora da transação do `_gravar` (as velas de 4h podem ser
+    uma requisição -- `_velas` serve do cache até a vela em formação fechar, então é uma por
+    ativo a cada 4 horas), e falha aqui NÃO custa o sinal: grava NULL e segue.
+
+    Existe porque o T58 (19/11) achou, DEPOIS de olhar a tabela, que entrar com o nível intacto
+    mais próximo a 2R ou mais rendeu pior nas duas janelas e nos dois lados. Corte achado
+    olhando não vira regra; vira coluna, e o registro ao vivo julga."""
+    try:
+        raw4 = _velas(ativo, "4h", 310)
+        s["parede_4h"] = alvos.parede_r(raw4, s["direcao"], s["preco"], s["stop_sugerido"],
+                                         time.time() * 1000)
+    except Exception as e:
+        log(f"[SR-3] 4h de {ativo} indisponível, sinal sem parede: {type(e).__name__}: {str(e)[:100]}")
+
+
 # [AG-1] O "normal" de um ativo são os sinais ANTERIORES dele: até AGITACAO_JANELA velas de sinal
 # do mesmo ativo+tf+tipo, e no mínimo AGITACAO_MIN. São os dois números com que a medida foi
 # feita em 18/11 (mediana dos 200 sinais anteriores, mínimo de 30). Não são config de usuário:
@@ -514,11 +533,12 @@ def _gravar(con, ts, s, ativo, tf, status, rejeicao):
             f"{type(e).__name__}: {str(e)[:100]}")
         atr_rel = None
     con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
-                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
                  s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
-                 s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1"), atr_rel))
+                 s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1"), atr_rel,
+                 s.get("parede_4h")))
 
 
 def _desfecho(sinal, velas):
@@ -681,11 +701,13 @@ def _varrer():
                         # [Q-4] a rejeição por fluxo é o único dado que valida o portão, e ela
                         # só existe agora: não há book/taker histórico pra reconstruir depois.
                         _anotar_diario(s, a)             # [CD-1] os DOIS grupos, como o fluxo
+                        _anotar_parede(s, a)             # [SR-3] idem
                         with db.conectar() as con:
                             if not _repetido(con, s, a, tf, REJEITADO_FLUXO, ts):
                                 _gravar(con, ts, s, a, tf, REJEITADO_FLUXO, motivo_rej)
                     continue
                 _anotar_diario(s, a)                     # [CD-1] anota; não filtra
+                _anotar_parede(s, a)                     # [SR-3] anota; não filtra
                 with db.conectar() as con:
                     if not _repetido(con, s, a, tf, "novo", ts):
                         _gravar(con, ts, s, a, tf, "novo", None)
