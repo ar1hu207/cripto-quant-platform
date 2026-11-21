@@ -46,7 +46,13 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- dias anteriores (`dvol.contexto`), 0..1. O mesmo para todos os sinais do dia: e leitura do
   -- mercado, nao do ativo. NULL = Deribit fora do ar, ou sinal anterior a coluna. So a chave
   -- `auto_dvol_corte` le esta coluna, e ela nasce desligada.
-  dvol_pct REAL);
+  dvol_pct REAL,
+  -- [VR-1] Volume da ultima hora (12 velas de 5m FECHADAS, spot) dividido pela mediana do volume
+  -- horario dos 30 dias anteriores (`signal_engine.volume_relativo`): o C4 do T72/T73. 1,0 =
+  -- hora normal; 10 = dez vezes o normal. NULL = nao medido. Anotacao: nenhuma regra le esta
+  -- coluna. Existe para julgar ao vivo se vender em hora de volume explosivo depois de queda
+  -- forte (sinais.ret1_d1) segue perdendo, como no historico.
+  vol_rel REAL);
 
 CREATE TABLE IF NOT EXISTS posicoes(
   id INTEGER PRIMARY KEY AUTOINCREMENT, ativo TEXT, direcao TEXT, entrada REAL,
@@ -453,7 +459,8 @@ def _migrar(c):
                             ("ret1_d1", "REAL"),                        # [EST-2] queda de ontem
                             ("atr_rel", "REAL"),                        # [AG-1] agitacao vs normal
                             ("parede_4h", "REAL"),                      # [SR-3] nivel do 4h a frente
-                            ("dvol_pct", "REAL")],                      # [DV-1] DVOL de ontem
+                            ("dvol_pct", "REAL"),                       # [DV-1] DVOL de ontem
+                            ("vol_rel", "REAL")],                       # [VR-1] volume da hora
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),
