@@ -473,6 +473,63 @@ def _anotar_dvol(s):
         log(f"[DV-1] DVOL indisponível, sinal sem anotação: {type(e).__name__}: {str(e)[:100]}")
 
 
+# [VR-1] Volume relativo da última hora. Os números são os do C4 medido no T72/T73 (30 dias de
+# normal, mínimo de 20 dias de dado); mudá-los muda o que a coluna significa.
+VOL_JANELA_DIAS = 30
+VOL_MIN_HORAS = 20 * 24
+_M5_MS, _H1_MS, _DIA_MS = 300_000, 3_600_000, 86_400_000
+
+
+def volume_relativo(raw5, raw1h, agora_ms):
+    """[VR-1] O C4 do T72: volume das 12 últimas velas de 5m FECHADAS dividido pela mediana do
+    volume horário (velas de 1h inteiras dentro de [S − 30 dias, S), com S = abertura da primeira
+    das 12). Puro, só com vela fechada até `agora_ms`. None = sem medição: menos de 12 velas,
+    as 12 não contíguas (buraco), menos de 20 dias de horas, ou mediana zero. Nunca zero no lugar
+    de ausência."""
+    f5 = [v for v in raw5 if v[0] + _M5_MS <= agora_ms]
+    if len(f5) < 12:
+        return None
+    ult = f5[-12:]
+    S = ult[0][0]
+    if ult[-1][0] - S != 11 * _M5_MS:
+        return None
+    num = sum(float(v[5]) for v in ult)
+    ini = S - VOL_JANELA_DIAS * _DIA_MS
+    horas = [float(v[5]) for v in raw1h if v[0] >= ini and v[0] + _H1_MS <= S]
+    if len(horas) < VOL_MIN_HORAS:
+        return None
+    med = statistics.median(horas)
+    return round(num / med, 4) if med > 0 else None
+
+
+def _velas_volume(ativo):
+    """[VR-1] As velas que a anotação de volume lê: 5m (as 12 da última hora + a em formação) e
+    1h (31 dias e pouco). Função à parte para a suíte trocar só esta leitura (tests/conftest.py)."""
+    return _velas(ativo, "5m", 14), _velas(ativo, "1h", 760)
+
+
+def _anotar_volume(s, ativo):
+    """[VR-1] Anota no sinal o volume da última hora contra o normal do ativo (`vol_rel`). Não
+    decide nada.
+
+    Existe por causa do T72/T73 (21/11): depois de uma queda forte (véspera ≤ −5%), o SHORT do bot
+    numa hora de volume muito acima do normal rendeu −0,35/−0,40R nas duas janelas -- é vender a
+    capitulação --, mas como guia de lado geral o volume não passou, e não sobrou histórico virgem
+    para provar. O juiz que resta é o registro ao vivo, e ele só julga o que foi gravado.
+
+    Mesma disciplina do [CD-1]: fora da transação do `_gravar` (as velas são no máximo duas
+    requisições por ativo -- `_velas` serve do cache até a vela em formação fechar), e falha aqui
+    NÃO custa o sinal: grava NULL e segue.
+
+    A versão-sintoma, que não foi feita: um veto "não vende em volume alto depois de queda". Foi
+    medido como pista, não como regra, e o dono pediu indicador que escolha lado, não veto."""
+    try:
+        raw5, raw1h = _velas_volume(ativo)
+        s["vol_rel"] = volume_relativo(raw5, raw1h, time.time() * 1000)
+    except Exception as e:
+        log(f"[VR-1] volume de {ativo} indisponível, sinal sem anotação: {type(e).__name__}: {str(e)[:100]}")
+
+
 # [AG-1] O "normal" de um ativo são os sinais ANTERIORES dele: até AGITACAO_JANELA velas de sinal
 # do mesmo ativo+tf+tipo, e no mínimo AGITACAO_MIN. São os dois números com que a medida foi
 # feita em 18/11 (mediana dos 200 sinais anteriores, mínimo de 30). Não são config de usuário:
@@ -548,12 +605,12 @@ def _gravar(con, ts, s, ativo, tf, status, rejeicao):
             f"{type(e).__name__}: {str(e)[:100]}")
         atr_rel = None
     con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
-                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h,dvol_pct,ret1_d1) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h,dvol_pct,ret1_d1,vol_rel) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
                  s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
                  s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1"), atr_rel,
-                 s.get("parede_4h"), s.get("dvol_pct"), s.get("ret1_d1")))
+                 s.get("parede_4h"), s.get("dvol_pct"), s.get("ret1_d1"), s.get("vol_rel")))
 
 
 def _desfecho(sinal, velas):
@@ -718,6 +775,7 @@ def _varrer():
                         _anotar_diario(s, a)             # [CD-1] os DOIS grupos, como o fluxo
                         _anotar_parede(s, a)             # [SR-3] idem
                         _anotar_dvol(s)                  # [DV-1] idem
+                        _anotar_volume(s, a)             # [VR-1] idem
                         with db.conectar() as con:
                             if not _repetido(con, s, a, tf, REJEITADO_FLUXO, ts):
                                 _gravar(con, ts, s, a, tf, REJEITADO_FLUXO, motivo_rej)
@@ -725,6 +783,7 @@ def _varrer():
                 _anotar_diario(s, a)                     # [CD-1] anota; não filtra
                 _anotar_parede(s, a)                     # [SR-3] anota; não filtra
                 _anotar_dvol(s)                          # [DV-1] anota; não filtra
+                _anotar_volume(s, a)                     # [VR-1] anota; não filtra
                 with db.conectar() as con:
                     if not _repetido(con, s, a, tf, "novo", ts):
                         _gravar(con, ts, s, a, tf, "novo", None)

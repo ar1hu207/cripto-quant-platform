@@ -52,6 +52,20 @@ def _diario_sem_rede(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _volume_sem_rede(monkeypatch):
+    """[VR-1] O scan passou a ler velas de 5m e 1h para ANOTAR o volume relativo
+    (`signal_engine._anotar_volume`). Mesmo motivo do `_diario_sem_rede`: aqui a leitura FALHA por
+    padrao (o scan grava NULL), e ela e uma funcao a parte para nao sujar quem conta os pedidos de
+    `_velas` (tests/test_parede.py). Quem precisa de volume (tests/test_volume_relativo.py) troca
+    `signal_engine._velas_volume` pelo proprio duble."""
+    import signal_engine
+
+    def sem_volume(ativo):
+        raise ConnectionError("suite: o volume nao sai para a rede")
+    monkeypatch.setattr(signal_engine, "_velas_volume", sem_volume)
+
+
+@pytest.fixture(autouse=True)
 def _dvol_sem_rede(monkeypatch):
     """[DV-1] O scan passou a ler o DVOL da Deribit para ANOTAR o sinal
     (`signal_engine._anotar_dvol`). Mesmo motivo do `_diario_sem_rede`: sem isto, todo teste que
