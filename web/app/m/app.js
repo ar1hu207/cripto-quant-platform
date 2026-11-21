@@ -323,7 +323,8 @@
   TELAS.painel = {
     tab: 'painel', titulo: 'Painel',
     html: function () {
-      return mh('Painel') +
+      /* [SHARE-1] card do mês para marketing (app/compartilhar.js): só %, nunca R$ */
+      return mh('Painel', { extra: window.APXShare ? APXShare.botao('ib') : '' }) +
         '<section class="m-hero" aria-label="Equity e resultado do dia"><span class="kpi-lbl" id="p-eq-l">Equity</span><div class="eq" id="p-eq">—</div>' +
         '<div class="row" id="p-chips"></div><div class="dec" id="p-dec"></div><div id="p-trava" style="margin-top:12px"></div></section>' +
         '<section class="m-kpis" id="p-kpis" aria-label="Indicadores"></section>' +
