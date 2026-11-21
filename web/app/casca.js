@@ -247,7 +247,8 @@
   }
   function head(route) {
     return '<div class="view-head"><div><div class="eyebrow">Apollux · ' + A.NOME_CONTA + '</div><h1>' + A.esc(TIT[route]) + '</h1></div>' +
-      (route === 'painel' ? '' : '<div class="crumb"><a href="#painel">Painel</a> › ' + A.esc(TIT[route]) + '</div>') + '</div>';
+      /* [SHARE-1] no Painel, o lugar do crumb é o botão do card do mês (app/compartilhar.js) */
+      (route === 'painel' ? (window.APXShare ? APXShare.botao('btn ghost') : '') : '<div class="crumb"><a href="#painel">Painel</a> › ' + A.esc(TIT[route]) + '</div>') + '</div>';
   }
   var seq = 0;
   async function go(route) {
