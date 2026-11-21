@@ -249,9 +249,23 @@ def _fracao_agitacao(cfg, s):
 ESTICADO_MEIO = 0.5
 
 
-def _esticado(modo, corte, s):
+def _esticado(modo, corte, s, veto7=0.0, corte1=0.0):
     """[EST-1] `(fração do risco, ret7)` para este sinal: 1,0 (abre inteiro), 0,5 (meio) ou
     0,0 (veto). Levanta se o diário não vier -- quem chama pula o sinal no ciclo.
+
+    [EST-2] Dois degraus acima do `meio`, cada um desligado com 0: VETO quando os 7 dias estão
+    em `veto7` (−15%) ou abaixo, ou quando o ÚLTIMO dia fechado sozinho caiu `corte1` (−5%) ou
+    mais -- este vale mesmo com a semana acima do corte de 7 dias. A causa: em 21/11 o motor
+    vendeu APT, FIL, SUI e ARB depois de um dia de queda, com 7d de −18 a −31%, e o `meio`
+    abriu as quatro (o dono fechou no pânico). Medido no T54b, a pior venda é DOSE: 7d de −10 a
+    −15% rende ~−0,08R por trade, quase neutro; de −15 a −20 −0,42/−0,32; abaixo de −20
+    −0,75/−0,64 com ~10% de acerto. E a moeda que caiu >= 5% na véspera rende −0,24R (2023-26)
+    e −0,36R (2020-22), negativa em 7 de 7 anos. No sistema inteiro (T54c), meio de −10 a −15
+    + veto abaixo + veto pela véspera soma +316R em 2023-26 [+92; +517] e +6.186R em 2020-22
+    sobre o EST-1 sozinho. ⚠️ Em 2026 o ganho é +23R, e ao vivo o veto de 7 dias teria barrado
+    APT e FIL de 18/11, os maiores ganhos do mês; o corte de véspera foi escolhido depois de
+    ver o dia. A versão-sintoma, que não foi feita: só baixar o corte do `veto` para −15 --
+    o T54c a mediu e ela fica no ruído em 2023-26 (+105R [−2; +222]).
 
     Vale só para SHORT de tendência, e só com `auto_esticado_modo` em `meio` ou `veto`: quando
     o retorno dos últimos 7 dias FECHADOS do ativo (`tendencia.contexto`, a mesma conta que o
@@ -279,10 +293,15 @@ def _esticado(modo, corte, s):
     if modo not in ("meio", "veto") or str(s.get("direcao") or "").upper() != "SHORT" \
             or s.get("tipo") != "tendencia":
         return 1.0, None
-    r7 = tendencia.contexto(s["ativo"]).get("ret7")
+    ctx = tendencia.contexto(s["ativo"])
+    r7, r1 = ctx.get("ret7"), ctx.get("ret1")
+    if corte1 < 0 and r1 is not None and r1 <= corte1:                  # [EST-2] véspera
+        return 0.0, r7
     if r7 is None or not r7 <= corte:
         return 1.0, r7
-    return (0.0 if modo == "veto" else ESTICADO_MEIO), r7
+    if modo == "veto" or (veto7 < 0 and r7 <= veto7):                   # [EST-2] 7 dias fundo
+        return 0.0, r7
+    return ESTICADO_MEIO, r7
 
 
 def _dvol_alto(cfg, s):
@@ -476,6 +495,8 @@ def auto_executar(saidas=None):
     # [EST-1] Venda com o diário já esticado para baixo. Ver `_esticado`.
     modo_est = str(cfg.get("auto_esticado_modo", "off") or "off").strip().lower()
     corte_est = simulador._cfg_float(cfg, "auto_esticado_ret7", -10.0)
+    veto7_est = simulador._cfg_float(cfg, "auto_esticado_veto7", 0.0)     # [EST-2] 0 = desligado
+    corte1_est = simulador._cfg_float(cfg, "auto_esticado_ret1", 0.0)     # [EST-2] 0 = desligado
     res["esticado"] = []                              # [EST-1] {ativo, ret7, acao: veto|meio}
     res["dvol"] = []                                  # [DV-2] {ativo, pct}: não abriu, opções caras
     vistos = set()
@@ -503,7 +524,7 @@ def auto_executar(saidas=None):
         # [EST-1] Rede falhou: pula no ciclo, como o [TD-1] -- com a chave ligada, abrir sem
         # saber o diário seria abrir inteira justamente a venda que ela existe para segurar.
         try:
-            frac_est, r7 = _esticado(modo_est, corte_est, s)
+            frac_est, r7 = _esticado(modo_est, corte_est, s, veto7_est, corte1_est)
         except Exception as e:
             res["rejeitados"].append({"ativo": s["ativo"], "erro": f"diário n/d: {e}"})
             continue

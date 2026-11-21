@@ -424,7 +424,7 @@ def _repetido(con, s, ativo, tf, status, ts):
 
 
 def _anotar_diario(s, ativo):
-    """[CD-1] Anota no sinal o estado do DIÁRIO do ativo (`rsi_d1`, `ret7_d1`). Não decide nada.
+    """[CD-1] Anota no sinal o estado do DIÁRIO do ativo (`rsi_d1`, `ret7_d1`, `ret1_d1`). Não decide nada.
 
     Roda ANTES de abrir a conexão do `_gravar`, porque a primeira leitura do dia de cada ativo
     é uma requisição (`tendencia` guarda o resto do dia UTC): rede não fica dentro de
@@ -437,7 +437,7 @@ def _anotar_diario(s, ativo):
     except Exception as e:
         log(f"[CD-1] diário de {ativo} indisponível, sinal sem anotação: {type(e).__name__}: {str(e)[:100]}")
         return
-    s["rsi_d1"], s["ret7_d1"] = ctx["rsi"], ctx["ret7"]
+    s["rsi_d1"], s["ret7_d1"], s["ret1_d1"] = ctx["rsi"], ctx["ret7"], ctx.get("ret1")
 
 
 def _anotar_parede(s, ativo):
@@ -548,12 +548,12 @@ def _gravar(con, ts, s, ativo, tf, status, rejeicao):
             f"{type(e).__name__}: {str(e)[:100]}")
         atr_rel = None
     con.execute("INSERT INTO sinais(ts,ativo,tf,tipo,direcao,conviccao,motivos,preco,stop_sugerido,"
-                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h,dvol_pct) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,vela_ms,fluxo_comprador,rejeicao,rsi_d1,ret7_d1,atr_rel,parede_4h,dvol_pct,ret1_d1) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, ativo, tf, s["tipo"], s["direcao"], s["conviccao"], s["motivos"],
                  s["preco"], s["stop_sugerido"], status, s.get("vela_ms"),
                  s.get("fluxo_comprador"), rejeicao, s.get("rsi_d1"), s.get("ret7_d1"), atr_rel,
-                 s.get("parede_4h"), s.get("dvol_pct")))
+                 s.get("parede_4h"), s.get("dvol_pct"), s.get("ret1_d1")))
 
 
 def _desfecho(sinal, velas):

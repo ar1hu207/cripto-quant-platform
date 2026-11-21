@@ -494,6 +494,9 @@ CONFIG_CATALOGO = {
     # dias não sobra amostra para a medida dizer nada.
     "auto_esticado_modo":   ("enum", ("off", "meio", "veto")),
     "auto_esticado_ret7":   ("float", -50.0, -1.0),
+    # [EST-2] 0 = desligado; negativo é queda (positivo faria a regra pegar toda venda).
+    "auto_esticado_veto7":  ("float", -50.0, 0.0),
+    "auto_esticado_ret1":   ("float", -30.0, 0.0),
     "auto_lev_modo":       ("enum", ("conviccao", "fixo", "risco")),
     "auto_lev_margem_frac": ("float", 0.0, 1.0),      # [LEV-1] 0 = exposicao_max / auto_max_posicoes
     "auto_lev_min":         ("float", 1.0, 50.0),
@@ -754,6 +757,22 @@ CONFIG_RACIONAL = {
         "VIVO −10 (%); só vale com `auto_esticado_modo` ligado. É o corte que o T54 fixou antes "
         "de rodar (junto com RSI diário < 30, que deu o mesmo sentido). Outros cortes não foram "
         "medidos: mexer aqui é escolher sem régua."),
+    "auto_esticado_veto7": (
+        "VIVO 0 (desligado); só vale com `auto_esticado_modo` ligado. Abaixo deste retorno de 7 "
+        "dias o SHORT de tendência NÃO abre (veto), e entre ele e `auto_esticado_ret7` segue o "
+        "modo (meio). O valor medido é −15. MEDIDO em 21/11 (T54b): a venda piora com a dose -- "
+        "7d de −10 a −15% rende ~−0,08R por trade, −15 a −20 −0,42/−0,32R, abaixo de −20 "
+        "−0,75/−0,64R com ~10% de acerto. ⚠️ Sozinho (sem a véspera) fica no ruído em 2023-26 "
+        "(T54c: +105R [−2; +222]); e ao vivo teria barrado APT e FIL de 18/11, os maiores "
+        "ganhos de novembro."),
+    "auto_esticado_ret1": (
+        "VIVO 0 (desligado); só vale com `auto_esticado_modo` ligado. SHORT de tendência NÃO "
+        "abre se o ativo caiu este tanto ou mais no ÚLTIMO dia fechado (ontem, dia UTC), "
+        "qualquer que seja a semana. O valor medido é −5. MEDIDO em 21/11 (T54b): −0,24R por "
+        "trade em 2023-26 e −0,36R em 2020-22, negativo em 7 de 7 anos. Junto com o veto de 7 "
+        "dias em −15, o sistema soma +316R [+92; +517] em 2023-26 e +6.186R em 2020-22 sobre o "
+        "EST-1 sozinho (T54c). ⚠️ O corte foi escolhido depois de ver 21/11 (descritivo, sem "
+        "lacrado), e em 2026 o ganho é só +23R. A véspera fica gravada em `sinais.ret1_d1`."),
     "tp_so_intactos": (
         "1 = os alvos de TP só usam topos e fundos que nenhum fechamento posterior atravessou "
         "(1h e 4h; Fibonacci não muda). 0 = como era: todo pivô conta, e no T58 (19/11) 73% "

@@ -46,6 +46,7 @@ def test_rsi_e_retorno_batem_com_a_conta_na_mao():
     ctx = tendencia.contexto_de(_raw(c), time.time() * 1000)
     assert ctx["rsi"] == round(float(rsi(pd.Series(c), 14).iloc[-1]), 1)
     assert ctx["ret7"] == round((c[-1] / c[-8] - 1) * 100, 2)
+    assert ctx["ret1"] == round((c[-1] / c[-2] - 1) * 100, 2)          # [EST-2] ontem
 
 
 def test_vela_do_dia_em_formacao_nao_entra():
@@ -67,7 +68,9 @@ def test_zero_e_leitura_e_nao_ausencia():
 
 def test_historia_curta_e_ausencia():
     agora = time.time() * 1000
-    assert tendencia.contexto_de(_raw(CAI[:5]), agora) == {"rsi": None, "ret7": None}
+    cinco = tendencia.contexto_de(_raw(CAI[:5]), agora)
+    assert (cinco["rsi"], cinco["ret7"]) == (None, None) and cinco["ret1"] is not None
+    assert tendencia.contexto_de(_raw(CAI[:1]), agora)["ret1"] is None
     dez = tendencia.contexto_de(_raw(CAI[:10]), agora)
     assert dez["rsi"] is None and dez["ret7"] is not None        # 7 dias cabem, 14 nao
 
@@ -102,6 +105,15 @@ def test_o_scan_grava_o_contexto_no_sinal(banco, monkeypatch):
     esperado = tendencia.contexto_de(_raw(CAI), time.time() * 1000)
     linhas = _scan(monkeypatch)
     assert linhas == [{"status": "novo", "rsi_d1": 0.0, "ret7_d1": esperado["ret7"]}]
+
+
+def test_o_scan_grava_a_vespera_no_sinal(banco, monkeypatch):
+    """[EST-2] `ret1_d1`: o ultimo dia fechado sozinho, a mesma conta que a chave le."""
+    monkeypatch.setattr(tendencia, "_velas_1d", lambda a: _raw(CAI))
+    esperado = tendencia.contexto_de(_raw(CAI), time.time() * 1000)["ret1"]
+    _scan(monkeypatch)
+    with db.conectar() as c:
+        assert c.execute("SELECT ret1_d1 FROM sinais").fetchone()[0] == esperado < 0
 
 
 def test_diario_fora_do_ar_nao_custa_o_sinal(banco, monkeypatch):
@@ -153,5 +165,5 @@ def test_banco_que_ja_existia_ganha_as_colunas(tmp_path):
             velho = c.execute("SELECT rsi_d1, ret7_d1 FROM sinais").fetchone()
     finally:
         db.DB = original
-    assert {"rsi_d1", "ret7_d1"} <= colunas
+    assert {"rsi_d1", "ret7_d1", "ret1_d1"} <= colunas
     assert (velho["rsi_d1"], velho["ret7_d1"]) == (None, None)

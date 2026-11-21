@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS sinais(
   -- cruzar depois com `desfecho` e com `trades` e responder, no registro ao vivo, se "esticado
   -- no diario" separa sinal bom de ruim. NULL = nao medido (rede, ou sinal anterior a coluna).
   rsi_d1 REAL, ret7_d1 REAL,
+  -- [EST-2] Retorno do ULTIMO dia fechado (ontem, dia UTC), em %. NULL = nao medido.
+  ret1_d1 REAL,
   -- [AG-1] Agitacao do ativo contra o normal DELE: distancia do stop deste sinal (3xATR/preco)
   -- dividida pela mediana da mesma distancia nos ate 200 sinais anteriores do mesmo
   -- ativo+tf+tipo (`signal_engine._agitacao`). 1,0 = normal; 1,5 = ATR 50% acima do normal.
@@ -213,6 +215,11 @@ CONFIG_PADRAO = {
     # os mesmos SHORTs fizeram +20,7R ao vivo na conta A em novembro. Ver `autotrader._esticado`.
     "auto_esticado_modo": "off",     # off | meio (metade do risco) | veto (não vende)
     "auto_esticado_ret7": "-10",     # o corte, em % dos últimos 7 dias fechados
+    # [EST-2] Os degraus de cima, que só valem com `auto_esticado_modo` ligado: VETO quando os
+    # 7 dias passam de `auto_esticado_veto7`, ou quando o ativo caiu `auto_esticado_ret1` ou
+    # mais ONTEM. Nascem desligados (0). Medido em 21/11 (T54b/T54c). Ver `autotrader._esticado`.
+    "auto_esticado_veto7": "0",      # 0 = desligado | -15 = o corte da T54c
+    "auto_esticado_ret1": "0",       # 0 = desligado | -5 = o corte da T54c
     # [DV-2] Não abrir com a volatilidade implícita do BTC (DVOL) de ontem no percentil >= corte
     # dos 180 dias anteriores (`sinais.dvol_pct`, [DV-1]). Nasce desligado. Medido em 19/11 (T61,
     # T63): +0,54R/trade na descoberta, +0,25R na reserva, e a carteira melhora. Ver
@@ -437,6 +444,7 @@ def _migrar(c):
                             ("desfecho", "TEXT"), ("desfecho_ts", "TEXT"),
                             ("preco_1h", "REAL"), ("preco_4h", "REAL"), ("preco_24h", "REAL"),
                             ("rsi_d1", "REAL"), ("ret7_d1", "REAL"),    # [CD-1] contexto do diario
+                            ("ret1_d1", "REAL"),                        # [EST-2] queda de ontem
                             ("atr_rel", "REAL"),                        # [AG-1] agitacao vs normal
                             ("parede_4h", "REAL"),                      # [SR-3] nivel do 4h a frente
                             ("dvol_pct", "REAL")],                      # [DV-1] DVOL de ontem
