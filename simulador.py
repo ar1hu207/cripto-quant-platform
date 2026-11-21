@@ -3,9 +3,12 @@ Sprint 2 - Motor de simulação. Transforma um sinal confirmado em posição sim
 no preço REAL ao vivo, com alavancagem, taxa, funding e LIQUIDAÇÃO. Persiste no banco.
 Dinheiro fictício; preço de verdade.
 """
+import contextvars
 import json
 import math
 import threading
+import time
+from datetime import datetime
 
 import pandas as pd
 
@@ -18,6 +21,18 @@ from logbot import log
 
 ex = mercado.ex_spot                # [memoria] o cliente do processo, nao uma copia (~110 MB cada)
 ex_fut = mercado.ex_fut             # funding (perp)
+
+# [NOITE-1] O relógio de quem fecha. Fora da recuperação da lacuna é `pd.Timestamp.now()`, como
+# sempre foi. Dentro dela é o minuto da vela que está sendo repassada: um stop que bateu às 23:14
+# fecha com `fechado_em` 23:14, e é até 23:14 que o funding é cobrado -- e não às 07:36, quando o
+# servidor voltou. É ContextVar e não global porque o fechamento manual da API roda em outra
+# thread ao mesmo tempo: um global vazaria a hora da madrugada para o clique do operador.
+_relogio = contextvars.ContextVar("relogio_simulador", default=None)
+
+
+def _agora():
+    v = _relogio.get()
+    return v if v is not None else pd.Timestamp.now()
 LIQ_BUFFER = 0.9   # liquida quando a perda chega a ~90% da margem (buffer de manutenção)
 _abrir_lock = threading.Lock()   # serializa aberturas concorrentes (worker + API) — evita TOCTOU no teto
 
@@ -602,7 +617,7 @@ def _fechar_uma(pos_id, motivo, preco_saida):
     if preco_saida is None:
         preco_saida = preco_ao_vivo(pos["ativo"])              # rede FORA do lock de escrita
     pnl, taxa, move = _pnl(pos, preco_saida)                   # liquidação usa o preço de liq (coerente c/ LIQ_BUFFER)
-    fechado_em = str(pd.Timestamp.now())
+    fechado_em = str(_agora())
     nocional = pos["valor_reais"] * pos["alavancagem"]
     funding = _funding_custo(pos["ativo"], pos["aberto_em"], fechado_em, pos["direcao"], nocional)
     if funding is not None:
@@ -687,6 +702,14 @@ def atualizar():
     trail = _trailing_cfg(cfg)
     tp = alvos.cfg_tp(cfg)                                  # [TP-1] mesma política p/ o ciclo todo
     eventos = []
+    # [NOITE-1] Antes do preço de agora, o que aconteceu enquanto ninguém olhava. Try próprio e
+    # ANTES da leitura das abertas: a recuperação fecha posições, e uma falha nela não pode
+    # tirar a marcação ao vivo do ciclo -- ela é o que protege a posição a partir de agora.
+    try:
+        eventos += recuperar_lacuna(cfg, trail, tp)
+    except Exception as e:
+        recuperacao["ultimo_erro"] = f"{type(e).__name__}: {str(e)[:140]}"
+        log(f"[NOITE-1] recuperação da lacuna falhou: {type(e).__name__}: {e}", "error")
     with db.conectar() as con:
         abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
     ultima_marcacao.update(ts=str(pd.Timestamp.now()), total=len(abertas), ok=0, falhas=0,
@@ -706,6 +729,202 @@ def atualizar():
             ultima_marcacao["ultimo_erro"] = f"{pos['ativo']}: {type(e).__name__}: {str(e)[:140]}"
             log(f"atualizar falhou {pos['ativo']}: {e}", "error")
             continue
+    return eventos
+
+
+# ---------------------------------------------------------------------------
+# [NOITE-1] Recuperação da lacuna: o que o mercado fez enquanto o worker não olhava.
+#
+# O servidor do paper desliga todo dia das 19:00 às 07:36. Nessas 12,6 h stop, TP e trailing não
+# existem: não são ordens na corretora, são este processo olhando o preço a cada 15 s. Na volta,
+# a marcação via só o preço das 07:36. Um stop furado de madrugada fechava no preço da manhã, ou
+# não fechava nunca, se o preço tivesse voltado. Um TP tocado e devolvido se perdia (BCH, 14/11,
+# ~R$134). O trailing não andava. E o dono fechava a cesta na mão antes das 19h: 6 dos 10
+# cliques com lucro de novembro foram a menos de 70 min do desligamento (T71).
+#
+# A causa não é o horário do servidor: é o paper não ter ordem DESCANSANDO em lugar nenhum. Na
+# corretora, stop e alvo ficam no livro e executam sem nós. A correção faz o paper se comportar
+# assim: na volta, busca as velas de 1 minuto da lacuna e passa cada uma pela MESMA marcação do
+# ciclo ao vivo (`_marcar_uma`). Trailing, liquidação, gap, TP em parcelas, resto livre e stop
+# na entrada são as funções de sempre, não uma segunda implementação que um dia diverge.
+#
+# Dentro de cada vela a ordem é abertura -> extremo CONTRA -> extremo A FAVOR. A vela de 1 min
+# não diz se o preço foi primeiro à máxima ou à mínima, e quando o mesmo minuto tem os dois a
+# proteção decide primeiro: é a mesma ordem do `_marcar_uma` (stop antes de TP) e do replay do
+# T50, que reproduziu os trades reais com correlação 0,97-0,99.
+#
+# Fill de uma ordem que descansava: o extremo contra é LIMITADO ao stop (ou à liquidação, o que
+# vier antes). Passar a mínima da vela inteira faria o `_fill_stop` executar no fundo do pavio,
+# um preço em que nenhuma ordem stop executa. A abertura não é limitada: se a vela já abriu além
+# do stop, foi gap, e o fill é a abertura (o `-gap` do [P2-18] continua marcando isso).
+#
+# A versão-sintoma que NÃO se fez: fechar ou travar tudo às 18:45, que é o que o dono fazia na
+# mão. O T71 mediu: fechar às 18:45 quem tem >= 2R dá -0,19R por posição [-0,38; -0,02]; travar
+# a 0,5R dá -0,08R. Isso trata o medo da noite cortando o lucro, e deixaria o paper diferente do
+# que a corretora faria com as mesmas ordens.
+# ---------------------------------------------------------------------------
+recuperacao = {"ts": None, "desde": None, "lacuna_min": None, "posicoes": 0, "velas": 0,
+               "marcacoes": 0, "fechadas": 0, "falhas": 0, "ultimo_erro": None, "cortada": False}
+_marcado_ate = {"ts": None}      # naive local: até onde as posições já foram olhadas
+_PAGINAS_MAX = 10                # 10 x 1000 velas de 1 min ~ 7 dias de lacuna
+_ORCAMENTO_S = 120.0             # o watchdog do systemd mata o serviço em 300 s sem ciclo
+
+
+def _ms(ts):
+    """Timestamp naive LOCAL -> UTC ms. A mesma conversão do `_funding_custo`."""
+    return int(pd.Timestamp(ts).to_pydatetime().astimezone().timestamp() * 1000)
+
+
+def _local(ms):
+    """UTC ms (abertura da vela da Binance) -> Timestamp naive LOCAL, o formato do banco."""
+    return pd.Timestamp(datetime.fromtimestamp(ms / 1000))
+
+
+def _velas_1m(ativo, desde_ms, ate_ms):
+    """Velas de 1 min FECHADAS em [desde_ms, ate_ms), da mesma fonte do preço ao vivo (`ex`)."""
+    out, since = {}, int(desde_ms)
+    for _ in range(_PAGINAS_MAX):
+        lote = ex.fetch_ohlcv(ativo, timeframe="1m", since=since, limit=1000)
+        if not lote:
+            break
+        for v in lote:
+            if v[0] >= desde_ms and v[0] + 60_000 <= ate_ms:   # só vela que já fechou
+                out[v[0]] = v
+        ultimo = lote[-1][0]
+        if len(lote) < 1000 or ultimo + 60_000 >= ate_ms:
+            break
+        since = ultimo + 60_000
+    return [out[k] for k in sorted(out)]
+
+
+_velas_1m_original = _velas_1m
+
+
+def _ultima_marcacao_gravada():
+    """O último instante em que um ciclo terminou: a última linha de equity. None = banco novo."""
+    with db.conectar() as con:
+        r = con.execute("SELECT ts FROM equity ORDER BY rowid DESC LIMIT 1").fetchone()
+    return pd.Timestamp(str(r["ts"])) if r and r["ts"] else None
+
+
+def _ainda_aberta(pos_id):
+    with db.conectar() as con:
+        return con.execute("SELECT 1 FROM posicoes WHERE id=? AND status='aberta'",
+                           (pos_id,)).fetchone() is not None
+
+
+def _vela_mexe(pos, preco, d, trail, tp):
+    """Este preço pode mudar alguma coisa na posição? Só então vale a marcação (e a escrita).
+
+    Sem o filtro, 750 velas x 3 pontos x 5 posições seriam ~11 mil escritas no banco a cada
+    volta do servidor. Com ele, só os minutos em que o stop, a liquidação, um alvo ou o trailing
+    estão em jogo. O filtro só PULA: quem decide continua sendo o `_marcar_uma`."""
+    liq = _preco_liquidacao(pos["entrada"], d, pos["alavancagem"])
+    s = pos["stop"]
+    if (d == 1 and preco <= liq) or (d == -1 and preco >= liq):
+        return True
+    if s and ((d == 1 and preco <= s) or (d == -1 and preco >= s)):
+        return True
+    novo = _trailing_novo_stop(pos, preco, d, trail)
+    if novo is not None and (not s or (d == 1 and novo > s) or (d == -1 and novo < s)):
+        return True
+    if tp and tp.get("on"):
+        plano = alvos.ler(pos)
+        if plano:
+            _, t = alvos.proximo(plano)
+            if t is not None and alvos.bateu(pos["direcao"], preco, t["preco"]):
+                return True
+    return False
+
+
+def _repassar_vela(pos, vela, trail, eventos, cfg, tp):
+    """Uma vela de 1 min pela marcação de sempre. True = a posição fechou nela."""
+    ms, o, h, l = vela[0], float(vela[1]), float(vela[2]), float(vela[3])
+    d = 1 if pos["direcao"] == "LONG" else -1
+    token = _relogio.set(_local(ms))
+    try:
+        for ponto in ("abertura", "contra", "favor"):
+            if ponto == "abertura":
+                preco = o
+            elif ponto == "contra":
+                liq = _preco_liquidacao(pos["entrada"], d, pos["alavancagem"])
+                s = pos["stop"] or (-math.inf if d == 1 else math.inf)
+                piso = max(s, liq) if d == 1 else min(s, liq)       # o que o preço encontra primeiro
+                preco = max(l, piso) if d == 1 else min(h, piso)
+            else:
+                preco = h if d == 1 else l
+            if not _vela_mexe(pos, preco, d, trail, tp):
+                continue
+            recuperacao["marcacoes"] += 1
+            _marcar_uma(pos, trail, eventos, cfg, {pos["ativo"]: preco}, tp)
+            if not _ainda_aberta(pos["id"]):
+                return True
+        return False
+    finally:
+        _relogio.reset(token)
+
+
+def recuperar_lacuna(cfg, trail, tp):
+    """[NOITE-1] Repassa as velas de 1 min da lacuna nas posições abertas. Devolve os eventos.
+
+    Lacuna = tempo desde o último ciclo (a última linha de equity na volta do processo; o início
+    do ciclo anterior depois disso). Abaixo de `recupera_lacuna_min` não faz nada: é o ciclo
+    normal.
+
+    Só posições. As ordens post-only ficam de fora, declarado: com validade de 1 h e o scan
+    parado à noite, nenhuma das 26 ordens expiradas de novembro (A, B, C) expirou na volta do
+    servidor.
+
+    Posição sem plano de TP gravado não realiza alvo na recuperação: o plano seria calculado
+    agora, com velas de depois da lacuna, e alvo escolhido olhando o futuro é lucro inventado.
+    Stop, liquidação e trailing valem para ela normalmente."""
+    agora = pd.Timestamp.now()
+    desde = _marcado_ate["ts"]
+    if desde is None:
+        desde = _ultima_marcacao_gravada()
+    _marcado_ate["ts"] = agora              # este ciclo olha daqui em diante, ligado ou não
+    if str(cfg.get("recupera_lacuna", "0")) not in ("1", "true", "True") or desde is None:
+        return []
+    # Quem trocou a fonte de preço (o backtest de carteira, as fixtures) e não trocou a de velas
+    # está num mundo em que as velas reais de agora são o futuro: a recuperação sai de cena,
+    # pela mesma regra do `_precos_em_lote`.
+    if preco_ao_vivo is not _preco_ao_vivo_original and _velas_1m is _velas_1m_original:
+        return []
+    lacuna_min = (agora - desde).total_seconds() / 60
+    if lacuna_min < _cfg_float(cfg, "recupera_lacuna_min", 3.0):
+        return []
+    with db.conectar() as con:
+        abertas = [dict(r) for r in con.execute("SELECT * FROM posicoes WHERE status='aberta'")]
+    recuperacao.update(ts=str(agora), desde=str(desde), lacuna_min=round(lacuna_min, 1),
+                       posicoes=len(abertas), velas=0, marcacoes=0, fechadas=0, falhas=0,
+                       ultimo_erro=None, cortada=False)
+    eventos, ate_ms, t0 = [], _ms(agora), time.monotonic()
+    for pos in abertas:
+        # try POR POSIÇÃO ([P1-1]): uma moeda sem velas não tira as outras da recuperação.
+        try:
+            if time.monotonic() - t0 > _ORCAMENTO_S:
+                recuperacao["cortada"] = True
+                log(f"[NOITE-1] orçamento de {_ORCAMENTO_S:.0f}s estourado: as posições restantes "
+                    "seguem só pela marcação ao vivo", "warning")
+                break
+            aberto = pd.Timestamp(pos["aberto_em"])
+            # Posição aberta durante a lacuna começa na vela SEGUINTE à da entrada: a vela da
+            # entrada tem preço de antes de ela existir.
+            ini = desde.floor("min") if aberto <= desde else aberto.floor("min") + pd.Timedelta(minutes=1)
+            velas = _velas_1m(pos["ativo"], _ms(ini), ate_ms)
+            recuperacao["velas"] += len(velas)
+            tp_pos = tp if pos.get("tps") else None
+            for v in velas:
+                if _repassar_vela(pos, v, trail, eventos, cfg, tp_pos):
+                    recuperacao["fechadas"] += 1
+                    break
+        except Exception as e:
+            recuperacao["falhas"] += 1
+            recuperacao["ultimo_erro"] = f"{pos['ativo']}: {type(e).__name__}: {str(e)[:140]}"
+            log(f"[NOITE-1] recuperação falhou {pos['ativo']} #{pos['id']}: {e}", "error")
+    log(f"[NOITE-1] lacuna de {lacuna_min:.0f} min desde {str(desde)[:19]}: {len(abertas)} posições, "
+        f"{recuperacao['velas']} velas, {recuperacao['marcacoes']} marcações, "
+        f"{recuperacao['fechadas']} fechadas, {len(eventos)} eventos")
     return eventos
 
 
@@ -880,7 +1099,7 @@ def _checar_tps(pos, preco, tp, cfg, eventos):
         frac = 1.0 if leva_tudo else min(1.0, t["frac"] * plano["valor_inicial"] / pos["valor_reais"])
         t["feito"] = True
         t["fill"] = fill
-        t["em"] = str(pd.Timestamp.now())
+        t["em"] = str(_agora())
         motivo = f"tp{i + 1}"
         if frac >= 0.999:
             fechar(pos["id"], motivo, fill)
@@ -950,7 +1169,7 @@ def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
     parte = dict(pos)
     parte["valor_reais"] = v_fecha
     pnl, taxa, move = _pnl(parte, preco_saida, cfg)
-    fechado_em = str(pd.Timestamp.now())
+    fechado_em = str(_agora())
     funding = _funding_custo(pos["ativo"], pos["aberto_em"], fechado_em, pos["direcao"],
                              v_fecha * pos["alavancagem"])
     if funding is not None:

@@ -535,6 +535,8 @@ CONFIG_CATALOGO = {
     "tp_resto_livre":       ("bool",),
     "tp_so_intactos":       ("bool",),          # [SR-2]
     "tp_stop_entrada":      ("bool",),          # [TP-3]
+    "recupera_lacuna":      ("bool",),          # [NOITE-1]
+    "recupera_lacuna_min":  ("float", 1.0, 1440.0),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
@@ -1143,6 +1145,10 @@ def status():
     # `total` alto contra `ciclos` decide, e a decisão é do dono.
     return {**_health, "worker_on": _worker_on["v"], "scan": sc, "marcacao": mk,
             "funding": simulador.funding_medicao,
+            # [NOITE-1] a última recuperação de lacuna: de quando, quantas velas, quantas
+            # posições fechou. Sem isto, a volta do servidor que fechou 3 stops de madrugada
+            # seria indistinguível no /status de uma volta em que nada aconteceu.
+            "recuperacao": simulador.recuperacao,
             "caps_geometria": autotrader.CAPS_GEOMETRIA,
             # [P2-39] o teto de TAMANHO, ao lado do teto de ALAVANCAGEM. Os dois capam, e
             # capavam — só que este capava calado. Publicado do mesmo jeito e pela mesma
