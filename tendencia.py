@@ -78,7 +78,12 @@ def contexto_de(raw, agora_ms):
     ret = None
     if len(c) > RET_DIAS and c.iloc[-1 - RET_DIAS] > 0:
         ret = round((float(c.iloc[-1]) / float(c.iloc[-1 - RET_DIAS]) - 1) * 100, 2)
-    return {"rsi": None if r != r else round(r, 1), "ret7": ret}      # r != r: NaN
+    # [EST-2] O último dia fechado sozinho (ontem, no dia UTC): a queda de véspera que o T54b
+    # mediu separada da semana.
+    ret1 = None
+    if len(c) > 1 and c.iloc[-2] > 0:
+        ret1 = round((float(c.iloc[-1]) / float(c.iloc[-2]) - 1) * 100, 2)
+    return {"rsi": None if r != r else round(r, 1), "ret7": ret, "ret1": ret1}   # r != r: NaN
 
 
 def _do_dia(ativo, agora_ms=None):
@@ -104,7 +109,7 @@ def lado(ativo, modo, agora_ms=None):
 
 
 def contexto(ativo, agora_ms=None):
-    """[CD-1] `{"rsi", "ret7"}` do diário do ativo. Levanta em falha de rede, como `lado`:
+    """[CD-1] `{"rsi", "ret7", "ret1"}` do diário do ativo. Levanta em falha de rede, como `lado`:
     quem decide o que fazer com a ausência é quem chama (o scan grava NULL e segue)."""
     return _do_dia(ativo, agora_ms)[2]
 
