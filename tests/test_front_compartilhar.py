@@ -1,9 +1,10 @@
 """[SHARE-1] Card do resultado do mes para marketing (`web/app/compartilhar.js`).
 
-O PNG sai da casa para rede social. Duas promessas que nao podem regredir sem alguem perceber:
-1. NENHUM valor em R$ no card -- so percentuais e contagens. A banca e assunto do dono.
-2. O card DIZ que a conta e simulada. Publicar a % de paper trading sem isso vende como real um
-   resultado que nao foi (CLAUDE.md: nao maquiar o resultado).
+O PNG sai da casa para rede social. Promessa que nao pode regredir sem alguem perceber:
+NENHUM valor em R$ no card -- so percentuais e contagens. A banca e assunto do dono.
+
+Existia uma segunda (o card dizer que a conta e simulada). O dono a retirou em 25/11/2026,
+avisado de que sem ela a % de paper trading pode ser lida como lucro real: decisao dele.
 
 Como os outros test_front_*: so leitura de arquivo, sem navegador, para rodar no CI.
 """
@@ -31,10 +32,6 @@ def test_card_nao_desenha_dinheiro():
     assert "R$" not in d
     for fmt in ("F.brl", "F.money", "fmt.brl", "fmt.money", "pnl_reais", "banca"):
         assert fmt not in d, f"desenhar() usa {fmt}: valor em dinheiro no card"
-
-
-def test_card_diz_que_a_conta_e_simulada():
-    assert re.search(r"Conta simulada \(paper trading\)", _desenho())
 
 
 def test_os_dois_paineis_carregam_o_modulo_depois_do_api():

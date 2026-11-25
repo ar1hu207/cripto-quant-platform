@@ -132,16 +132,10 @@
        que sobra no meio. Stories deixa ~250 px livres em cima e embaixo (barras do Instagram). */
     var topo = story ? 240 : 72, fundo = H - (story ? 250 : 72);
 
-    /* topo: logo + wordmark à esquerda, conta à direita */
+    /* topo: logo + wordmark. O nome da conta ("Paper A") saiu a pedido do dono em 25/11: é rótulo interno */
     var y = topo, lh = 92, lw = img ? Math.round(lh * img.width / img.height) : 0;
     if (img) ctx.drawImage(img, PAD - 6, y, lw, lh);
     txt(ctx, 'Apollux', PAD + (lw ? lw + 8 : 0), y + lh / 2 + 19, '800 54px ' + FD, C.txt, 'left', -0.5);
-    ctx.font = '600 24px ' + FM; if ('letterSpacing' in ctx) ctx.letterSpacing = '3px';
-    var conta = String(A.NOME_CONTA || '').toUpperCase(), cw = ctx.measureText(conta).width + 44;
-    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
-    rr(ctx, W - PAD - cw, y + lh / 2 - 26, cw, 52, 26); ctx.fillStyle = 'rgba(237,237,239,.05)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(237,237,239,.18)'; ctx.lineWidth = 2; ctx.stroke();
-    txt(ctx, conta, W - PAD - cw / 2 + 1.5, y + lh / 2 + 9, '600 24px ' + FM, C.txt2, 'center', 3);
 
     /* resultado: o número grande. A vírgula da Syne desce ~0,2 do corpo: a linha de baixo respeita isso */
     y += lh + (story ? 130 : 90);
@@ -156,10 +150,9 @@
     var cTop = y + (story ? 64 : 48);
 
     /* rodapé, de baixo para cima: aviso → linha → três números → eixo da curva */
-    var yL2 = fundo, yL1 = yL2 - 34, ySep = yL1 - 46, yStats = ySep - 34 - 150, yAx = yStats - 44, cBot = yAx - 34;
+    var yL2 = fundo, ySep = yL2 - 46, yStats = ySep - 34 - 150, yAx = yStats - 44, cBot = yAx - 34;
     ctx.fillStyle = 'rgba(237,237,239,.12)'; ctx.fillRect(PAD, ySep, W - 2 * PAD, 2);
-    txt(ctx, 'Conta simulada (paper trading) com preço real da Binance.', PAD, yL1, '400 24px ' + FU, C.mute);
-    txt(ctx, 'Resultado passado não garante resultado futuro.', PAD, yL2, '400 24px ' + FU, C.mute);
+    /* sem aviso de conta simulada nem "resultado passado...": o dono tirou os dois em 25/11 */
     /* data de emissão, e não "operado pelo Apollo": parte do resultado vem de fechamento manual */
     var hj = A.hoje();
     txt(ctx, 'emitido em ' + hj.slice(8, 10) + '/' + hj.slice(5, 7) + '/' + hj.slice(0, 4), W - PAD, yL2, '500 22px ' + FM, C.mute, 'right');
