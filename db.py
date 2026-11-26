@@ -150,6 +150,26 @@ CREATE TABLE IF NOT EXISTS push_inscricoes(
   criado_em TEXT,        -- naive, hora de Sao Paulo (CLAUDE.md §1)
   ultimo_ok TEXT,
   falhas INTEGER DEFAULT 0);
+
+-- [LIVE-2] Execucoes REAIS, como a corretora as lancou: uma linha por negocio (um envio pode
+-- encher em varios). E a auditoria do que o livro afirma -- preco, taxa e lado de cada entrada
+-- e de cada saida -- e a fonte do relatorio fiscal. So a conta com `corretora` != papel grava
+-- aqui; no papel a tabela fica vazia. `id` e o id do negocio NA corretora, prefixado pelo
+-- ambiente (`demo:123`), porque o demo e o real numeram por conta propria e um nao pode
+-- esconder o outro. `posicao_id` NULL = negocio que o livro nao soube atribuir (posicao
+-- adotada, fechamento feito pelo aplicativo).
+CREATE TABLE IF NOT EXISTS fills(
+  id TEXT PRIMARY KEY,
+  corretora TEXT,        -- demo | binance
+  ordem_id TEXT,         -- id da ordem na corretora
+  ativo TEXT, lado TEXT, -- buy | sell
+  qty REAL, preco REAL,
+  taxa REAL, taxa_moeda TEXT,
+  maker INTEGER,         -- 1 = descansou no livro (taxa de maker)
+  pnl_realizado REAL,    -- o bruto que a corretora lancou no negocio (sem taxa)
+  ts TEXT,               -- naive, hora de Sao Paulo (CLAUDE.md §1)
+  posicao_id INTEGER,
+  papel TEXT);           -- entrada | saida
 """
 
 # Fonte UNICA da verdade dos parametros do sistema. [P2-16]
@@ -318,6 +338,37 @@ CONFIG_PADRAO = {
     # [TD-1] Só entra a favor da tendência do DIÁRIO do próprio ativo (T38). Nasce desligado;
     # a conta B liga. d1 = EMA20 e close do lado certo da EMA50; d2 = só o cruzamento.
     "tendencia_filtro": "off",    # off | d1 | d2 -- ver tendencia.py
+    # [LIVE-2] Onde as ordens sao EXECUTADAS. Nasce "papel": o comportamento de sempre, e nada
+    # muda ate o dono trocar. "demo" = Binance Demo Trading (ordens de verdade, dinheiro
+    # ficticio); "binance" = dinheiro real. Fora do papel o livro (este banco) passa a ser a
+    # COPIA e a corretora a verdade -- ver `execucao.py`. A troca so e aceita na instancia que
+    # sobe com `CORRETORA_HABILITADA=1` no ambiente (`deploy/cripto-bot-r.service`), com o livro
+    # sem posicao nem ordem aberta: as contas de papel nao viram reais por um POST perdido.
+    "corretora": "papel",                # papel | demo | binance
+    "corretora_dry_run": "0",            # 1 = monta a ordem inteira, registra e NAO envia
+    "corretora_nocional_max": "300",     # teto de nocional POR ORDEM, em USDT (ultima linha)
+    # Quanto da conta da corretora e do bot. A banca do livro nasce em min(saldo, banca_alocada):
+    # o demo (5.000 USDT ficticios) se comporta como a conta de US$200, e um deposito para outro
+    # fim nao vira risco sem decisao.
+    "banca_alocada": "200",
+    # Teto de perda TOTAL, em USDT, contado da banca inicial do livro. Batido, desliga o
+    # `auto_trade` e recusa entrada ate o dono subir o teto. A trava diaria protege o dia; esta
+    # protege a conta. 0 = desligado (so e aceito assim fora do modo `binance`).
+    "perda_total_max": "0",
+    "trava_total_em": "",                # estado: quando a trava total disparou e com que teto
+    "corretora_ns": "",                  # estado: prefixo dos ids de ordem deste banco
+    # Posicao que existe na corretora e nao no livro e ADOTADA, e ganha um stop a esta distancia
+    # do preco de entrada (fracao). Nao ha sinal de onde tirar o stop dela.
+    "corretora_stop_adocao": "0.03",
+    # O trailing so reenvia o stop a corretora quando ele anda pelo menos isto, em R. Cada
+    # movimento sao duas chamadas (coloca o novo, cancela o antigo); a 15 s por ciclo, mover a
+    # cada centavo gastaria o limite de ordens sem proteger nada a mais.
+    "corretora_trailing_passo_r": "0.1",
+    # Modo noite: o servidor desliga ~20h e volta ~8h. Dentro da janela o bot nao abre, cancela
+    # as entradas pendentes e entrega o trailing a corretora (TRAILING_STOP_MARKET nativo, em %).
+    "noite_ativo": "0",
+    "noite_inicio": "19:00",             # hora de Sao Paulo
+    "noite_fim": "07:00",
     "telegram_token": "",
     "telegram_chat_id": "",
 }
@@ -464,7 +515,25 @@ def _migrar(c):
                  "posicoes": [("conviccao", "REAL"), ("sinal_id", "INTEGER"),
                               ("taxa_entrada", "REAL"),
                               ("stop_abertura", "REAL"), ("risco_abertura", "REAL"),
-                              ("tps", "TEXT")],   # [TP-1] plano de take profit, JSON (alvos.calcular)
+                              ("tps", "TEXT"),    # [TP-1] plano de take profit, JSON (alvos.calcular)
+                              # [LIVE-2] A posicao NA CORRETORA. Tudo NULL no papel, e NULL e
+                              # "nao ha ordem nenhuma em lugar nenhum", nao zero.
+                              ("corretora", "TEXT"),      # demo | binance
+                              ("qty", "REAL"),            # quantidade aberta la, na moeda base
+                              ("qty_inicial", "REAL"),    # a da abertura: as fracoes de TP saem dela
+                              ("client_oid", "TEXT"), ("ordem_ext_id", "TEXT"),   # a entrada
+                              ("stop_ext_id", "TEXT"), ("stop_coid", "TEXT"),     # o stop vivo
+                              ("stop_seq", "INTEGER"),    # contador: cada stop movido tem id novo
+                              ("funding_pago", "REAL"),   # funding ja lancado em parciais
+                              ("noite", "TEXT")],         # trailing nativo da noite, JSON
+                 # [LIVE-2] A ordem de entrada NA CORRETORA. `tipo` distingue a que descansa
+                 # (limite) da que foi a mercado: na conta real toda entrada passa por esta
+                 # tabela ANTES de ir a rede, para existir registro da intencao se o processo
+                 # cair entre o envio e a resposta.
+                 "ordens": [("corretora", "TEXT"), ("tipo", "TEXT"), ("qty", "REAL"),
+                            ("qty_preenchida", "REAL"), ("client_oid", "TEXT"),
+                            ("ordem_ext_id", "TEXT"), ("stop_ext_id", "TEXT"),
+                            ("stop_coid", "TEXT"), ("stop_rel", "REAL")],
                  "trades": [("conviccao", "REAL"), ("stop", "REAL"),
                             ("risco_inicial", "REAL"), ("funding", "REAL"),
                             ("ret_pct_liq", "REAL"),
@@ -473,7 +542,14 @@ def _migrar(c):
                             # gravadas significam "risco no stop da SAIDA", e reescrever o
                             # significado delas coalharia duas series com o mesmo nome -- que
                             # e pior que o defeito, e e a licao do [P2-40].
-                            ("risco_abertura", "REAL")],
+                            ("risco_abertura", "REAL"),
+                            # [LIVE-2] Na conta real `pnl_reais`, `taxa` e `funding` sao o que a
+                            # corretora LANCOU. O que o modelo do papel teria dito para o mesmo
+                            # trade vai nestas tres: a diferenca entre as duas series e a
+                            # medicao que a conta real existe para fazer. NULL no papel.
+                            ("corretora", "TEXT"), ("qty", "REAL"),
+                            ("pnl_modelo", "REAL"), ("taxa_modelo", "REAL"),
+                            ("funding_modelo", "REAL")],
                  # [PUSH-2] o que cada aparelho quer receber (JSON, push.PREFS_PADRAO) e quando
                  # saiu o ultimo resumo periodico dele. NULL = padrao: tudo na hora, sem resumo,
                  # que e o comportamento de quem se inscreveu antes destas colunas existirem.
@@ -517,6 +593,9 @@ INDICES = [
     # sai dele sem ordenar. O dedupe do `_repetido` filtra pelas mesmas tres colunas e passa a
     # usa-lo tambem.
     "CREATE INDEX IF NOT EXISTS idx_sinais_par ON sinais(ativo, tf, tipo)",
+    # [LIVE-2] `execucao._fills_novos` pergunta, a cada saida e a cada divergencia, quais
+    # negocios do ativo o livro ja lancou. Sem indice e full scan numa tabela que so cresce.
+    "CREATE INDEX IF NOT EXISTS idx_fills_ativo ON fills(ativo, corretora)",
 ]
 
 
