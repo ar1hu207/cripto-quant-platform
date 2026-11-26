@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # [LIVE-10] `python -m execucao` com o ambiente da conta R, no servidor, sempre como `cripto`.
 #
-#   sudo bash deploy/r.sh estado
-#   sudo bash deploy/r.sh config chave=valor ...          (o único caminho que AFROUXA em binance)
-#   sudo bash deploy/r.sh config-de /home/cripto/cripto-bot/trading.db perda_total_max=60 ...
-#   sudo bash deploy/r.sh panico                          (prefira deploy/panico.sh: tenta o serviço antes)
+#   sudo -u cripto bash deploy/r.sh estado
+#   sudo -u cripto bash deploy/r.sh config chave=valor ...   (o único caminho que AFROUXA)
+#   sudo -u cripto bash deploy/r.sh config-de /home/cripto/cripto-bot/trading.db perda_total_max=60 ...
+#   sudo -u cripto bash deploy/r.sh reset RESET
+#   sudo -u cripto bash deploy/r.sh panico                (prefira `sudo cripto-panico-r`: tenta o serviço antes)
+#
+# COMO `cripto`, não como root ([LIVE-12]): este arquivo mora numa pasta que o `cripto` (o
+# processo da A, exposto na internet) pode alterar, e `sudo bash` faria root executá-lo.
 #
 # Os arquivos de ambiente são lidos pelo Python como o systemd os lê (`execucao._carregar_env`),
 # sem `source`: nenhum valor é executado pelo bash. `DB_PATH` e `CONTA` da R vencem o `.env` da A.

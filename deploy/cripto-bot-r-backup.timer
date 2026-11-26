@@ -1,0 +1,13 @@
+# [LIVE-12] Uma vez por dia, ao meio-dia de São Paulo: o dl380 fica desligado de noite, e o
+# cron das 03:17 nunca rodava. `Persistent=true`: se a máquina estava desligada na hora, roda
+# assim que ela liga. Fuso explícito porque o contêiner está em UTC.
+[Unit]
+Description=Cripto Bot - backup diario do banco da conta R
+
+[Timer]
+OnCalendar=*-*-* 12:00:00 America/Sao_Paulo
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

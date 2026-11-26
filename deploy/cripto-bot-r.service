@@ -33,16 +33,18 @@
 # papel + reset, binance com dry_run=1; (4) envio real ligado NO SERVIDOR; (5) o dono liga o
 # auto_trade. Trocar de corretora exige auto_trade=0.
 #
-# Pânico sem painel: `sudo bash deploy/panico.sh` (no servidor) desliga o bot, cancela tudo e
-# fecha tudo na corretora, mesmo com este serviço travado (ele o PARA antes do caminho direto).
+# Pânico sem painel: `sudo cripto-panico-r` (no servidor; a cópia de root de deploy/panico.sh,
+# instalação no cabeçalho dele) desliga o bot, cancela tudo e fecha tudo na corretora, mesmo com
+# este serviço travado (ele o PARA antes do caminho direto).
 #
 # O deploy da A (git pull no /home/cripto/cripto-bot) troca o código das quatro: depois dele,
 # reinicie os QUATRO serviços (/testeR/health mostra o commit). Reiniciar esta unit é seguro com
 # posição aberta: stop e alvos estão na corretora, e o boot começa pela reconciliação.
 [Unit]
 Description=Cripto Bot - conta R (opera em corretora)
-# time-sync: com o relógio errado a Binance recusa tudo (-1021). O servidor liga de manhã, e o
-# processo subindo antes do NTP passava a primeira hora recusado.
+# time-sync: só ORDENA depois do alvo; não espera o NTP sincronizar (isso exige
+# systemd-time-wait-sync, e num LXC o relógio é o do host). O que protege de verdade do -1021
+# (relógio errado) é a ressincronização no adaptador (`corretora._Cliente`).
 After=network-online.target time-sync.target cripto-bot.service
 Wants=network-online.target
 

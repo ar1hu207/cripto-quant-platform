@@ -11,9 +11,11 @@ uma página no meio da escrita. Aqui a cópia é a API de backup do SQLite (a me
 na CÓPIA: se não der "ok", ela é apagada e a saída é 1, para o cron (e quem olha o log) saber
 que o backup daquela noite não existe. As `N` cópias mais novas ficam; as outras saem.
 
-Cron sugerido (usuário `cripto`, 03:17, hora do servidor):
-    17 3 * * * /home/cripto/cripto-bot/venv/bin/python /home/cripto/cripto-bot/deploy/backup_banco.py \
-        /home/cripto/cripto-bot-r/trading.db /home/cripto/backup-r --manter 30 >> /home/cripto/backup-r/backup.log 2>&1
+Agendado por `deploy/cripto-bot-r-backup.timer` ([LIVE-12]): o cron das 03:17 que estava aqui
+caía na hora em que o dl380 está DESLIGADO (e o contêiner está em UTC), e cron não recupera a
+execução perdida; o timer, com `Persistent=true`, roda ao ligar se perdeu a hora. A cópia sai
+com permissão só do dono (`umask 077`): leva a config inteira, inclusive o token do Telegram.
+A pasta de destino é só deste banco: a rotação apaga `<nome>-*.db` além das N mais novas.
 """
 import argparse
 import os
@@ -59,6 +61,7 @@ def fazer(banco, destino, manter=30, agora=None):
 
 
 def main(argv=None):
+    os.umask(0o077)
     ap = argparse.ArgumentParser(description="backup íntegro de um banco SQLite vivo")
     ap.add_argument("banco")
     ap.add_argument("destino")

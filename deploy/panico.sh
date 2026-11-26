@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # [LIVE-5] Pânico da conta R sem painel e sem depender do serviço estar de pé.
 #
-# Roda NO SERVIDOR, como root ou como o usuário `cripto`:  bash deploy/panico.sh
+# Roda NO SERVIDOR. Como root, pela CÓPIA de root ([LIVE-12]): `sudo cripto-panico-r`.
+#   Instalar (uma vez, e de novo só depois de ler o diff deste arquivo):
+#     sudo install -o root -g root -m 755 deploy/panico.sh /usr/local/sbin/cripto-panico-r
+#   `sudo bash deploy/panico.sh` faria root interpretar um arquivo que o usuário `cripto` (o
+#   processo da A, exposto na internet) pode alterar: invadir a A viraria root no próximo pânico.
+#   Como `cripto` (`bash deploy/panico.sh`) também funciona, mas sem conseguir parar a unit.
 #
 # Dois caminhos, nesta ordem:
 #   1. o serviço responde -> POST /panico nele (o mesmo botão do painel);
@@ -65,17 +70,27 @@ fi
 
 # O serviço e a linha de comando no mesmo banco ao mesmo tempo: a linha de comando cancelaria
 # uma ordem que o serviço está enviando. Parado o serviço, só um age. Ele fica PARADO no fim.
+# Para SEMPRE que não estiver parado ([LIVE-12]): em crash-loop a unit fica "activating"
+# entre as tentativas, o `is-active` dizia "não está de pé", e o systemd a religava 5 s depois,
+# no meio do caminho direto. `stop` também cancela o restart pendente.
 PAROU=0
-if systemctl is-active --quiet "$UNIT" 2>/dev/null; then
-    if [ "$(id -u)" = "0" ]; then
-        systemctl stop "$UNIT" && PAROU=1 && echo "panico: serviço $UNIT parado"
-    elif sudo -n systemctl stop "$UNIT" 2>/dev/null; then
-        PAROU=1; echo "panico: serviço $UNIT parado"
-    else
-        echo "panico: AVISO: não consegui parar $UNIT (sem sudo). Seguindo assim mesmo: fechar"
-        echo "        vale mais que o risco de os dois agirem juntos. Depois: sudo systemctl stop $UNIT"
-    fi
-fi
+estado="$(systemctl is-active "$UNIT" 2>/dev/null)"
+case "$estado" in
+    inactive|failed|unknown|"") ;;
+    *)
+        if [ "$(id -u)" = "0" ]; then
+            systemctl stop "$UNIT"
+        else
+            sudo -n systemctl stop "$UNIT" 2>/dev/null
+        fi
+        estado="$(systemctl is-active "$UNIT" 2>/dev/null)"
+        case "$estado" in
+            inactive|failed) PAROU=1; echo "panico: serviço $UNIT parado" ;;
+            *)
+                echo "panico: AVISO: $UNIT segue '$estado' (sem root?). Seguindo assim mesmo: fechar"
+                echo "        vale mais que o risco de os dois agirem juntos. Depois: sudo systemctl stop $UNIT" ;;
+        esac ;;
+esac
 
 CMD=(env CONTA=R CORRETORA_HABILITADA=1 TZ=America/Sao_Paulo
      DB_PATH="$PASTA_R/trading.db" LOG_PATH="$PASTA_R/plataforma.log"
@@ -87,7 +102,7 @@ elif [ "$(id -u)" = "0" ]; then
     runuser -u "$USUARIO" -- "${CMD[@]}"
 else
     sudo -n -u "$USUARIO" -- "${CMD[@]}" || {
-        echo "panico: rode como root ou como $USUARIO (sudo bash deploy/panico.sh)"; exit 2; }
+        echo "panico: rode como root (sudo cripto-panico-r) ou como $USUARIO"; exit 2; }
 fi
 st=$?
 if [ "$PAROU" = "1" ]; then

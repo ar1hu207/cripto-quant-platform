@@ -27,65 +27,72 @@ ainda não existe**: disco único, sem cron, e o blob está fora. Medido em 02/1
 Unit: `deploy/cripto-bot-r.service` (cabeçalho com a instalação). Banco, log e chave em
 `/home/cripto/cripto-bot-r/`; porta 8003 só em loopback; o painel a alcança por `/testeR` na A.
 Todo comando abaixo roda **no servidor**, a partir de `/home/cripto/cripto-bot`.
-`deploy/r.sh` é o `python -m execucao` com o ambiente da R, sempre como `cripto`.
+`deploy/r.sh` é o `python -m execucao` com o ambiente da R. Rode-o **como `cripto`**
+(`sudo -u cripto bash deploy/r.sh ...`), nunca com `sudo bash`: a pasta é gravável pelo `cripto`,
+que é o usuário do processo da A exposto na internet, e root executaria o que estiver lá.
 
 **A escada para ligar** (cada degrau só depois do anterior conferido):
 
 ```bash
 # 0. Antes: chave do DEMO no corretora.env, unit instalada, canal de alerta da R definido.
 #    Telegram (o token não passa por chat nem por linha de comando: `-` lê da entrada padrão):
-#      sudo bash deploy/r.sh config telegram_token=- telegram_chat_id=<id>     # cola o token, Enter
+#      sudo -u cripto bash deploy/r.sh config telegram_token=- telegram_chat_id=<id>  # cola, Enter (sem eco)
 #    ou push: abrir o painel na aba Conta real e inscrever o aparelho.
 
 # 1. PAPEL com a estratégia da A (risco da A, decisão do dono em 25/11) e os números desta conta.
 #    `config-de` lê o banco da A só para leitura e NÃO copia auto_trade, corretora*, banca,
 #    teto de perda nem Telegram.
-sudo bash deploy/r.sh config-de /home/cripto/cripto-bot/trading.db \
+#    Confira antes onde está o banco da A: `grep DB_PATH .env` (sem a linha, é ./trading.db).
+#    O comando imprime todos os limites como ficaram: leia antes do degrau 2.
+sudo -u cripto bash deploy/r.sh config-de /home/cripto/cripto-bot/trading.db \
      banca_alocada=200 perda_total_max=60 \
      noite_ativo=1 noite_inicio=19:30 noite_fim=08:15     # ajuste à hora em que o dl380 desliga/volta
 
 # 2. DEMO (dinheiro de mentira, ordens de verdade). auto_trade tem de estar 0 para trocar.
-sudo bash deploy/r.sh config corretora=demo
-sudo bash deploy/r.sh estado                              # confere conta x livro
+sudo -u cripto bash deploy/r.sh config corretora=demo
+sudo -u cripto bash deploy/r.sh estado                    # confere conta x livro
 
 # 3. Para o real: feche tudo no demo, volte ao papel, zere o livro, troque a chave no
 #    corretora.env (BINANCE_KEY/BINANCE_SECRET) e entre em binance SEM enviar nada.
-sudo bash deploy/r.sh config corretora=papel
-curl -s -K <(printf 'user = "admin:%s"\n' "$(sed -n 's/^DASH_PASS=//p' .env)") \
-     -H 'Content-Type: application/json' -d '{"confirmar":"RESET"}' http://127.0.0.1:8003/reset
+sudo -u cripto bash deploy/r.sh config corretora=papel
+sudo -u cripto bash deploy/r.sh reset RESET               # zera o livro (recusa se já houve dinheiro real)
 sudo systemctl restart cripto-bot-r                       # recarrega o corretora.env
-sudo bash deploy/r.sh config corretora=binance corretora_dry_run=1
+sudo -u cripto bash deploy/r.sh config corretora=binance corretora_dry_run=1   # imprime TODOS os limites
 sudo journalctl -u cripto-bot-r -n 80 --no-pager          # as ordens montadas, nenhuma enviada
 
 # 4. Envio real: só aqui, no servidor (pelo painel é recusado).
-sudo bash deploy/r.sh config corretora_dry_run=0
+sudo -u cripto bash deploy/r.sh config corretora_dry_run=0
 
 # 5. O dono liga o auto_trade (painel ou `config auto_trade=1`). Nada liga sozinho.
 ```
 
-Em `binance`, o painel **só aperta**: teto por ordem, banca, perda total, risco e alavancagem
-não sobem por HTTP. Afrouxar é `sudo bash deploy/r.sh config chave=valor`, que imprime os limites
+Na conta R, em QUALQUER modo, o painel **só aperta**: teto por ordem, banca, perda total,
+risco, exposição e alavancagem não sobem por HTTP, e o canal de alerta (Telegram) não muda por
+HTTP. Afrouxar é `sudo -u cripto bash deploy/r.sh config chave=valor`, que imprime os limites
 como ficaram. O teto de perda total é sticky e só solta subindo o teto, também por aqui.
 
-**Pânico sem painel:** `sudo bash deploy/panico.sh`. Tenta o serviço; se ele não confirmar,
-PARA a unit e fecha direto na corretora. A unit fica parada no fim: religar é ato seu.
+**Pânico sem painel:** `sudo cripto-panico-r`. Tenta o serviço; se ele não confirmar, PARA a
+unit e fecha direto na corretora. A unit fica parada no fim: religar é ato seu. Instalar a
+cópia de root uma vez (e de novo só depois de ler o diff de `deploy/panico.sh`):
+`sudo install -o root -g root -m 755 deploy/panico.sh /usr/local/sbin/cripto-panico-r`.
 
 **Deploy com a R no ar** (a receita do dl380 congela A, B e C; a R entra junto):
 
 ```bash
-sudo bash deploy/r.sh config auto_trade=0                 # congela (o deploy nunca religa)
-sudo -u cripto /home/cripto/cripto-bot/venv/bin/python deploy/backup_banco.py \
-     /home/cripto/cripto-bot-r/trading.db /home/cripto/backup-r --manter 30
+sudo -u cripto bash deploy/r.sh config auto_trade=0       # congela (o deploy nunca religa)
+sudo systemctl start cripto-bot-r-backup                  # backup antes de trocar o código
 # ... git checkout do commit, como na receita ...
 sudo systemctl restart cripto-bot cripto-bot-b cripto-bot-c cripto-bot-r
 curl -s http://127.0.0.1:8003/health                      # o commit novo, e "ok"
-sudo bash deploy/r.sh estado
+sudo -u cripto bash deploy/r.sh estado
 ```
 
-**Backup diário da R** (o banco do dinheiro real não tinha nenhum): cron do usuário `cripto`,
-linha pronta no cabeçalho de `deploy/backup_banco.py`. Cópia pela API de backup do SQLite (nunca
-`cp` do banco vivo), `integrity_check` na cópia, 30 dias. **Copie a pasta para fora do dl380**
-de vez em quando: disco único.
+**Backup diário da R** (o banco do dinheiro real não tinha nenhum): timer do systemd
+(`deploy/cripto-bot-r-backup.timer`, instalação no cabeçalho do `.service` dele), ao meio-dia de
+São Paulo e, se o servidor estava desligado na hora, assim que ele liga. Não é cron: o cron das
+03:17 caía com o dl380 desligado e nunca rodava. Cópia pela API de backup do SQLite (nunca `cp`
+do banco vivo), `integrity_check` na cópia, permissão só do dono, 30 dias, em pasta só dela.
+**Copie a pasta para fora do dl380** de vez em quando: disco único.
 
 **Chave sem restrição de IP (decisão do dono, 26/11/2026).** O IP de saída do dl380 é dinâmico:
 chave presa a IP pararia a cada troca (-2015), com posição aberta. Então a chave real é criada

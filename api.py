@@ -437,8 +437,13 @@ async def auth_basica(request: Request, call_next):
     if request.method == "POST" and request.headers.get("origin") is not None:
         tipo = request.headers.get("content-type", "").split(";")[0].strip().lower()
         if tipo != "application/json":
-            log(f"POST de navegador sem JSON recusado: {request.url.path} "
-                f"(origin={request.headers.get('origin', '')[:80]})", "error")
+            # Antes da senha: qualquer um consegue disparar isto. Um registro por minuto basta
+            # para saber que acontece, e não deixa um laço de fora encher o log (revisão 26/11).
+            agora = time.monotonic()
+            if agora - _csrf_log["em"] > 60:
+                _csrf_log["em"] = agora
+                log(f"POST de navegador sem JSON recusado: {request.url.path} "
+                    f"(origin={request.headers.get('origin', '')[:80]})", "warning")
             return PlainTextResponse("POST de navegador só com Content-Type: application/json.",
                                      status_code=403)
 
@@ -1874,6 +1879,8 @@ def _gravar_config(body, origem, local):
     return _config_publica(db.get_config())
 
 
+_csrf_log = {"em": float("-inf")}
+
 # [LIVE-9] Em `binance`, a senha do painel só APERTA os limites do dinheiro. A senha mora no
 # navegador (localStorage do front no Vercel) e é a mesma das contas de papel: quem a leva (XSS,
 # merge malicioso que o Vercel publica, aparelho comprometido) não pode subir o teto por ordem,
@@ -1898,21 +1905,34 @@ def _num_limite(chave, v):
 
 
 def _so_aperta(aceitos, vigente, local=False):
-    """O que o lote AFROUXA na conta em `binance`, como lista de recusas (vazia = pode)."""
+    """O que o lote AFROUXA na conta que pode operar dinheiro, como lista de recusas (vazia =
+    pode).
+
+    [LIVE-12] Vale em QUALQUER modo na instância habilitada (a conta R), não só em `binance`:
+    olhando só `binance`, a senha do painel voltava a conta a papel, subia os limites lá e
+    entrava de novo em binance com eles (revisão de 26/11, provado por teste). Nas contas de
+    papel (sem `CORRETORA_HABILITADA`) nada muda: não há dinheiro a proteger."""
     final = {**vigente, **aceitos}
-    if local or str(final.get("corretora") or "papel") != "binance":
+    em_binance = str(final.get("corretora") or "papel") == "binance"
+    if local or not (em_binance or execucao.habilitada()):
         return []
     recusados = []
+    # O canal de alerta é por onde o dono SABE que algo deu errado. Trocá-lo pela senha do
+    # painel cegava o dono antes de ligar o bot; nesta conta, só no servidor.
+    for k in ("telegram_token", "telegram_chat_id"):
+        if k in aceitos and str(aceitos[k]) != str(vigente.get(k) or ""):
+            recusados.append(f"'{k}': nesta conta o canal de alerta só muda no servidor "
+                             f"(deploy/r.sh config {k}=-)")
     for k in sorted(set(aceitos) & set(LIMITES_DINHEIRO)):
         antes = _num_limite(k, vigente.get(k, db.CONFIG_PADRAO.get(k)))
         depois = _num_limite(k, aceitos[k])
         if antes is not None and depois is not None and depois > antes * (1 + 1e-9):
-            recusados.append(f"'{k}': em corretora=binance a senha do painel só aperta este "
+            recusados.append(f"'{k}': na conta do dinheiro a senha do painel só aperta este "
                              f"limite ({vigente.get(k)} -> {aceitos[k]}). Para afrouxar: no "
-                             f"servidor, python -m execucao config {k}={aceitos[k]}")
+                             f"servidor, deploy/r.sh config {k}={aceitos[k]}")
     era_real = (str(vigente.get("corretora")) == "binance"
                 and str(vigente.get("corretora_dry_run", "0")) not in _LIGADO)
-    vai_real = str(final.get("corretora_dry_run", "0")) not in _LIGADO
+    vai_real = em_binance and str(final.get("corretora_dry_run", "0")) not in _LIGADO
     if vai_real and not era_real:
         recusados.append("'corretora_dry_run': o envio de ordens com dinheiro de verdade só "
                          "liga no servidor (python -m execucao config corretora_dry_run=0); "

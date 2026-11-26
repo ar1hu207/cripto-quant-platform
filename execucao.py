@@ -1480,19 +1480,29 @@ def _adotar(c, px, cfg):
 
 
 RECONFERIR_CHAVE_S = 600.0
+RECONFERIR_REDE_S = 60.0             # a conferência que caiu por rede tenta de novo mais cedo
+_NAO_CONFERIDA = "a chave não foi conferida"
 
 
 def _reconferir_chave(c):
-    """Com a entrada bloqueada pela chave, confere de novo a cada 10 min: a falha de rede na
-    conferência passa sozinha, e a chave consertada no site da Binance volta a abrir sem
-    reiniciar o serviço. Chave insegura avisa o dono (uma vez a cada 30 min)."""
-    if not getattr(c, "bloqueio_entrada", None):
+    """Confere a chave de novo a cada 10 min, bloqueada ou não ([LIVE-12]: só reconferia a
+    bloqueada, e a chave que ganhava saque no site DEPOIS de o serviço subir seguia abrindo até
+    reiniciar). A chave consertada volta a abrir sem reiniciar. Insegura avisa o dono (uma vez
+    a cada 30 min); a que não deu para conferir (rede) tenta de novo em 1 min."""
+    if not hasattr(c, "conferir_chave"):
         return
+    bloqueio = getattr(c, "bloqueio_entrada", None) or ""
+    espera = RECONFERIR_REDE_S if bloqueio.startswith(_NAO_CONFERIDA) else RECONFERIR_CHAVE_S
     em = getattr(c, "chave_conferida_em", None)
-    if em is not None and time.monotonic() - em < RECONFERIR_CHAVE_S:
+    if em is not None and time.monotonic() - em < espera:
         return
     motivo = c.conferir_chave()
-    if motivo:
+    if not motivo:
+        return
+    if motivo.startswith(_NAO_CONFERIDA):
+        _avisar_uma_vez("chave-nao-conferida", f"⏸️ Conta real sem abrir posição: {motivo}. "
+                        "Tento de novo a cada minuto; fechar, stop e pânico seguem.")
+    else:
         _avisar_uma_vez("chave-insegura", f"🔑 Conta real NÃO abre posição: {motivo}. Fechar, "
                         "stop e pânico seguem funcionando. Corrija a chave no site da Binance.")
 
@@ -1909,8 +1919,13 @@ def trocar_modo(novo, cfg=None):
 def _carregar_env(caminhos):
     """Os arquivos do `EnvironmentFile` da unit, lidos como o systemd lê (`CHAVE=valor`, aspas
     em volta tiradas), SEM shell. O `panico.sh` fazia `source` deles: um valor com espaço ou com
-    `$` era executado ou expandido pelo bash (revisão de 26/11). Não sobrescreve o que já veio
-    no ambiente: `DB_PATH` e `CONTA` da R chegam pelo `env` do script e vencem o `.env` da A."""
+    `$` era executado ou expandido pelo bash (revisão de 26/11). Entre os arquivos, como no
+    systemd, o POSTERIOR vence, e dentro de um arquivo a última linha vence ([LIVE-12]: com o
+    `setdefault` direto, uma `BINANCE_KEY` velha no `.env` vencia a do `corretora.env`, e o
+    pânico pela linha de comando falava com outra conta). Só no fim entra no ambiente, sem
+    sobrescrever o que já veio nele: `DB_PATH` e `CONTA` da R chegam pelo `env` do script e
+    vencem o `.env` da A."""
+    lido = {}
     for caminho in [x for x in str(caminhos or "").split(os.pathsep) if x]:
         try:
             linhas = open(caminho, encoding="utf-8").read().splitlines()
@@ -1925,7 +1940,9 @@ def _carregar_env(caminhos):
             k, v = k.strip(), v.strip()
             if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
                 v = v[1:-1]
-            os.environ.setdefault(k, v)
+            lido[k] = v
+    for k, v in lido.items():
+        os.environ.setdefault(k, v)
 
 
 # O que o `config-de` NÃO copia de outra conta: estado, o que liga o bot ou a corretora, e o que
@@ -1933,9 +1950,28 @@ def _carregar_env(caminhos):
 _NAO_COPIA = ("auto_trade", "corretora", "corretora_dry_run", "corretora_nocional_max",
               "banca_alocada", "perda_total_max", "telegram_token", "telegram_chat_id")
 
-_LIMITES_IMPRESSOS = ("corretora", "corretora_dry_run", "corretora_nocional_max", "banca_alocada",
-                      "perda_total_max", "risco_por_trade", "risco_aberto_max", "alavancagem_padrao",
-                      "auto_lev_max", "auto_trade")
+def _imprimir_limites(cfg):
+    """Tudo o que limita o dinheiro ([LIVE-12]: imprimia 10 chaves e deixava de fora
+    `exposicao_max`, `limite_perda_dia` e os tetos do auto), mais o que liga e o canal."""
+    import api
+    for k in ("corretora", "corretora_dry_run", "auto_trade", *api.LIMITES_DINHEIRO):
+        print(f"  {k} = {cfg.get(k)}")
+    canal = "configurado" if str(cfg.get("telegram_token") or "").strip() else "vazio"
+    print(f"  telegram = {canal}")
+
+
+def _ler_segredo(nome):
+    """`chave=-`: o valor vem do terminal sem eco (getpass) ou da entrada padrão, uma linha.
+    Vazio é recusado: Enter sem colar nada apagava o token sem aviso."""
+    if sys.stdin is not None and sys.stdin.isatty():
+        import getpass
+        v = getpass.getpass(f"{nome} (não aparece na tela): ")
+    else:
+        v = sys.stdin.readline()
+    v = (v or "").strip()
+    if not v:
+        raise ValueError(f"{nome}: valor vazio (nada foi gravado)")
+    return v
 
 
 def _cli(argv):
@@ -1949,8 +1985,13 @@ def _cli(argv):
     `config` é o `POST /config` de quem está no servidor: o mesmo catálogo e as mesmas regras,
     e é o único caminho que AFROUXA um limite do dinheiro real ou liga o envio de verdade
     (`api.LIMITES_DINHEIRO`). Imprime os limites como ficaram."""
+    os.umask(0o077)         # como o `UMask=` da unit: banco, -wal e log que a CLI criar não ficam legíveis
     _carregar_env(os.environ.get("ARQUIVOS_ENV"))
     db.init_db()            # idempotente; o serviço faz o mesmo ao subir, e o banco pode ser novo
+    if argv[:1] == ["config-de"] and real(db.get_config()) and modo(db.get_config()) == "binance":
+        print("recusado: config-de com a conta em binance voltaria os limites aos da outra conta. "
+              "Mude o que quiser com `config chave=valor`, que mostra cada um.")
+        return 1
     if argv[:1] == ["config-de"] and len(argv) >= 2 and all("=" in a for a in argv[2:]):
         # O primeiro degrau da escada: a estratégia de outra conta (o JSON do `GET /config`
         # dela), sem o que é estado, liga o bot ou é desta conta, mais os `chave=valor` daqui.
@@ -1972,30 +2013,53 @@ def _cli(argv):
     if argv[:1] == ["config"] and len(argv) > 1 and all("=" in a for a in argv[1:]):
         import api                                  # o catálogo e as regras moram lá
         corpo = dict(a.split("=", 1) for a in argv[1:])
-        for k in [k for k, v in corpo.items() if v == "-"]:
-            # `chave=-`: o valor vem da entrada padrão, uma linha. É como um segredo (o token do
-            # Telegram) entra sem aparecer em `ps` nem no histórico do shell.
-            corpo[k] = sys.stdin.readline().strip()
         try:
+            for k in [k for k, v in corpo.items() if v == "-"]:
+                # `chave=-`: um segredo (o token do Telegram) entra sem aparecer em `ps` nem no
+                # histórico do shell.
+                corpo[k] = _ler_segredo(k)
             cfg = api.config_local(corpo)
         except Exception as e:                      # 422 do catálogo: diz o quê, não o traceback
             print(f"recusado: {getattr(e, 'detail', e)}")
             return 1
-        for k in _LIMITES_IMPRESSOS:
-            print(f"  {k} = {cfg.get(k)}")
+        _imprimir_limites(cfg)
+        return 0
+    if argv[:1] == ["reset"]:
+        # O `/reset` de quem está no servidor (a escada, degrau 3), com as mesmas recusas: em
+        # corretora não reseta, e banco que já operou dinheiro não reseta nunca.
+        if argv[1:] != ["RESET"]:
+            print("uso: reset RESET   (apaga sinais, posições, trades e a curva desta conta)")
+            return 2
+        import api
+        try:
+            api.reset(api.ResetReq(confirmar="RESET"))
+        except Exception as e:
+            print(f"recusado: {getattr(e, 'detail', e)}")
+            return 1
+        print(f"livro zerado (banco {db.DB})")
         return 0
     if len(argv) != 1 or argv[0] not in ("estado", "panico"):
-        print("uso: python -m execucao estado | panico | config chave=valor ... | "
+        print("uso: python -m execucao estado | panico | reset RESET | config chave=valor ... | "
               "config-de banco.db|arquivo.json [chave=valor ...]")
         return 2
+    if argv[0] == "panico":
+        # [P1-7] A fonte morre PRIMEIRO, antes de qualquer rede ([LIVE-12]: o `obter` vinha antes,
+        # e com a Binance fora ele caía com o auto_trade ainda 1, com a unit já parada pelo
+        # panico.sh; quem a religasse religava o bot ligado).
+        db.set_config("auto_trade", "0", "execucao panico (linha de comando)")
+        log("PÂNICO pela linha de comando: auto-trader desligado", "error")
     cfg = db.get_config()
     if not real(cfg):
         print(f"conta em papel (banco {db.DB}): nada a fazer na corretora")
         return 0
-    c = obter(cfg)
+    try:
+        c = obter(cfg)
+    except Exception as e:
+        print(f"FALHOU falar com a corretora ({type(e).__name__}: {C.limpo(e)[:200]}). "
+              "auto_trade=0 gravado. Os stops estão NA Binance e seguem valendo; para fechar "
+              "agora: app da Binance, Futuros > Posições.")
+        return 1
     if argv[0] == "panico":
-        db.set_config("auto_trade", "0", "execucao panico (linha de comando)")
-        log("PÂNICO pela linha de comando: auto-trader desligado", "error")
         r = panico()
         print(json.dumps(r, ensure_ascii=False, default=str))
     pos, ords = c.posicoes(), c.ordens_abertas()

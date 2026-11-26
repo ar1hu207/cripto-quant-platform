@@ -127,10 +127,11 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
      reenviar. Um id nunca é usado duas vezes. Só ordem com o nosso prefixo é cancelada como órfã.
   4. **A intenção é gravada antes da rede**: toda entrada nasce `pendente` em `ordens`.
 
-  **Em `binance`, a senha do painel só aperta.** Os limites do dinheiro (`api.LIMITES_DINHEIRO`:
-  teto por ordem, banca, perda total, risco, alavancagem) não sobem por HTTP, e o envio de
-  verdade (`corretora_dry_run=0`) não liga por HTTP: os dois são `python -m execucao config` no
-  servidor. Trocar de corretora exige `auto_trade=0`. Não abra exceção "só para o painel".
+  **Na conta R, em qualquer modo, a senha do painel só aperta.** Os limites do dinheiro
+  (`api.LIMITES_DINHEIRO`: teto por ordem, banca, perda total, risco, exposição, alavancagem)
+  não sobem por HTTP nem em papel ou demo (era o atalho: voltar a papel, subir, entrar de novo),
+  o canal de alerta não muda por HTTP, e o envio de verdade (`corretora_dry_run=0`) não liga por
+  HTTP: tudo isso é `deploy/r.sh config` no servidor, como `cripto`. Trocar de corretora exige `auto_trade=0`. Não abra exceção "só para o painel".
 
   `abrir()` e `colocar_ordem()` recusam nessa conta. `trava_total_em` e `corretora_ns` são
   estado, fora do catálogo de propósito. O `/reset` recusa nela. `corretora_dry_run` **não é

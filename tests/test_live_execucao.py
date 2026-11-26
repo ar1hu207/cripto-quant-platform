@@ -1795,6 +1795,21 @@ def test_config_le_o_segredo_da_entrada_padrao(papel, monkeypatch, capsys):
     assert "token-secreto" not in capsys.readouterr().out
 
 
+def test_ambiente_da_linha_de_comando_segue_a_ordem_do_systemd(tmp_path, monkeypatch):
+    """[LIVE-12] No systemd o arquivo POSTERIOR vence (e a última linha de cada um). Com o
+    `setdefault` direto, uma BINANCE_KEY velha no `.env` vencia a do `corretora.env`."""
+    a, b = tmp_path / "a.env", tmp_path / "b.env"
+    a.write_text("CHAVE_X=velha" + chr(10) + "CHAVE_Y=1" + chr(10) + "CHAVE_Y=2" + chr(10), encoding="utf-8")
+    b.write_text("CHAVE_X=nova" + chr(10), encoding="utf-8")
+    for k in ("CHAVE_X", "CHAVE_Y"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("CHAVE_Z", "do-processo")
+    (tmp_path / "c.env").write_text("CHAVE_Z=do-arquivo" + chr(10), encoding="utf-8")
+    execucao._carregar_env(os.pathsep.join(str(p) for p in (a, b, tmp_path / "c.env")))
+    assert os.environ["CHAVE_X"] == "nova" and os.environ["CHAVE_Y"] == "2"
+    assert os.environ["CHAVE_Z"] == "do-processo"                      # o `env` do script vence
+
+
 def test_linha_de_comando_le_o_ambiente_sem_shell(tmp_path, monkeypatch):
     env = tmp_path / "x.env"
     env.write_text('# comentario\nVALOR_A="com espaco $HOME"\nVALOR_B=$(rm -rf /)\n'
@@ -1817,8 +1832,12 @@ def test_binance_exige_teto_de_perda_total_e_canal_de_alerta(papel):
     assert r.status_code == 422 and "perda_total_max" in txt and "canal de alerta" in txt
     r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1, "perda_total_max": 60})
     assert r.status_code == 422 and "canal de alerta" in str(r.json())
+    # [LIVE-12] o canal de alerta da conta R não muda pela senha do painel: só no servidor
     r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1, "perda_total_max": 60,
                                   "telegram_token": "t", "telegram_chat_id": "1"})
+    assert r.status_code == 422 and "só muda no servidor" in str(r.json())
+    _canal_no_servidor()
+    r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1, "perda_total_max": 60})
     assert r.status_code == 200 and db.get_config()["corretora"] == "binance"
     # e, já em binance, não dá para zerar o teto nem apagar o canal
     assert cli.post("/config", json={"perda_total_max": 0}).status_code == 422
@@ -1826,11 +1845,127 @@ def test_binance_exige_teto_de_perda_total_e_canal_de_alerta(papel):
     assert db.get_config()["perda_total_max"] == "60.0"
 
 
+def _canal_no_servidor():
+    assert execucao._cli(["config", "telegram_token=t", "telegram_chat_id=1"]) == 0
+
+
 def _em_binance(cli):
+    _canal_no_servidor()
     r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1,
-                                  "perda_total_max": 60, "corretora_nocional_max": 300,
-                                  "telegram_token": "t", "telegram_chat_id": "1"})
+                                  "perda_total_max": 60, "corretora_nocional_max": 300})
     assert r.status_code == 200, r.text
+
+
+def test_na_conta_r_o_painel_so_aperta_tambem_em_papel_e_demo(papel):
+    """[LIVE-12] Revisão de 26/11, provado por teste: o "só aperta" olhava só `binance`. A senha
+    do painel voltava a conta a papel, subia os limites lá e entrava de novo em binance com eles."""
+    cli, _ = papel
+    _em_binance(cli)
+    assert cli.post("/config", json={"corretora": "papel"}).status_code == 200
+    for corpo in ({"corretora_nocional_max": 100000}, {"banca_alocada": 1e6},
+                  {"risco_por_trade": 0.2}, {"alavancagem_padrao": 50}, {"exposicao_max": 0},
+                  {"risco_aberto_max": 0}, {"perda_total_max": 1e6}, {"limite_perda_dia": 0.5},
+                  {"auto_max_posicoes": 20}, {"auto_max_valor_frac": 1}):
+        r = cli.post("/config", json=corpo)
+        assert r.status_code == 422 and "só aperta" in str(r.json()), corpo
+    assert cli.post("/config", json={"corretora": "demo"}).status_code == 200
+    assert cli.post("/config", json={"corretora_nocional_max": 100000}).status_code == 422
+    assert cli.post("/config", json={"corretora_nocional_max": 250}).status_code == 200   # apertar pode
+    assert cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1}).status_code == 200
+    cfg = db.get_config()
+    assert float(cfg["corretora_nocional_max"]) == 250 and float(cfg["perda_total_max"]) == 60
+
+
+def test_conta_de_papel_sem_a_variavel_segue_livre(papel, monkeypatch):
+    """As contas A, B e C (sem `CORRETORA_HABILITADA`) não têm dinheiro: o painel ajusta tudo."""
+    cli, _ = papel
+    monkeypatch.delenv("CORRETORA_HABILITADA")
+    assert cli.post("/config", json={"risco_por_trade": 0.05, "telegram_token": "x",
+                                     "telegram_chat_id": "2"}).status_code == 200
+
+
+def test_config_de_com_a_conta_em_binance_e_recusado(papel, tmp_path, capsys):
+    cli, _ = papel
+    _em_binance(cli)
+    arq = tmp_path / "a.json"
+    arq.write_text('{"risco_por_trade": "0.015"}', encoding="utf-8")
+    assert execucao._cli(["config-de", str(arq)]) == 1
+    assert "binance" in capsys.readouterr().out
+
+
+def test_linha_de_comando_imprime_todos_os_limites(papel, capsys):
+    import api
+    assert execucao._cli(["config", "perda_total_max=60"]) == 0
+    out = capsys.readouterr().out
+    for k in ("corretora", "corretora_dry_run", "auto_trade", "telegram", *api.LIMITES_DINHEIRO):
+        assert f"  {k} = " in out, k
+
+
+def test_segredo_vazio_pela_entrada_padrao_e_recusado(papel, monkeypatch, capsys):
+    import io
+    _canal_no_servidor()
+    monkeypatch.setattr("sys.stdin", io.StringIO(chr(10)))
+    assert execucao._cli(["config", "telegram_token=-"]) == 1
+    assert db.get_config()["telegram_token"] == "t"                  # não apagou
+    assert "vazio" in capsys.readouterr().out
+
+
+def test_reset_pela_linha_de_comando(papel, capsys):
+    cli, _ = papel
+    simulador.abrir(semear_sinal(), 50.0, 2)
+    assert execucao._cli(["reset"]) == 2                               # exige a palavra
+    assert execucao._cli(["reset", "RESET"]) == 0
+    with db.conectar() as c:
+        assert c.execute("SELECT COUNT(*) FROM posicoes").fetchone()[0] == 0
+    _em_binance(cli)
+    assert execucao._cli(["reset", "RESET"]) == 1                      # em corretora, não
+    assert "corretora" in capsys.readouterr().out
+
+
+def test_panico_pela_linha_de_comando_desliga_antes_da_rede(conta, monkeypatch, capsys):
+    """[LIVE-12] [P1-7]: com a Binance fora, o `obter` caía antes de gravar auto_trade=0, e o
+    panico.sh já tinha parado a unit: quem a religasse religava o bot ligado."""
+    db.set_config("auto_trade", "1", "teste")
+
+    def fora(*a, **k):
+        raise C.ErroCorretora("binance fora")
+    monkeypatch.setattr(execucao, "obter", fora)
+    assert execucao._cli(["panico"]) == 1
+    assert db.get_config()["auto_trade"] == "0"
+    assert "stops estão NA Binance" in capsys.readouterr().out
+
+
+def test_chave_ok_e_reconferida_e_a_que_ganha_saque_depois_para_de_abrir(conta, monkeypatch):
+    """[LIVE-12] Só a chave BLOQUEADA era reconferida: a que ganhava saque no site depois de o
+    serviço subir seguia abrindo até reiniciar."""
+    avisos = []
+    monkeypatch.setattr(execucao, "_avisar", lambda texto, nivel="error": avisos.append(texto))
+    conta.bloqueio_entrada = None
+    conta.chave_conferida_em = execucao.time.monotonic() - execucao.RECONFERIR_CHAVE_S - 1
+
+    def confere():
+        conta.bloqueio_entrada = "chave recusada: saque habilitado"
+        conta.chave_conferida_em = execucao.time.monotonic()
+        return conta.bloqueio_entrada
+    conta.conferir_chave = confere
+    execucao.reconciliar()
+    assert conta.bloqueio_entrada and avisos and "saque" in avisos[0]
+
+
+def test_chave_que_nao_deu_para_conferir_tenta_de_novo_em_um_minuto(conta, monkeypatch):
+    monkeypatch.setattr(execucao, "_avisar", lambda texto, nivel="error": None)
+    conta.bloqueio_entrada = "a chave não foi conferida (RequestTimeout: x)"
+    conta.chave_conferida_em = execucao.time.monotonic() - execucao.RECONFERIR_REDE_S - 1
+    chamadas = []
+
+    def confere():
+        chamadas.append(1)
+        conta.bloqueio_entrada = None
+        conta.chave_conferida_em = execucao.time.monotonic()
+        return None
+    conta.conferir_chave = confere
+    execucao.reconciliar()
+    assert chamadas and conta.bloqueio_entrada is None
 
 
 def test_em_binance_a_senha_do_painel_so_aperta(papel):
