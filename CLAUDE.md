@@ -116,7 +116,8 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
   sobre a entrada de ontem também.
 - **[LIVE] Conta em corretora — quatro regras, e o papel não muda.** A config `corretora`
   nasce `papel`; `demo`/`binance` só na conta R (`CORRETORA_HABILITADA=1` no `ExecStart` dela, a
-  chave num arquivo que só ela lê). Ligar isso é do dono. Fora do papel (`ARQUITETURA.md` §12):
+  chave num arquivo que só a unit dela carrega; o usuário Linux é o mesmo das outras, então isso
+  separa o ambiente, não a permissão). Ligar isso é do dono, pela escada do `RUNBOOK-VM.md` §0.1. Fora do papel (`ARQUITETURA.md` §12):
   1. **A corretora é a verdade, o banco é a cópia.** O ciclo começa por `execucao.reconciliar()`
      e sem reconciliação recente a conta não abre. O livro nunca fecha posição de corretora por
      preço: ele lança o negócio que a fechou.

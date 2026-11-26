@@ -37,6 +37,7 @@ são os do papel porque o livro é o mesmo.
 import json
 import os
 import secrets
+import sys
 import threading
 import time
 
@@ -55,7 +56,6 @@ _cache = {"chave": None, "obj": None}
 _teste = {"obj": None}               # os testes injetam a corretora falsa aqui (`usar`)
 _escrita = {}                        # ativo -> monotonic da nossa última escrita (regra 4 da Fase 1)
 _falta_fill = {}                     # posição -> ciclos seguidos sem achar o negócio que a fechou
-_sem_stop = {}                       # posição -> tentativas seguidas de repor o stop
 _fora_do_livro = set()               # (ativo, direção) já avisadas: posição lá que o dry_run não adota
 _ordens_de_fora = set()              # ids já avisados: ordem aberta lá que não é deste livro
 
@@ -289,6 +289,12 @@ def _bloqueio_entrada(cfg):
         return "teto de perda total atingido — a conta não abre até o teto ser revisto"
     if noite(cfg):
         return "trava da noite — fora da janela de operação, a conta não abre"
+    try:
+        chave = getattr(obter(cfg), "bloqueio_entrada", None)
+    except Exception:
+        chave = None                    # sem cliente, a reconciliação já está barrando acima
+    if chave:
+        return f"trava da chave — {chave}"
     return None
 
 
@@ -452,10 +458,10 @@ def _enviar_entrada(c, o):
             # do claim. Medido num mark mais novo, um tique de alta virava recusa depois de o
             # sinal já estar consumido (revisão de 26/11).
             ext = c.abrir_mercado(ativo, direcao, o["qty"], o["client_oid"], ref_preco=o["preco_ref"])
-    except (C.OrdemRecusada, C.AcimaDoTeto, C.AbaixoDoMinimo) as e:
+    except (C.OrdemRecusada, C.AcimaDoTeto, C.AbaixoDoMinimo, C.ChaveInsegura) as e:
         _resolver_ordem(oid, "rejeitada", f"{type(e).__name__}: {str(e)[:120]}")
         _cancelar_stop_da_ordem(c, _ordem(oid))
-        if isinstance(e, (C.AcimaDoTeto, C.AbaixoDoMinimo)):
+        if isinstance(e, (C.AcimaDoTeto, C.AbaixoDoMinimo, C.ChaveInsegura)):
             # Recusa por teto ou mínimo acontece ANTES da rede: nada foi enviado, e o sinal
             # volta para a fila ([P1-6]: recusa por teto não consome sinal).
             with db.conectar() as con:
@@ -695,8 +701,9 @@ def _garantir_stop(c, pos, gatilho, motivo_falha="sem-stop", forcar=False):
     corretora aceitar, nunca antes. Devolve True se a posição ficou protegida.
 
     Se a corretora recusa porque o gatilho já foi atravessado (`-2021`), o stop "bateu" sem
-    estar lá: fecha a mercado, motivo `stop`. Se recusa por outro motivo duas vezes seguidas,
-    também fecha: posição sem stop não fica aberta. False = a posição foi fechada.
+    estar lá: fecha a mercado, motivo `stop`. Se recusa por outro motivo duas vezes, as duas
+    nesta mesma chamada, também fecha: posição sem stop não fica aberta. False = a posição
+    foi fechada.
 
     `forcar` é para quando o preço é o mesmo e o que mudou foi a QUANTIDADE (a posição cresceu
     na corretora). Sem ele, pedir o stop que já está lá no mesmo preço não faz nada."""
@@ -737,7 +744,6 @@ def _garantir_stop(c, pos, gatilho, motivo_falha="sem-stop", forcar=False):
         # que não existe na corretora.
         log(f"#{pos['id']} {ativo}: dry_run, o stop {gatilho} NÃO foi enviado", "warning")
         return True
-    _sem_stop.pop(pos["id"], None)
     # O gatilho gravado é o que a corretora DEVOLVEU, não o que foi pedido: se os dois
     # diferirem, o livro fica com o número que está protegendo de verdade.
     gatilho = novo.get("gatilho") or gatilho
@@ -930,7 +936,6 @@ def _lancar_saida(c, pos, fs, motivo, plano=None, qty_fechada=None):
         if r is simulador._MUDOU or r is None:
             return None
         _falta_fill.pop(pos["id"], None)
-        _sem_stop.pop(pos["id"], None)
         return pnl
     plano = plano if plano is not None else (alvos.ler(pos) or {"niveis": []})
     resto = simulador.fechar_parcial(pos, q / q_pos, motivo, saida, plano, real=dados)
@@ -1474,6 +1479,24 @@ def _adotar(c, px, cfg):
     return pid
 
 
+RECONFERIR_CHAVE_S = 600.0
+
+
+def _reconferir_chave(c):
+    """Com a entrada bloqueada pela chave, confere de novo a cada 10 min: a falha de rede na
+    conferência passa sozinha, e a chave consertada no site da Binance volta a abrir sem
+    reiniciar o serviço. Chave insegura avisa o dono (uma vez a cada 30 min)."""
+    if not getattr(c, "bloqueio_entrada", None):
+        return
+    em = getattr(c, "chave_conferida_em", None)
+    if em is not None and time.monotonic() - em < RECONFERIR_CHAVE_S:
+        return
+    motivo = c.conferir_chave()
+    if motivo:
+        _avisar_uma_vez("chave-insegura", f"🔑 Conta real NÃO abre posição: {motivo}. Fechar, "
+                        "stop e pânico seguem funcionando. Corrija a chave no site da Binance.")
+
+
 def reconciliar(cfg=None):
     """Compara a corretora com o livro e conserta o LIVRO (regra 1). Roda no começo de cada
     ciclo, e é a primeira coisa que o processo faz ao subir: é ela que descobre o que encheu,
@@ -1484,6 +1507,7 @@ def reconciliar(cfg=None):
     reconciliação boa (`_bloqueio_entrada`)."""
     cfg = db.get_config() if cfg is None else cfg
     c = obter(cfg)
+    _reconferir_chave(c)
     with _lock:
         try:
             pxs = c.posicoes()
@@ -1829,6 +1853,8 @@ def trocar_modo(novo, cfg=None):
             c = C.obter(cfg)
         except C.ErroCorretora as e:
             raise ValueError(f"'corretora': {e}")
+    if getattr(c, "bloqueio_entrada", None):        # ligar o bot numa chave que não abre nada
+        raise ValueError(f"'corretora': {c.bloqueio_entrada}")
     try:
         saldo = c.saldo()
         if c.posicoes():
@@ -1879,6 +1905,33 @@ def trocar_modo(novo, cfg=None):
 
 # ------------------------------------------------------------------------------ linha de comando
 
+def _carregar_env(caminhos):
+    """Os arquivos do `EnvironmentFile` da unit, lidos como o systemd lê (`CHAVE=valor`, aspas
+    em volta tiradas), SEM shell. O `panico.sh` fazia `source` deles: um valor com espaço ou com
+    `$` era executado ou expandido pelo bash (revisão de 26/11). Não sobrescreve o que já veio
+    no ambiente: `DB_PATH` e `CONTA` da R chegam pelo `env` do script e vencem o `.env` da A."""
+    for caminho in [x for x in str(caminhos or "").split(os.pathsep) if x]:
+        try:
+            linhas = open(caminho, encoding="utf-8").read().splitlines()
+        except OSError as e:
+            print(f"aviso: {caminho} não lido ({e.strerror})")
+            continue
+        for ln in linhas:
+            ln = ln.strip()
+            if not ln or ln.startswith("#") or "=" not in ln:
+                continue
+            k, v = ln.split("=", 1)
+            k, v = k.strip(), v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            os.environ.setdefault(k, v)
+
+
+# O que o `config-de` NÃO copia de outra conta: estado, o que liga o bot ou a corretora, e o que
+# é desta conta (banca, teto de perda, canal de alerta, que voltaria mascarado de qualquer jeito).
+_NAO_COPIA = ("auto_trade", "corretora", "corretora_dry_run", "corretora_nocional_max",
+              "banca_alocada", "perda_total_max", "telegram_token", "telegram_chat_id")
+
 _LIMITES_IMPRESSOS = ("corretora", "corretora_dry_run", "corretora_nocional_max", "banca_alocada",
                       "perda_total_max", "risco_por_trade", "risco_aberto_max", "alavancagem_padrao",
                       "auto_lev_max", "auto_trade")
@@ -1895,9 +1948,33 @@ def _cli(argv):
     `config` é o `POST /config` de quem está no servidor: o mesmo catálogo e as mesmas regras,
     e é o único caminho que AFROUXA um limite do dinheiro real ou liga o envio de verdade
     (`api.LIMITES_DINHEIRO`). Imprime os limites como ficaram."""
+    _carregar_env(os.environ.get("ARQUIVOS_ENV"))
+    db.init_db()            # idempotente; o serviço faz o mesmo ao subir, e o banco pode ser novo
+    if argv[:1] == ["config-de"] and len(argv) >= 2 and all("=" in a for a in argv[2:]):
+        # O primeiro degrau da escada: a estratégia de outra conta (o JSON do `GET /config`
+        # dela), sem o que é estado, liga o bot ou é desta conta, mais os `chave=valor` daqui.
+        import api
+        import sqlite3
+        try:
+            if argv[1].endswith(".db"):         # o banco da outra conta, só leitura, sem senha
+                with sqlite3.connect(f"file:{argv[1]}?mode=ro", uri=True) as con:
+                    base = dict(con.execute("SELECT chave, valor FROM config").fetchall())
+            else:
+                base = json.load(open(argv[1], encoding="utf-8"))
+        except (OSError, ValueError, sqlite3.Error) as e:
+            print(f"recusado: {argv[1]} não é um banco nem o JSON de um GET /config ({e})")
+            return 1
+        base = {k: v for k, v in api._sem_mascara(base).items()
+                if k in api.CONFIG_CATALOGO and k not in _NAO_COPIA}
+        print(f"copiando {len(base)} chave(s) de {argv[1]}; fora: {', '.join(_NAO_COPIA)}")
+        argv = ["config"] + [f"{k}={v}" for k, v in base.items()] + argv[2:]
     if argv[:1] == ["config"] and len(argv) > 1 and all("=" in a for a in argv[1:]):
         import api                                  # o catálogo e as regras moram lá
         corpo = dict(a.split("=", 1) for a in argv[1:])
+        for k in [k for k, v in corpo.items() if v == "-"]:
+            # `chave=-`: o valor vem da entrada padrão, uma linha. É como um segredo (o token do
+            # Telegram) entra sem aparecer em `ps` nem no histórico do shell.
+            corpo[k] = sys.stdin.readline().strip()
         try:
             cfg = api.config_local(corpo)
         except Exception as e:                      # 422 do catálogo: diz o quê, não o traceback
@@ -1907,7 +1984,8 @@ def _cli(argv):
             print(f"  {k} = {cfg.get(k)}")
         return 0
     if len(argv) != 1 or argv[0] not in ("estado", "panico"):
-        print("uso: python -m execucao estado|panico|config chave=valor ...")
+        print("uso: python -m execucao estado | panico | config chave=valor ... | "
+              "config-de banco.db|arquivo.json [chave=valor ...]")
         return 2
     cfg = db.get_config()
     if not real(cfg):

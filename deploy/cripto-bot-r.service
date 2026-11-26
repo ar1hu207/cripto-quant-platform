@@ -2,11 +2,16 @@
 # instância que pode sair do papel: sobe com CORRETORA_HABILITADA=1, e as outras três recusam o
 # boot se o banco delas estiver em modo corretora (`api._guarda_corretora`). Mesmo código das
 # contas A, B e C, com banco, log e porta próprios. Escuta só em loopback: quem a expõe é a
-# conta A, na rota /testeR/... (api.conta_real), atrás da mesma senha do painel.
+# conta A, na rota /testeR/... (api.conta_real), atrás da mesma senha do painel. Em `binance`
+# essa senha só APERTA limites; afrouxar e ligar o envio real é no servidor (`api._so_aperta`).
 #
-# A CHAVE DA BINANCE NÃO VAI NO .env COMPARTILHADO. O `.env` da conta A é lido pelas quatro
-# units; a chave fica em /home/cripto/cripto-bot-r/corretora.env, que só esta unit carrega.
-# Assim os processos das contas de papel nunca têm a chave no ambiente.
+# ONDE A CHAVE MORA, sem exagero (revisão de 26/11). A chave da Binance não vai no `.env`
+# compartilhado: fica em /home/cripto/cripto-bot-r/corretora.env, que só esta unit CARREGA. Isso
+# tira a chave do AMBIENTE das contas de papel, e só. As quatro units rodam como o mesmo usuário
+# `cripto`: um processo da A (exposto na internet) consegue ler esse arquivo e o
+# /proc/<pid>/environ da R. O que impede a A de operar a conta é `CORRETORA_HABILITADA`, não a
+# permissão do arquivo. Isolar de verdade = um usuário Linux só da R (RUNBOOK-VM.md §0.1, "Isolar
+# a chave"), decisão do dono porque mexe nas permissões do código das quatro.
 #
 # Instalar (uma vez). Quem cria o arquivo da chave é o DONO, no servidor; ela não passa por
 # chat nem pelo repositório (ele é público):
@@ -16,26 +21,27 @@
 #       BINANCE_DEMO_SECRET=...
 #       BINANCE_KEY=...             (só no go-live; leitura + futuros, sem saque, com IP fixo)
 #       BINANCE_SECRET=...
+#     (termina com Ctrl-D numa linha vazia)
 #   sudo cp deploy/cripto-bot-r.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-r
 #
-# A conta nasce em PAPEL, com a config padrão do código e `auto_trade=0`. A ordem para ligar:
-#   1. POST /testeR/config com a config da conta A (o mesmo corpo do GET /config dela, sem
-#      `corretora`), mais `banca_alocada`, `perda_total_max`, `noite_*`.
-#   2. POST /testeR/config {"corretora": "demo"}   -> ensaio com dinheiro de mentira.
-#   3. Para o real: fechar tudo, {"corretora": "papel"}, POST /testeR/reset, e então
-#      {"corretora": "binance", "corretora_dry_run": 1} (monta e não envia); conferido o log,
-#      {"corretora_dry_run": 0}. Quem liga o auto_trade é o dono.
+# A conta nasce em PAPEL, com a config padrão do código e `auto_trade=0`. A escada para ligar,
+# com os comandos exatos, está no RUNBOOK-VM.md §0.1. Resumo: (1) a estratégia da A copiada
+# por `python -m execucao config-de`, com banca e teto de perda desta conta; (2) demo; (3)
+# papel + reset, binance com dry_run=1; (4) envio real ligado NO SERVIDOR; (5) o dono liga o
+# auto_trade. Trocar de corretora exige auto_trade=0.
 #
-# Pânico sem painel: `bash deploy/panico.sh` (no servidor) desliga o bot, cancela tudo e fecha
-# tudo na corretora, mesmo com este serviço parado.
+# Pânico sem painel: `sudo bash deploy/panico.sh` (no servidor) desliga o bot, cancela tudo e
+# fecha tudo na corretora, mesmo com este serviço travado (ele o PARA antes do caminho direto).
 #
 # O deploy da A (git pull no /home/cripto/cripto-bot) troca o código das quatro: depois dele,
 # reinicie os QUATRO serviços (/testeR/health mostra o commit). Reiniciar esta unit é seguro com
 # posição aberta: stop e alvos estão na corretora, e o boot começa pela reconciliação.
 [Unit]
 Description=Cripto Bot - conta R (opera em corretora)
-After=network-online.target cripto-bot.service
+# time-sync: com o relógio errado a Binance recusa tudo (-1021). O servidor liga de manhã, e o
+# processo subindo antes do NTP passava a primeira hora recusado.
+After=network-online.target time-sync.target cripto-bot.service
 Wants=network-online.target
 
 [Service]
@@ -56,6 +62,11 @@ WatchdogSec=300
 NotifyAccess=main
 MemoryHigh=620M
 MemoryMax=760M
+# Endurecimento que não precisa de namespace (funciona dentro do contêiner LXC). PrivateTmp,
+# ProtectSystem e ProtectHome precisam de namespace de montagem e podem impedir a unit de subir
+# num contêiner sem privilégio: só entram depois de testados lá (RUNBOOK-VM.md §0.1).
+NoNewPrivileges=yes
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

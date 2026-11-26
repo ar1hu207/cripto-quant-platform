@@ -326,8 +326,9 @@ def _guarda_corretora():
     """[LIVE-4] Um banco cuja config diz `corretora` != papel só sobe na instância que foi
     posta para isso (`CORRETORA_HABILITADA=1` no `ExecStart` da unit dela).
 
-    As quatro contas leem o mesmo `.env`, então as chaves da Binance estão ao alcance de todas.
-    Sem esta recusa, restaurar o backup da conta real na pasta de uma conta de papel (ou apontar
+    A chave da Binance não está no `.env` que as quatro leem (fica no `corretora.env`, que só a
+    unit da R carrega), mas as quatro rodam como o mesmo usuário Linux e o arquivo está ao
+    ALCANCE de todas. Sem esta recusa, restaurar o backup da conta real na pasta de uma conta de papel (ou apontar
     o `DB_PATH` errado, o incidente de 10/11 do [AB-1]) faria um segundo processo mandar ordem
     na mesma conta da corretora. Recusa o boot, e não "cai para papel": cair para papel deixaria
     as posições reais do livro sendo marcadas e fechadas por preço, sem ordem nenhuma."""

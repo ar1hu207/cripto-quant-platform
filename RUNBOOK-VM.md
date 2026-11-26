@@ -22,6 +22,89 @@ deste runbook descreve a VM e **não vale para o dl380**.
 ainda não existe**: disco único, sem cron, e o blob está fora. Medido em 02/11 com `auto_trade=0`:
 1,5% de uma thread, 387 MB de RAM, 72/72 no scan.
 
+### 0.1 A conta R (dinheiro real), no dl380
+
+Unit: `deploy/cripto-bot-r.service` (cabeçalho com a instalação). Banco, log e chave em
+`/home/cripto/cripto-bot-r/`; porta 8003 só em loopback; o painel a alcança por `/testeR` na A.
+Todo comando abaixo roda **no servidor**, a partir de `/home/cripto/cripto-bot`.
+`deploy/r.sh` é o `python -m execucao` com o ambiente da R, sempre como `cripto`.
+
+**A escada para ligar** (cada degrau só depois do anterior conferido):
+
+```bash
+# 0. Antes: chave do DEMO no corretora.env, unit instalada, canal de alerta da R definido.
+#    Telegram (o token não passa por chat nem por linha de comando: `-` lê da entrada padrão):
+#      sudo bash deploy/r.sh config telegram_token=- telegram_chat_id=<id>     # cola o token, Enter
+#    ou push: abrir o painel na aba Conta real e inscrever o aparelho.
+
+# 1. PAPEL com a estratégia da A (risco da A, decisão do dono em 25/11) e os números desta conta.
+#    `config-de` lê o banco da A só para leitura e NÃO copia auto_trade, corretora*, banca,
+#    teto de perda nem Telegram.
+sudo bash deploy/r.sh config-de /home/cripto/cripto-bot/trading.db \
+     banca_alocada=200 perda_total_max=60 \
+     noite_ativo=1 noite_inicio=19:30 noite_fim=08:15     # ajuste à hora em que o dl380 desliga/volta
+
+# 2. DEMO (dinheiro de mentira, ordens de verdade). auto_trade tem de estar 0 para trocar.
+sudo bash deploy/r.sh config corretora=demo
+sudo bash deploy/r.sh estado                              # confere conta x livro
+
+# 3. Para o real: feche tudo no demo, volte ao papel, zere o livro, troque a chave no
+#    corretora.env (BINANCE_KEY/BINANCE_SECRET) e entre em binance SEM enviar nada.
+sudo bash deploy/r.sh config corretora=papel
+curl -s -K <(printf 'user = "admin:%s"\n' "$(sed -n 's/^DASH_PASS=//p' .env)") \
+     -H 'Content-Type: application/json' -d '{"confirmar":"RESET"}' http://127.0.0.1:8003/reset
+sudo systemctl restart cripto-bot-r                       # recarrega o corretora.env
+sudo bash deploy/r.sh config corretora=binance corretora_dry_run=1
+sudo journalctl -u cripto-bot-r -n 80 --no-pager          # as ordens montadas, nenhuma enviada
+
+# 4. Envio real: só aqui, no servidor (pelo painel é recusado).
+sudo bash deploy/r.sh config corretora_dry_run=0
+
+# 5. O dono liga o auto_trade (painel ou `config auto_trade=1`). Nada liga sozinho.
+```
+
+Em `binance`, o painel **só aperta**: teto por ordem, banca, perda total, risco e alavancagem
+não sobem por HTTP. Afrouxar é `sudo bash deploy/r.sh config chave=valor`, que imprime os limites
+como ficaram. O teto de perda total é sticky e só solta subindo o teto, também por aqui.
+
+**Pânico sem painel:** `sudo bash deploy/panico.sh`. Tenta o serviço; se ele não confirmar,
+PARA a unit e fecha direto na corretora. A unit fica parada no fim: religar é ato seu.
+
+**Deploy com a R no ar** (a receita do dl380 congela A, B e C; a R entra junto):
+
+```bash
+sudo bash deploy/r.sh config auto_trade=0                 # congela (o deploy nunca religa)
+sudo -u cripto /home/cripto/cripto-bot/venv/bin/python deploy/backup_banco.py \
+     /home/cripto/cripto-bot-r/trading.db /home/cripto/backup-r --manter 30
+# ... git checkout do commit, como na receita ...
+sudo systemctl restart cripto-bot cripto-bot-b cripto-bot-c cripto-bot-r
+curl -s http://127.0.0.1:8003/health                      # o commit novo, e "ok"
+sudo bash deploy/r.sh estado
+```
+
+**Backup diário da R** (o banco do dinheiro real não tinha nenhum): cron do usuário `cripto`,
+linha pronta no cabeçalho de `deploy/backup_banco.py`. Cópia pela API de backup do SQLite (nunca
+`cp` do banco vivo), `integrity_check` na cópia, 30 dias. **Copie a pasta para fora do dl380**
+de vez em quando: disco único.
+
+**Isolar a chave (pendente, decisão do dono).** As quatro units rodam como `cripto`: a A,
+exposta na internet, consegue ler o `corretora.env`. Isolar de verdade é um usuário só da R:
+
+```bash
+sudo useradd --system --home /home/cripto/cripto-bot-r --shell /usr/sbin/nologin cripto-r
+sudo chown -R cripto-r:cripto-r /home/cripto/cripto-bot-r && sudo chmod 700 /home/cripto/cripto-bot-r
+# o código e o venv da A precisam ficar LEGÍVEIS para cripto-r (ex.: setfacl -R -m u:cripto-r:rX
+# /home/cripto /home/cripto/cripto-bot), e o .env da A também (é dele que vem DASH_PASS).
+# Na unit: User=cripto-r. Em panico.sh, r.sh e no cron: USUARIO=cripto-r.
+# Teste no contêiner ANTES de ter posição aberta: restart, /health, `r.sh estado`.
+```
+
+**Endurecer a unit (pendente, testar no contêiner).** `NoNewPrivileges` e `UMask` já estão.
+`PrivateTmp=yes`, `ProtectSystem=full` e `ProtectHome=read-only` + `ReadWritePaths=` precisam de
+namespace de montagem, que contêiner LXC sem privilégio pode não dar: a unit falharia ao subir.
+Teste por drop-in (`systemctl edit cripto-bot-r`), restart, `/health`; se falhar, `systemctl
+revert cripto-bot-r`.
+
 ## 1. Fatos
 
 | | |

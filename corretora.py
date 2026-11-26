@@ -46,9 +46,12 @@ dinheiro fictício; os testes em `tests/test_corretora.py` reproduzem cada uma c
 7. **Teto de nocional por ordem**, última linha antes da corretora: um bug de dimensionamento
    vira recusa, não ordem (`PLANO-LIVE` Fase 6). E `dry_run`: monta a ordem inteira, já
    arredondada, e não manda.
-8. **Chave real perigosa não opera.** No modo `binance` o adapter pergunta à Binance o que a
-   chave pode fazer; com saque habilitado, transferência habilitada ou sem restrição de IP,
-   recusa subir. Não há bandeira para desligar: é a lógica do `DASH_PASS` (CLAUDE.md §2).
+8. **Chave real perigosa não ABRE nada.** No modo `binance` o adapter pergunta à Binance o que
+   a chave pode fazer; com saque habilitado, transferência habilitada, sem restrição de IP, ou
+   sem dar para conferir, toda ENTRADA é recusada (`bloqueio_entrada`). Fechar, stop e pânico
+   seguem: recusar subir, como era, deixava a posição que já existe sem ninguém para fechá-la,
+   justamente no dia em que algo está errado. Não há bandeira para desligar: é a lógica do
+   `DASH_PASS` (CLAUDE.md §2).
 
 Fronteiras que só este módulo atravessa: o símbolo (`BTC/USDT` no sistema, `BTC/USDT:USDT` na
 perp) e o tempo (ms UTC na corretora, `pd.Timestamp` naive em hora de São Paulo no resto —
@@ -321,6 +324,22 @@ import re as _re
 _LOCAIS = frozenset({"market", "amount_to_precision", "price_to_precision", "cost_to_precision"})
 
 
+_SEGREDOS = (
+    (_re.compile(r"(signature=)[0-9a-fA-F]+"), r"\1***"),         # HMAC da requisição, na URL
+    (_re.compile(r"(request ip:\s*)[0-9a-fA-F.:]+"), r"\1***"),   # o IP de saída, no -2015
+)
+
+
+def limpo(texto):
+    """A mensagem de erro sem o que não pode ir para log, `/status` e resposta HTTP: o ccxt
+    escreve a URL assinada inteira no erro de rede, e a Binance devolve o IP de saída do
+    servidor no -2015 (o repositório é público e o log circula em relato)."""
+    t = str(texto)
+    for padrao, troca in _SEGREDOS:
+        t = padrao.sub(troca, t)
+    return t
+
+
 def _codigo(e, *codigos):
     """O erro traz algum destes códigos da Binance? Por texto, com fronteira: o ccxt muda a
     CLASSE de um código conforme a tabela e o momento (o `-2015` é `AuthenticationError` na
@@ -364,6 +383,8 @@ class BinanceUSDM:
         if not nocional_max or float(nocional_max) <= 0:
             raise ValueError("nocional_max é obrigatório e positivo: sem teto, sem ordem")
         self._pausa_ate = 0.0           # monotonic: até quando nada vai à Binance (limite de taxa)
+        self.bloqueio_entrada = None    # regra 8: o motivo de não ABRIR nada, ou None
+        self.chave_conferida_em = None  # monotonic da última conferência da chave
         self._mercados_em = time.monotonic()      # a fábrica já carregou
         self.ex = _Cliente(ex, self)
         self.nome = modo
@@ -404,6 +425,8 @@ class BinanceUSDM:
             try:
                 return fn(*a, **k)
             except ccxt.BaseError as e:
+                if e.args:                      # limpa NA ORIGEM: todo log/HTTP depois herda
+                    e.args = (limpo(e.args[0]),) + tuple(e.args[1:])
                 if _codigo(e, "-2015", "-2014"):
                     raise ChaveRecusada(
                         "a Binance recusou a chave (IP, chave ou permissão). Se o IP de saída do "
@@ -639,6 +662,22 @@ class BinanceUSDM:
             raise ChaveInsegura("chave recusada: " + ", ".join(problemas))
         return {"verificavel": True, "ok": True}
 
+    def conferir_chave(self):
+        """Regra 8 sem travar o fechamento: confere e guarda o motivo de não abrir (None = pode).
+        Falha de rede na conferência também bloqueia a entrada, e quem chama tenta de novo."""
+        self.chave_conferida_em = time.monotonic()
+        try:
+            self.verificar_chave()
+            self.bloqueio_entrada = None
+        except ChaveInsegura as e:
+            self.bloqueio_entrada = str(e)
+        except Exception as e:
+            self.bloqueio_entrada = (f"a chave não foi conferida ({type(e).__name__}: "
+                                     f"{limpo(e)[:100]})")
+        if self.bloqueio_entrada:
+            log(f"corretora: entradas bloqueadas: {self.bloqueio_entrada}", "error")
+        return self.bloqueio_entrada
+
     # -------------------------------------------------------------- preparação
 
     def preparar_simbolo(self, simbolo, alavancagem):
@@ -716,6 +755,9 @@ class BinanceUSDM:
         import ccxt
         if not client_oid:
             raise ValueError("toda ordem leva client_oid (regra 5)")
+        if com_teto and self.bloqueio_entrada:      # só a ENTRADA: reduzir segue sempre
+            raise ChaveInsegura(f"entrada recusada: {self.bloqueio_entrada}. Fechar, stop e "
+                                "pânico seguem funcionando")
         s = perp(simbolo)
         if qty is not None:
             qty = self._lote(simbolo, qty)              # o que VAI, sem resíduo de ponto flutuante
@@ -1000,5 +1042,5 @@ def obter(cfg=None, env=None, preco_fn=None, saldo_fn=None, fabrica_ccxt=_client
     teto = _f(cfg.get("corretora_nocional_max")) or NOCIONAL_MAX_PADRAO
     dry = str(cfg.get("corretora_dry_run") or "0").strip().lower() in ("1", "true", "sim")
     c = BinanceUSDM(fabrica_ccxt(modo, chave, segredo), modo, teto, dry_run=dry)
-    c.verificar_chave()                 # modo binance: levanta ChaveInsegura e não sobe
+    c.conferir_chave()                  # modo binance: chave insegura bloqueia a ENTRADA (regra 8)
     return c

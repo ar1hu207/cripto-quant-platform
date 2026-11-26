@@ -327,7 +327,7 @@ def conta(banco, sem_rede, monkeypatch):
     db.set_config("corretora", "demo", "teste")
     db.set_config("tp_ativo", "0", "teste")
     execucao.usar(f)
-    for d in (execucao._escrita, execucao._falta_fill, execucao._sem_stop, execucao._recusas):
+    for d in (execucao._escrita, execucao._falta_fill, execucao._avisado, execucao._recusas):
         d.clear()
     execucao._reconciliado["mono"] = None
     execucao.reconciliar()
@@ -1705,6 +1705,99 @@ def test_chave_recusada_na_leitura_avisa_o_dono_uma_vez_e_diz_o_porque(conta, mo
     with pytest.raises(C.LimiteDeTaxa):
         execucao.reconciliar()
     assert len(avisos) == 2 and "limitou" in avisos[1]
+
+
+def test_chave_insegura_barra_a_entrada_antes_do_claim_e_nao_a_saida(conta):
+    pid, _ = _abrir(conta)
+    conta.bloqueio_entrada = "chave recusada: saque habilitado"
+    sid = semear_sinal(ativo="ETH/USDT")
+    with pytest.raises(ValueError, match="trava da chave"):
+        simulador.executar(sid, 50.0, 2)
+    assert _sinal(sid) == "novo"                                  # o sinal não foi consumido
+    assert simulador.fechar(pid, "manual") is not None            # e fechar segue
+    assert _pos(pid)["status"] == "fechada" and not conta.pos
+
+
+def test_troca_para_conta_com_chave_insegura_e_recusada(papel):
+    cli, f = papel
+    f.bloqueio_entrada = "chave recusada: sem restrição de IP"
+    r = cli.post("/config", json={"corretora": "demo"})
+    assert r.status_code == 422 and "restrição de IP" in str(r.json())
+
+
+def test_bloqueio_de_chave_e_reconferido_e_avisa(conta, monkeypatch):
+    avisos = []
+    monkeypatch.setattr(execucao, "_avisar", lambda texto, nivel="error": avisos.append(texto))
+    conta.bloqueio_entrada = "x"
+    conta.chave_conferida_em = None
+    conferidas = []
+
+    def confere():
+        conferidas.append(1)
+        conta.bloqueio_entrada = "chave recusada: saque habilitado"
+        conta.chave_conferida_em = execucao.time.monotonic()
+        return conta.bloqueio_entrada
+    conta.conferir_chave = confere
+    execucao.reconciliar()
+    execucao.reconciliar()                                        # dentro dos 10 min: não repete
+    assert len(conferidas) == 1 and len(avisos) == 1 and "saque" in avisos[0]
+
+
+def test_config_de_copia_a_estrategia_sem_o_que_liga_o_bot(papel, tmp_path, capsys):
+    """O primeiro degrau: a estratégia da conta A na R, sem `auto_trade`, sem estado e sem o
+    que é da conta (banca, teto de perda, canal de alerta)."""
+    import api
+    cfg_a = api._config_publica(db.get_config())
+    cfg_a.update(auto_trade="1", risco_por_trade="0.015", trava_dia_em="2026-11-26",
+                 corretora="demo", banca_alocada="9999", telegram_token="••••")
+    arq = tmp_path / "a.json"
+    arq.write_text(__import__("json").dumps(cfg_a), encoding="utf-8")
+    assert execucao._cli(["config-de", str(arq), "perda_total_max=60", "banca_alocada=200"]) == 0
+    cfg = db.get_config()
+    assert cfg["auto_trade"] == "0" and cfg["corretora"] == "papel"
+    assert float(cfg["risco_por_trade"]) == 0.015 and float(cfg["banca_alocada"]) == 200
+    assert float(cfg["perda_total_max"]) == 60
+    assert "auto_trade" in capsys.readouterr().out                # diz o que ficou fora
+
+
+def test_config_de_le_o_banco_da_outra_conta_sem_escrever_nele(papel, tmp_path):
+    import shutil
+    import sqlite3
+    outro = tmp_path / "a.db"
+    shutil.copy(db.DB, outro)
+    with sqlite3.connect(outro) as con:
+        con.execute("UPDATE config SET valor='0.015' WHERE chave='risco_por_trade'")
+        con.execute("UPDATE config SET valor='1' WHERE chave='auto_trade'")
+        con.execute("INSERT OR REPLACE INTO config(chave, valor) VALUES('telegram_token', 'segredo-da-a')")
+    antes = outro.read_bytes()
+    assert execucao._cli(["config-de", str(outro), "perda_total_max=60"]) == 0
+    cfg = db.get_config()
+    assert float(cfg["risco_por_trade"]) == 0.015 and cfg["auto_trade"] == "0"
+    assert cfg.get("telegram_token") != "segredo-da-a"
+    assert outro.read_bytes() == antes                            # só leitura
+
+
+def test_config_le_o_segredo_da_entrada_padrao(papel, monkeypatch, capsys):
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("123:token-secreto" + chr(10)))
+    assert execucao._cli(["config", "telegram_token=-", "telegram_chat_id=42"]) == 0
+    assert db.get_config()["telegram_token"] == "123:token-secreto"
+    assert "token-secreto" not in capsys.readouterr().out
+
+
+def test_linha_de_comando_le_o_ambiente_sem_shell(tmp_path, monkeypatch):
+    env = tmp_path / "x.env"
+    env.write_text('# comentario\nVALOR_A="com espaco $HOME"\nVALOR_B=$(rm -rf /)\n'
+                   "VALOR_C='aspas'\nDB_PATH=/outro\n", encoding="utf-8")
+    monkeypatch.setenv("DB_PATH", "/da-conta-r")
+    for k in ("VALOR_A", "VALOR_B", "VALOR_C"):
+        monkeypatch.delenv(k, raising=False)
+    execucao._carregar_env(str(env))
+    import os
+    assert os.environ["VALOR_A"] == "com espaco $HOME"           # nada expandido
+    assert os.environ["VALOR_B"] == "$(rm -rf /)"                # nada executado
+    assert os.environ["VALOR_C"] == "aspas"
+    assert os.environ["DB_PATH"] == "/da-conta-r"                # o da R vence o .env da A
 
 
 def test_binance_exige_teto_de_perda_total_e_canal_de_alerta(papel):

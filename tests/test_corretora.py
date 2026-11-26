@@ -867,12 +867,52 @@ def test_binance_sem_chave_no_ambiente_recusa():
         C.obter({"corretora": "binance"}, env={"BINANCE_DEMO_KEY": "a", "BINANCE_DEMO_SECRET": "b"})
 
 
-def test_binance_com_chave_que_saca_nao_sobe():
+def test_binance_com_chave_que_saca_nao_abre_mas_fecha():
+    """Regra 8 (revisão de 26/11): recusar SUBIR deixava a posição que já existe sem ninguém
+    para fechá-la. A chave insegura barra a entrada; fechar, stop e pânico seguem."""
     ex = _ExFake()
     ex.restricoes["enableWithdrawals"] = True
-    with pytest.raises(C.ChaveInsegura):
-        C.obter({"corretora": "binance"}, env={"BINANCE_KEY": "a", "BINANCE_SECRET": "b"},
+    c = C.obter({"corretora": "binance"}, env={"BINANCE_KEY": "a", "BINANCE_SECRET": "b"},
                 fabrica_ccxt=lambda *a: ex)
+    assert "saque" in c.bloqueio_entrada
+    with pytest.raises(C.ChaveInsegura, match="saque"):
+        c.abrir_mercado("SOL/USDT", "LONG", 0.1, "e1")
+    with pytest.raises(C.ChaveInsegura):
+        c.colocar_limite_post_only("SOL/USDT", "LONG", 0.1, 90.0, "e2")
+    assert not _creates(ex)
+    ex.posicao = 0.1
+    c.colocar_stop("SOL/USDT", "LONG", 95.0, "s1", qty=0.1)
+    assert c.fechar_mercado("SOL/USDT", "LONG", 0.1, "f1")["status"] == "preenchida"
+    ex.restricoes["enableWithdrawals"] = False                  # consertada no site
+    assert c.conferir_chave() is None and c.bloqueio_entrada is None
+    assert c.abrir_mercado("SOL/USDT", "LONG", 0.1, "e3")["client_oid"] == "e3"
+
+
+def test_conferencia_que_falha_por_rede_tambem_barra_a_entrada():
+    ex = _ExFake()
+    def cai():
+        raise ccxt.RequestTimeout("timeout")
+    ex.sapiGetAccountApiRestrictions = cai
+    c = C.obter({"corretora": "binance"}, env={"BINANCE_KEY": "a", "BINANCE_SECRET": "b"},
+                fabrica_ccxt=lambda *a: ex)
+    assert "não foi conferida" in c.bloqueio_entrada
+
+
+def test_mensagem_de_erro_sai_sem_assinatura_e_sem_ip():
+    ex = _ExFake()
+    b = _bin(ex)
+    ex.erros["fetch_balance"] = [ccxt.NetworkError(
+        "binanceusdm GET https://fapi.binance.com/fapi/v2/balance?timestamp=1&recvWindow=10000"
+        "&signature=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 timeout")]
+    with pytest.raises(ccxt.NetworkError) as e:
+        b.saldo()
+    assert "9f86d081" not in str(e.value) and "signature=***" in str(e.value)
+    ex.erros["fetch_balance"] = [ccxt.AuthenticationError(
+        'binanceusdm {"code":-2015,"msg":"Invalid API-key, IP, or permissions for action, '
+        'request ip: 203.0.113.9"}')]
+    with pytest.raises(C.ChaveRecusada) as e:
+        b.saldo()
+    assert "203.0.113.9" not in str(e.value)
 
 
 def test_demo_le_as_chaves_de_demo_e_o_teto_da_config():

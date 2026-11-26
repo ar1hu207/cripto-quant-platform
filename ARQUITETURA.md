@@ -720,8 +720,8 @@ cancelado. `FINISHED` só é "executada" com `actualQty` > 0. O funding vem em j
 | Tranca | Onde |
 |---|---|
 | Só a instância com `CORRETORA_HABILITADA=1` sai do papel; banco em modo corretora não sobe nas outras | `execucao.habilitada`, `api._guarda_corretora` |
-| A chave da Binance mora num arquivo que só a unit da conta R carrega | `deploy/cripto-bot-r.service` |
-| Chave real que pode sacar, transferir, não tem IP fixo, ou tem habilitado o que o bot não usa (spot, margem, portfolio margin, opções) é recusada | `corretora.verificar_chave` |
+| A chave da Binance mora num arquivo que só a unit da conta R carrega. Isso a tira do AMBIENTE das contas de papel; o usuário Linux é o mesmo, então não a tira do alcance delas (isolar = usuário próprio, `RUNBOOK-VM.md` §0.1) | `deploy/cripto-bot-r.service` |
+| Chave real que pode sacar, transferir, não tem IP fixo, tem habilitado o que o bot não usa (spot, margem, portfolio margin, opções) ou não deu para conferir NÃO ABRE nada. Fechar, stop e pânico seguem: recusar subir deixava a posição que existe sem ninguém para fechá-la. Reconfere a cada 10 min e avisa o dono | `corretora.conferir_chave`, `execucao._reconferir_chave` |
 | Trocar de modo exige livro sem posição, sem ordem e sem histórico de outro modo; e a CONTA também vazia: sem posição e sem ordem aberta para entrar num modo real, sem posição e sem ordem do bot para voltar ao papel; e em One-way e Single-Asset LIDOS (não lido também recusa) | `execucao.trocar_modo` |
 | `corretora_dry_run` não liga com posição ou ordem aberta: em dry_run nada é enviado, nem fechamento, nem stop, nem pânico | `api._trocar_corretora` |
 | `binance` exige `perda_total_max` > 0 e canal de alerta | `api._trocar_corretora` |
@@ -731,7 +731,9 @@ cancelado. `FINISHED` só é "executada" com `actualQty` > 0. O funding vem em j
 | Teto de perda TOTAL, sticky: só solta quando o dono SOBE o teto (no servidor) | `execucao.guarda_total` |
 | Limite de nocional por ordem, antes da rede | `corretora_nocional_max` |
 | `/reset` recusado em modo corretora e em banco com histórico de `binance` | `api.reset` |
-| `/panico` cancela e fecha LÁ, e varre a conta | `execucao.panico`, `deploy/panico.sh` |
+| `/panico` cancela e fecha LÁ, e varre a conta. Sem o serviço: `deploy/panico.sh` para a unit e fala direto com a corretora, sempre como `cripto`, sem `source` de arquivo e sem senha na linha de comando | `execucao.panico`, `deploy/panico.sh` |
+| Mensagem de erro do ccxt sai sem a URL assinada e sem o IP de saída antes de ir a log, `/status` e HTTP | `corretora.limpo` (no `_Cliente`) |
+| O banco da R tem backup próprio, conferido com `integrity_check` | `deploy/backup_banco.py` |
 | O DCA (simulação: soma unidades, não compra nada) não cria plano nem aporta nessa conta | `dca._so_no_papel` |
 
 **Aproximações declaradas.** A alavancagem é truncada para inteiro. O trailing só reenvia o
