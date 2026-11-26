@@ -175,6 +175,9 @@ class Falsa:
     def hedge(self):
         return self.modo_hedge
 
+    def multi_ativos(self):
+        return getattr(self, "modo_multi", False)
+
     def posicoes(self):
         self._passa("posicoes")
         return [{"simbolo": a, "direcao": p["direcao"], "qty": p["qty"], "entrada": p["entrada"],
@@ -305,9 +308,10 @@ class Falsa:
         return [dict(f) for f in self.negocios if f["simbolo"] == simbolo
                 and (desde is None or pd.Timestamp(f["ts"]) >= desde)]
 
-    def income(self, simbolo=None, desde_ms=None):
+    def income(self, simbolo=None, desde_ms=None, tipo=None):
         self._passa("income")
-        return [dict(x) for x in self.renda if simbolo in (None, x.get("simbolo"))]
+        return [dict(x) for x in self.renda if simbolo in (None, x.get("simbolo"))
+                and tipo in (None, x.get("tipo"))]
 
 
 # ============================================================================ fixtures
@@ -1672,6 +1676,35 @@ def test_a_troca_recusa_conta_com_posicao_ou_em_hedge(papel):
     f._abre("BTC/USDT", "LONG", 1.0, 100.0, f._id(), 0.0)
     assert cli.post("/config", json={"corretora": "demo"}).status_code == 422
     assert db.get_config()["corretora"] == "papel"
+
+
+def test_a_troca_recusa_multi_ativos_e_modo_que_nao_se_leu(papel):
+    """Revisão de 26/11: em Multi-Assets a margem isolada é recusada (-4168) e toda entrada
+    sairia rejeitada no preparo; e modo NÃO LIDO é descobrir pela primeira ordem."""
+    cli, f = papel
+    for hedge, multi, palavra in ((False, True, "Multi-Assets"), (False, None, "Multi-Assets"),
+                                  (None, False, "modo de posição")):
+        f.modo_hedge, f.modo_multi = hedge, multi
+        r = cli.post("/config", json={"corretora": "demo"})
+        assert r.status_code == 422 and palavra in str(r.json()), (hedge, multi)
+        assert db.get_config()["corretora"] == "papel"
+    f.modo_hedge, f.modo_multi = False, False
+    assert cli.post("/config", json={"corretora": "demo"}).status_code == 200
+
+
+def test_chave_recusada_na_leitura_avisa_o_dono_uma_vez_e_diz_o_porque(conta, monkeypatch):
+    avisos = []
+    monkeypatch.setattr(execucao, "_avisar", lambda texto, nivel="error": avisos.append(texto))
+    monkeypatch.setattr(execucao, "_avisado", {})
+    conta.falhar["posicoes"] = C.ChaveRecusada("binance -2015 Invalid API-key, IP, or permissions")
+    for _ in range(3):
+        with pytest.raises(C.ChaveRecusada):
+            execucao.reconciliar()
+    assert len(avisos) == 1 and "chave" in avisos[0] and "IP" in avisos[0]
+    conta.falhar["posicoes"] = C.LimiteDeTaxa("429")
+    with pytest.raises(C.LimiteDeTaxa):
+        execucao.reconciliar()
+    assert len(avisos) == 2 and "limitou" in avisos[1]
 
 
 def test_binance_exige_teto_de_perda_total_e_canal_de_alerta(papel):

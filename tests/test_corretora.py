@@ -34,6 +34,12 @@ class _ExFake:
         self.restricoes = {"enableWithdrawals": False, "enableInternalTransfer": False,
                            "permitsUniversalTransfer": False, "ipRestrict": True, "enableFutures": True}
         self.relogio_sincronizado = 0
+        self.multi = False
+        self.mercados_carregados = 0
+        self.ativacao_gravada = None             # força a Binance a gravar outra ativação
+        self.erros = {}                          # método -> lista de exceções a levantar, uma por chamada
+        self.last_response_headers = {}
+        self.income_chamadas = []
 
     # ---- mercado
     def market(self, s):
@@ -56,20 +62,31 @@ class _ExFake:
     def load_time_difference(self):
         self.relogio_sincronizado += 1
 
+    def load_markets(self, recarregar=False):
+        self.mercados_carregados += 1
+
+    def _erro(self, metodo):
+        fila = self.erros.get(metodo)
+        if fila:
+            raise fila.pop(0)
+
     def fetch_mark_prices(self, simbolos):
         return {s: {"markPrice": self.mark} for s in simbolos}
 
     # ---- ordens
     def create_order(self, s, tipo, lado, qty, preco, params):
         self.chamadas.append(("create_order", s, tipo, lado, qty, preco, dict(params)))
+        self._erro("create_order")
         coid = params["newClientOrderId"]
         if getattr(self, "falha_no_envio", None) is not None:
             raise self.falha_no_envio
         if self.timeout_perde:
             raise ccxt.RequestTimeout("timeout")
-        if coid in self.coids:                                         # demo: -4116
-            raise ccxt.InvalidOrder('binanceusdm {"code":-4116,"msg":"ClientOrderId is duplicated."}')
         condicional = tipo.upper() in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET")
+        if coid in self.coids:
+            if condicional:     # serviço Algo: -20132, que o ccxt 4.5.56 põe em BadRequest
+                raise ccxt.BadRequest('binanceusdm {"code":-20132,"msg":"The client algo id is duplicated."}')
+            raise ccxt.InvalidOrder('binanceusdm {"code":-4116,"msg":"ClientOrderId is duplicated."}')   # demo
         if condicional and params.get("closePosition") and self.posicao == 0:   # demo: -4509
             raise ccxt.ExchangeError('binanceusdm {"code":-4509,"msg":"Time in Force (TIF) GTE can only be used with open positions."}')
         if condicional and params.get("closePosition") and any(           # demo: -4130
@@ -87,7 +104,12 @@ class _ExFake:
                     "quantity": str(qty) if qty is not None else "0",
                     "closePosition": bool(params.get("closePosition")),
                     "reduceOnly": bool(params.get("reduceOnly")),
-                    "triggerPrice": params.get("stopPrice") or params.get("activationPrice")}
+                    "triggerPrice": params.get("stopPrice")}
+            if tipo.upper() == "TRAILING_STOP_MARKET":
+                # Doc do Algo: o campo é `activatePrice`, e sem ele a ativação é o preço de agora.
+                # O nome antigo (`activationPrice`) não é lido (revisão de 26/11, R5 #1).
+                info["activatePrice"] = str(self.ativacao_gravada or params.get("activatePrice")
+                                            or self.mark)
             o = {"id": oid, "clientOrderId": coid, "symbol": s, "type": "market", "side": lado,
                  "status": "open", "amount": qty, "filled": 0.0, "price": None, "average": None,
                  "stopPrice": float(params["stopPrice"]) if params.get("stopPrice") else None,
@@ -114,6 +136,7 @@ class _ExFake:
     def fetch_order(self, oid, s, params=None):
         params = params or {}
         self.chamadas.append(("fetch_order", oid, s, dict(params)))
+        self._erro("fetch_order")
         if oid is None:
             coid = params.get("origClientOrderId") or params.get("clientAlgoId")
             oid = self.coids.get(coid)
@@ -169,12 +192,18 @@ class _ExFake:
         self.lev[s] = lev
 
     def fetch_balance(self):
+        self.chamadas.append(("fetch_balance",))
+        self._erro("fetch_balance")
         return {"USDT": {"free": 200.0, "total": 205.0},
                 "info": {"totalUnrealizedProfit": "5.0", "totalWalletBalance": "200.0",
                          "totalMarginBalance": "205.0"}}
 
     def fapiPrivateGetPositionSideDual(self, params=None):
         return {"dualSidePosition": self.hedge}
+
+    def fapiPrivateGetMultiAssetsMargin(self, params=None):
+        self._erro("multi")
+        return {"multiAssetsMargin": self.multi}
 
     def fetch_positions(self, simbolos=None):
         if self.posicao:
@@ -193,6 +222,13 @@ class _ExFake:
                  "info": {"maker": False, "realizedPnl": "0"}}]
 
     def fapiPrivateGetIncome(self, params):
+        self.income_chamadas.append(dict(params))
+        if "endTime" in params:                 # janela: um funding por dia, dentro dela
+            ini, fim = params["startTime"], params["endTime"]
+            dia = 86400 * 1000
+            return [{"incomeType": "FUNDING_FEE", "income": "-0.01", "asset": "USDT",
+                     "symbol": "SOLUSDT", "time": str(t), "tranId": t}
+                    for t in range((ini // dia + 1) * dia, fim + 1, dia)]
         return [{"incomeType": "COMMISSION", "income": "-0.00230144", "asset": "USDT",
                  "symbol": "SOLUSDT", "time": "1794866948000"}]
 
@@ -400,7 +436,7 @@ def test_mover_stop_nao_cancela_o_antigo_se_o_novo_voltou_morto(monkeypatch):
 def test_trailing_ja_armado_vai_sem_preco_de_ativacao():
     ex = _ExFake()
     _bin(ex).colocar_trailing("SOL/USDT", "LONG", 0.5, None, 1.0, "r1")
-    assert "activationPrice" not in _creates(ex)[0][6]
+    assert "activationPrice" not in _creates(ex)[0][6] and "activatePrice" not in _creates(ex)[0][6]
 
 
 def test_ordem_sem_client_oid_nao_sai():
@@ -458,7 +494,8 @@ def test_tp_e_trailing_saem_do_lado_que_fecha():
     b.colocar_trailing("SOL/USDT", "SHORT", 0.1, 95.0, 1.5, "tr")
     tp, tr = _creates(ex)[-2:]
     assert (tp[2], tp[3], tp[6]["reduceOnly"]) == ("TAKE_PROFIT_MARKET", "sell", True)
-    assert (tr[2], tr[3], tr[6]["callbackRate"], tr[6]["activationPrice"]) == ("TRAILING_STOP_MARKET", "buy", 1.5, "95.00")
+    assert (tr[2], tr[3], tr[6]["callbackRate"], tr[6]["activatePrice"]) == ("TRAILING_STOP_MARKET", "buy", 1.5, "95.00")
+    assert "activationPrice" not in tr[6]                       # o nome antigo não é lido pelo Algo
 
 
 def test_trailing_fora_da_faixa_da_binance_e_recusado_aqui():
@@ -664,9 +701,137 @@ def test_saldo_posicoes_fills_income_normalizados():
     assert i["tipo"] == "COMMISSION" and i["valor"] == pytest.approx(-0.00230144)
 
 
+# ------------------------------------------------------------------ contrato com a Binance (revisão de 26/11)
+
+def test_trailing_confere_a_ativacao_que_a_binance_gravou():
+    ex = _ExFake()
+    o = _bin(ex).colocar_trailing("SOL/USDT", "LONG", 0.1, 105.0, 1.5, "tr5")
+    assert o["ativacao"] == 105.0 and ex.ordens[o["id"]]["info"]["algoStatus"] == "NEW"
+
+
+def test_trailing_gravado_com_outra_ativacao_e_cancelado_e_recusado():
+    """Se a Binance ativar o trailing no preço de agora (o padrão dela sem o campo certo), ele
+    seguiria uma posição ainda não armada e a fecharia de madrugada. Não fica."""
+    ex = _ExFake()
+    ex.ativacao_gravada = 100.0
+    with pytest.raises(C.OrdemRecusada, match="ativação"):
+        _bin(ex).colocar_trailing("SOL/USDT", "LONG", 0.1, 105.0, 1.5, "tr6")
+    (o,) = [x for x in ex.ordens.values() if x["clientOrderId"] == "tr6"]
+    assert o["info"]["algoStatus"] == "CANCELED"
+
+
+def test_id_repetido_de_condicional_devolve_a_mesma_ordem():
+    """`-20132` (Algo) quer dizer o mesmo que o `-4116`: a ordem já foi. O `_stop_da_ordem`
+    reenvia o mesmo id de propósito; virar recusa cancelava uma entrada protegida."""
+    ex = _ExFake()
+    b = _bin(ex)
+    s1 = b.colocar_stop("SOL/USDT", "LONG", 95.0, "dup1", qty=0.1)
+    s2 = b.colocar_stop("SOL/USDT", "LONG", 95.0, "dup1", qty=0.1)
+    assert s2["id"] == s1["id"] and len(_creates(ex)) == 2
+
+
+def test_chave_recusada_depois_do_primeiro_acesso_nao_vira_rede():
+    """O ccxt põe o `-2015` em DDoSProtection (NetworkError) depois do primeiro acesso: sem
+    tradução, um IP que mudou aparecia como envio incerto e disparava uma busca inútil."""
+    ex = _ExFake()
+    b = _bin(ex)
+    corpo = 'binanceusdm {"code":-2015,"msg":"Invalid API-key, IP, or permissions for action."}'
+    ex.erros["create_order"] = [ccxt.DDoSProtection(corpo)]
+    with pytest.raises(C.ChaveRecusada, match="IP"):
+        b.colocar_stop("SOL/USDT", "LONG", 95.0, "k1", qty=0.1)
+    assert not [c for c in ex.chamadas if c[0] == "fetch_order"]
+    ex.erros["fetch_balance"] = [ccxt.AuthenticationError(corpo)]          # e na leitura também
+    with pytest.raises(C.ChaveRecusada):
+        b.saldo()
+
+
+def test_relogio_fora_ressincroniza_e_repete_uma_vez():
+    ex = _ExFake()
+    b = _bin(ex)
+    antes = ex.relogio_sincronizado
+    nonce = 'binanceusdm {"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'
+    ex.erros["create_order"] = [ccxt.InvalidNonce(nonce)]
+    o = b.colocar_stop("SOL/USDT", "LONG", 95.0, "n1", qty=0.1)
+    assert o["status"] == "aberta" and ex.relogio_sincronizado == antes + 1
+    assert len(_creates(ex)) == 2
+    ex.erros["create_order"] = [ccxt.InvalidNonce(nonce), ccxt.InvalidNonce(nonce)]
+    with pytest.raises(C.OrdemRecusada, match="relógio"):
+        b.colocar_stop("SOL/USDT", "LONG", 95.0, "n2", qty=0.1)
+    assert not [c for c in ex.chamadas if c[0] == "fetch_order"]           # recusa certa: sem busca
+
+
+def test_limite_de_taxa_para_tudo_pelo_retry_after():
+    ex = _ExFake()
+    b = _bin(ex)
+    ex.last_response_headers = {"Retry-After": "30"}
+    ex.erros["create_order"] = [ccxt.DDoSProtection('binanceusdm 418 I\'m a teapot {"code":-1003}')]
+    with pytest.raises(C.LimiteDeTaxa):
+        b.colocar_stop("SOL/USDT", "LONG", 95.0, "t1", qty=0.1)
+    assert not [c for c in ex.chamadas if c[0] == "fetch_order"]           # sem busca durante o ban
+    n = len(ex.chamadas)
+    with pytest.raises(C.LimiteDeTaxa):
+        b.saldo()                                                       # nada vai à Binance
+    assert len(ex.chamadas) == n
+    assert b.preco_valido("SOL/USDT", 95.123) == 95.12                  # o que é local continua
+    assert 25 < b._pausa_ate - __import__("time").monotonic() <= 30
+    b._pausa_ate = 0.0
+    assert b.saldo()["carteira"] == 200.0
+
+
+def test_finished_so_e_preenchida_com_quantidade_executada():
+    def o(**info):
+        return {"id": "9", "clientOrderId": "x", "symbol": "SOL/USDT:USDT", "status": "closed",
+                "side": "sell", "type": "market",
+                "info": {"algoId": "9", "algoStatus": "FINISHED", "orderType": "STOP_MARKET", **info}}
+    assert C.normalizar_ordem(o(actualQty="0"))["status"] == "cancelada"
+    n = C.normalizar_ordem(o(actualQty="0.5", actualOrderId="77"))
+    assert n["status"] == "preenchida" and n["preenchido"] == 0.5
+    assert C.normalizar_ordem(o())["status"] == "preenchida"            # sem o campo: o de antes
+
+
+def test_income_vem_em_janelas_de_sete_dias_filtrado_por_tipo():
+    """Só com `startTime` a Binance não garante mais que 7 dias: o funding de uma posição de
+    swing saía cortado sem aviso."""
+    import time as _t
+    ex = _ExFake()
+    b = _bin(ex)
+    desde = int(_t.time() * 1000) - 20 * 86400 * 1000
+    linhas = b.income("SOL/USDT", desde, tipo="FUNDING_FEE")
+    assert len(ex.income_chamadas) == 3
+    for c in ex.income_chamadas:
+        assert c["incomeType"] == "FUNDING_FEE" and c["endTime"] - c["startTime"] < 7 * 86400 * 1000
+    assert 19 <= len(linhas) <= 21 and all(x["tipo"] == "FUNDING_FEE" for x in linhas)
+
+
+def test_multi_ativos_e_lido_e_falha_de_leitura_e_none():
+    ex = _ExFake()
+    b = _bin(ex)
+    assert b.multi_ativos() is False
+    ex.multi = True
+    assert b.multi_ativos() is True
+    ex.erros["multi"] = [ConnectionError("x")]
+    assert b.multi_ativos() is None
+    assert C.Papel(lambda s: 100.0).multi_ativos() is False
+
+
+def test_mercados_recarregam_uma_vez_por_dia():
+    ex = _ExFake()
+    b = _bin(ex)
+    b.arredondar("SOL/USDT", 0.1)
+    assert ex.mercados_carregados == 0                  # a fábrica acabou de carregar
+    b._mercados_em -= b.RECARGA_MERCADOS_S + 1
+    b.arredondar("SOL/USDT", 0.1)
+    b.arredondar("SOL/USDT", 0.1)
+    assert ex.mercados_carregados == 1
+
+
 # ------------------------------------------------------------------ chave (regra 8)
 
 @pytest.mark.parametrize("campo,valor,motivo", [
+    ("enableSpotAndMarginTrading", True, "spot e margem"),
+    ("enableMargin", True, "margem"),
+    ("enablePortfolioMarginTrading", True, "portfolio margin"),
+    ("enableVanillaOptions", True, "opções"),
     ("enableWithdrawals", True, "saque"),
     ("enableInternalTransfer", True, "transferência"),
     ("permitsUniversalTransfer", True, "transferência"),
@@ -781,8 +946,11 @@ class TestDemoAoVivo:
         # idempotência real
         assert b.colocar_limite_post_only(self.S, "LONG", q, p, f"t-lim-{sufixo}")["id"] == lim["id"]
         # cancelar condicional: status cru
+        # id repetido de CONDICIONAL: a mesma ordem volta (o código de erro é o do serviço Algo)
+        assert b.colocar_stop(self.S, "LONG", mark * 0.85, f"t-sl0-{sufixo}", qty=q)["id"] == sl0["id"]
         assert b.cancelar(self.S, sl0["id"], condicional=True) is True
         assert self._espera(lambda: b.buscar(self.S, f"t-sl0-{sufixo}", condicional=True)["status"] == "cancelada")
+        assert b.cancelar(self.S, sl0["id"], condicional=True) is False     # já terminada: não levanta
         assert b.cancelar(self.S, lim["id"]) is True
         # posição mínima com SL closePosition, TP e trailing; mover o stop
         q, _ = b.arredondar(self.S, 6.5 / mark)
@@ -791,6 +959,7 @@ class TestDemoAoVivo:
         sl = b.colocar_stop(self.S, "LONG", mark * 0.97, f"t-sl-{sufixo}")
         tp = b.colocar_tp(self.S, "LONG", mark * 1.05, q, f"t-tp-{sufixo}")
         tr = b.colocar_trailing(self.S, "LONG", q, mark * 1.03, 1.5, f"t-tr-{sufixo}")
+        assert tr["ativacao"] == b.preco_valido(self.S, mark * 1.03)       # o nome do campo vale
         sl2 = b.mover_stop(self.S, sl, mark * 0.975, f"t-sl2-{sufixo}")
         abertas = lambda: {o["client_oid"] for o in b.ordens_abertas(self.S)}
         assert self._espera(lambda: {sl2["client_oid"], tp["client_oid"], tr["client_oid"]} <= abertas()

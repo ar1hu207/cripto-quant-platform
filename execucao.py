@@ -201,6 +201,21 @@ def _avisar(texto, nivel="error"):
         log(f"push do aviso falhou: {e}", "warning")
 
 
+_avisado = {}                      # chave do aviso -> monotonic do último envio
+AVISO_REPETE_S = 1800.0
+
+
+def _avisar_uma_vez(chave, texto, nivel="error"):
+    """`_avisar` no máximo uma vez por `AVISO_REPETE_S` por chave: o que falha a cada ciclo de
+    7 s viraria 250 mensagens por hora, e a que importa se perderia entre elas."""
+    agora = time.monotonic()
+    if agora - _avisado.get(chave, -1e18) < AVISO_REPETE_S:
+        log(texto, nivel)
+        return
+    _avisado[chave] = agora
+    _avisar(texto, nivel)
+
+
 def _divergencia(texto):
     saude["divergencias"] += 1
     saude["ultima_divergencia"] = f"{pd.Timestamp.now()} {texto}"
@@ -863,7 +878,7 @@ def _funding_real(c, pos, ate=None):
     """O funding que a corretora lançou para o ativo desde a abertura, ainda não atribuído a um
     fechamento parcial. None = não deu para medir (que não é zero: [P2-10])."""
     try:
-        linhas = c.income(pos["ativo"], C.sp_para_ms(pos["aberto_em"]))
+        linhas = c.income(pos["ativo"], C.sp_para_ms(pos["aberto_em"]), tipo="FUNDING_FEE")
     except Exception as e:
         log(f"funding real não medido {pos['ativo']} #{pos['id']}: {type(e).__name__}: {e}", "warning")
         return None
@@ -1477,6 +1492,17 @@ def reconciliar(cfg=None):
         except Exception as e:
             saude["falhas"] += 1
             saude["ultimo_erro"] = f"{pd.Timestamp.now()} leitura: {type(e).__name__}: {str(e)[:140]}"
+            # Chave recusada e limite de taxa não se resolvem sozinhos em um ciclo, e o dono
+            # precisa saber POR QUÊ: "rede" num IP que mudou o manda esperar, quando só o
+            # aplicativo da Binance age (revisão de 26/11).
+            if isinstance(e, C.ChaveRecusada):
+                _avisar_uma_vez("chave", "🔑 A Binance recusou a chave da conta real (IP de saída "
+                                "mudou? chave revogada?). O bot não move stop nem fecha nada até "
+                                "isso voltar; os stops que já estão lá continuam valendo. Confira "
+                                f"no aplicativo da Binance. {str(e)[:120]}")
+            elif isinstance(e, C.LimiteDeTaxa):
+                _avisar_uma_vez("taxa", "⏸️ A Binance limitou as requisições da conta real; o bot "
+                                f"para de chamar até o fim da pausa. {str(e)[:120]}")
             raise
         por_ativo = {(p["simbolo"], p["direcao"]): p for p in pxs}
         ids_abertos = {o["id"] for o in abertas_ex}
@@ -1811,9 +1837,20 @@ def trocar_modo(novo, cfg=None):
         # Com posição nos dois lados (hedge mode) a Binance recusa toda ordem sem `positionSide`.
         # Não abriria nada, mas cada sinal seria consumido por uma ordem rejeitada: melhor dizer
         # agora. None = não deu para ler, e aí quem diz é a primeira ordem.
-        if c.hedge() is True:
+        # Não lido também recusa: ligar o bot numa conta cujo modo não se conhece é descobrir
+        # pela primeira ordem, com o sinal já consumido (revisão de 26/11).
+        h = c.hedge()
+        if h is not False:
             raise ValueError("'corretora': a conta está em Hedge Mode; o bot opera em One-way. "
-                             "Troque em Preferências > Modo de posição, na Binance")
+                             "Troque em Preferências > Modo de posição, na Binance" if h else
+                             "'corretora': não deu para ler o modo de posição da conta. Tente de novo")
+        # Em Multi-Assets a Binance recusa margem isolada (-4168): nenhuma entrada passaria.
+        m = c.multi_ativos()
+        if m is not False:
+            raise ValueError("'corretora': a conta está em Multi-Assets; o bot opera em margem "
+                             "isolada, que exige Single-Asset. Troque em Preferências, na Binance"
+                             if m else "'corretora': não deu para ler o modo de margem da conta "
+                             "(Multi-Assets). Tente de novo")
     except C.ErroCorretora as e:
         raise ValueError(f"'corretora': {e}")
     except ValueError:

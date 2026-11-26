@@ -674,7 +674,8 @@ na Binance USDⓈ-M. Fora do papel o banco deixa de decidir e passa a **copiar**
    reconciliação ter passado. O trailing coloca o stop novo, cancela o antigo e só então grava o
    número; se o cancelamento do antigo falhar, vale o novo e a reconciliação tira o antigo.
 3. **Toda ordem tem id nosso** (`_coid`: `ap<prefixo do banco><letra><id do livro>`). Falha de
-   rede vira busca pelo id, nunca reenvio. E um id nunca é usado duas vezes (`_seq`): a
+   rede vira busca pelo id, nunca reenvio; id repetido (`-4116` nas normais, `-20132` nas
+   condicionais) também. E um id nunca é usado duas vezes (`_seq`): a
    tentativa seguinte sai com outro, e a ordem da anterior, se chegou, é órfã que a
    reconciliação cancela. Ordem morta com o mesmo id não confirma envio nenhum
    (`corretora._achar_viva`).
@@ -704,14 +705,24 @@ cancelada ou expirada sem executar é recusa, e a que volta sem número é incer
 reconciliação (`_fechar_qty`). Só o `-2022` quer dizer "não há o que reduzir". O pânico relê as
 posições da conta no fim e devolve como falha tudo o que ainda estiver aberto lá.
 
+**O que o ccxt chama de "rede" e não é.** O ccxt põe o `-2015` (chave, IP ou permissão) em
+`DDoSProtection` depois do primeiro acesso, e o 418/429 também, os dois como filhos de
+`NetworkError`. Sem tradução, um IP de saída que mudou de madrugada aparecia como envio incerto.
+Toda chamada ao ccxt passa por `corretora._Cliente`: `-2015` vira `ChaveRecusada` (e o dono é
+avisado do porquê, uma vez a cada 30 min), `-1021` ressincroniza o relógio e repete uma vez,
+e o limite de taxa vira `LimiteDeTaxa` com pausa global pelo `Retry-After` (insistir durante um
+ban de IP faz a Binance aumentá-lo). O trailing vai com `activatePrice`, o nome do serviço Algo
+(o ccxt 4.5.56 manda o antigo), e a ativação gravada é conferida na volta: diferente, ele é
+cancelado. `FINISHED` só é "executada" com `actualQty` > 0. O funding vem em janelas de 7 dias.
+
 **Trancas em volta** (nenhuma tem bandeira para desligar):
 
 | Tranca | Onde |
 |---|---|
 | Só a instância com `CORRETORA_HABILITADA=1` sai do papel; banco em modo corretora não sobe nas outras | `execucao.habilitada`, `api._guarda_corretora` |
 | A chave da Binance mora num arquivo que só a unit da conta R carrega | `deploy/cripto-bot-r.service` |
-| Chave real que pode sacar, transferir ou não tem IP fixo é recusada | `corretora.verificar_chave` |
-| Trocar de modo exige livro sem posição, sem ordem e sem histórico de outro modo; e a CONTA também vazia: sem posição e sem ordem aberta para entrar num modo real, sem posição e sem ordem do bot para voltar ao papel | `execucao.trocar_modo` |
+| Chave real que pode sacar, transferir, não tem IP fixo, ou tem habilitado o que o bot não usa (spot, margem, portfolio margin, opções) é recusada | `corretora.verificar_chave` |
+| Trocar de modo exige livro sem posição, sem ordem e sem histórico de outro modo; e a CONTA também vazia: sem posição e sem ordem aberta para entrar num modo real, sem posição e sem ordem do bot para voltar ao papel; e em One-way e Single-Asset LIDOS (não lido também recusa) | `execucao.trocar_modo` |
 | `corretora_dry_run` não liga com posição ou ordem aberta: em dry_run nada é enviado, nem fechamento, nem stop, nem pânico | `api._trocar_corretora` |
 | `binance` exige `perda_total_max` > 0 e canal de alerta | `api._trocar_corretora` |
 | Teto de perda TOTAL, sticky: só solta quando o dono SOBE o teto | `execucao.guarda_total` |

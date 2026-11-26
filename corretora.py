@@ -31,12 +31,18 @@ dinheiro fictício; os testes em `tests/test_corretora.py` reproduzem cada uma c
    a Binance confirma na hora, mas consultas feitas logo depois ainda dizem `NEW` por ~1,5 s
    (demo, 16/11, três leituras seguidas: NEW, CANCELED, CANCELED). A reconciliação (Fase 5) não
    pode agir sobre leitura feita no mesmo instante de uma escrita nossa.
-5. **Todo envio leva um id nosso (`client_oid`).** Repetir o id dá `-4116` e a ordem é achada
-   por ele. Timeout de rede no envio é o caso clássico de abrir duas vezes: aqui ele vira uma
+5. **Todo envio leva um id nosso (`client_oid`).** Repetir o id dá `-4116` (normal) ou
+   `-20132` (condicional, serviço Algo) e a ordem é achada por ele. Timeout de rede no envio é o caso clássico de abrir duas vezes: aqui ele vira uma
    BUSCA pelo id, nunca um reenvio cego. Se a busca não acha, levanta `EnvioIncerto` e quem
    chamou decide (a reconciliação resolve no ciclo seguinte).
 6. **O relógio é o da Binance.** O PC do dono estava 18,7 s atrasado e a Binance recusou tudo
-   (`-1021`, janela de 5 s). O adapter mede a diferença no início e de hora em hora.
+   (`-1021`, janela de 5 s). O adapter mede a diferença no início, de hora em hora, e de novo
+   na hora a cada `-1021` (que é recusa certa: a chamada é repetida uma vez).
+9. **Recusa da chave e limite de taxa não são "rede".** O ccxt põe o `-2015` (chave, IP ou
+   permissão) e o 418/429 em `DDoSProtection`, que é filho de `NetworkError`: sem tradução, um
+   IP de saída que mudou aparecia como envio incerto. Todo acesso ao ccxt passa por
+   `_Cliente`, que os traduz (`ChaveRecusada`, `LimiteDeTaxa`) e, no limite de taxa, PARA de
+   chamar até o `Retry-After`: insistir durante um ban de IP faz a Binance aumentá-lo.
 7. **Teto de nocional por ordem**, última linha antes da corretora: um bug de dimensionamento
    vira recusa, não ordem (`PLANO-LIVE` Fase 6). E `dry_run`: monta a ordem inteira, já
    arredondada, e não manda.
@@ -82,6 +88,17 @@ class AcimaDoTeto(ErroCorretora):
 
 class ChaveInsegura(ErroCorretora):
     """A chave real pode sacar, transferir, ou não está presa a um IP."""
+
+
+class ChaveRecusada(OrdemRecusada):
+    """A Binance recusou a CHAVE (`-2015`/`-2014`: chave, IP ou permissão). Nada foi executado.
+    O caso real é o IP de saída do servidor que mudou: a chave presa a IP para de valer para
+    tudo, inclusive para o pânico, e só o aplicativo da Binance consegue agir."""
+
+
+class LimiteDeTaxa(OrdemRecusada):
+    """Limite de requisições (429, `-1003`, `-1015`) ou IP banido (418). A requisição foi recusada
+    antes de executar, e até o fim da pausa nenhuma outra sai (`_Cliente`)."""
 
 
 # ------------------------------------------------------------------------------ fronteiras
@@ -149,6 +166,13 @@ def normalizar_ordem(o):
     status = _STATUS.get(str(cru or "").upper()) or {
         "open": "aberta", "closed": "preenchida", "canceled": "cancelada",
         "expired": "expirada", "rejected": "rejeitada"}.get(o.get("status"), o.get("status"))
+    preenchido = _f(o.get("filled")) or _f(info.get("executedQty")) or 0.0
+    if condicional and str(cru or "").upper() == "FINISHED" and _f(info.get("actualQty")) is not None:
+        # `FINISHED` é "preenchida OU cancelada no motor de casamento" (doc do Algo). Quem diz
+        # qual das duas é a quantidade da ordem filha: com zero, ela não executou nada. Sem o
+        # campo fica o de antes (preenchida), e quem decide o que houve são os negócios lidos.
+        preenchido = _f(info.get("actualQty"))
+        status = "preenchida" if preenchido > 0 else "cancelada"
     return {
         "id": str(o.get("id")) if o.get("id") is not None else None,
         "client_oid": o.get("clientOrderId") or info.get("clientAlgoId") or info.get("clientOrderId"),
@@ -158,11 +182,12 @@ def normalizar_ordem(o):
         "condicional": condicional,
         "status": status,
         "qty": _f(o.get("amount")) if o.get("amount") is not None else _f(info.get("quantity") or info.get("origQty")),
-        "preenchido": _f(o.get("filled")) or _f(info.get("executedQty")) or 0.0,
+        "preenchido": preenchido,
         "preco": _f(o.get("price")),
         "preco_medio": _f(o.get("average")) or _f(info.get("avgPrice")) or None,
         "gatilho": (_f(o.get("stopPrice")) or _f(info.get("triggerPrice")) or _f(info.get("stopPrice"))
                     or _f(info.get("activatePrice"))),      # trailing: a Binance chama de activatePrice
+        "ativacao": _f(info.get("activatePrice")),              # o que a Binance GRAVOU
         "reduce_only": bool(o.get("reduceOnly") or info.get("reduceOnly")),
         "close_position": str(info.get("closePosition")).lower() == "true",
         "ts": ms_para_sp(o.get("timestamp") or info.get("updateTime") or info.get("createTime")),
@@ -202,6 +227,9 @@ class Papel:
         return {"livre": s, "total": s, "unrealized": 0.0, "carteira": s, "equity": s}
 
     def hedge(self):
+        return False
+
+    def multi_ativos(self):
         return False
 
     def posicoes(self):
@@ -278,7 +306,7 @@ class Papel:
     def fills(self, simbolo, desde_ms=None):
         return []
 
-    def income(self, simbolo=None, desde_ms=None):
+    def income(self, simbolo=None, desde_ms=None, tipo=None):
         return []
 
     def verificar_chave(self):
@@ -287,6 +315,39 @@ class Papel:
 
 # ------------------------------------------------------------------------------ binance
 
+import re as _re
+
+# Métodos do ccxt que não vão à rede: valem durante a pausa por limite de taxa.
+_LOCAIS = frozenset({"market", "amount_to_precision", "price_to_precision", "cost_to_precision"})
+
+
+def _codigo(e, *codigos):
+    """O erro traz algum destes códigos da Binance? Por texto, com fronteira: o ccxt muda a
+    CLASSE de um código conforme a tabela e o momento (o `-2015` é `AuthenticationError` na
+    primeira chamada e `DDoSProtection` depois), mas o corpo cru vai sempre na mensagem."""
+    txt = str(e)
+    return any(_re.search(_re.escape(c) + r"(?!\d)", txt) for c in codigos)
+
+
+class _Cliente:
+    """O cliente ccxt com a regra 9 do módulo: TODA chamada à Binance passa por aqui, inclusive
+    leitura, busca depois de timeout e o pânico. Traduzir só no `_enviar` deixaria a
+    reconciliação dizendo "rede" para uma chave que deixou de valer."""
+
+    def __init__(self, ex, dono):
+        object.__setattr__(self, "_ex", ex)
+        object.__setattr__(self, "_dono", dono)
+
+    def __getattr__(self, nome):
+        alvo = getattr(self._ex, nome)
+        if not callable(alvo):
+            return alvo
+        return lambda *a, **k: self._dono._chamar(nome, alvo, a, k)
+
+    def __setattr__(self, nome, valor):         # dublê de teste trocando um método: vale no ccxt
+        setattr(self._ex, nome, valor)
+
+
 class BinanceUSDM:
     """Ordens reais (demo ou real) na Binance USDⓈ-M, modo one-way, margem isolada.
 
@@ -294,13 +355,17 @@ class BinanceUSDM:
 
     real = True
     RESYNC_RELOGIO_S = 3600
+    RECARGA_MERCADOS_S = 86400          # tick e lote mudam com o processo de pé; o dl380 religa de manhã, mas não é garantia
+    PAUSA_PADRAO_S = 60.0               # limite de taxa sem `Retry-After`
 
     def __init__(self, ex, modo, nocional_max, dry_run=False):
         if modo not in ("demo", "binance"):
             raise ValueError(f"modo inválido: {modo!r}")
         if not nocional_max or float(nocional_max) <= 0:
             raise ValueError("nocional_max é obrigatório e positivo: sem teto, sem ordem")
-        self.ex = ex
+        self._pausa_ate = 0.0           # monotonic: até quando nada vai à Binance (limite de taxa)
+        self._mercados_em = time.monotonic()      # a fábrica já carregou
+        self.ex = _Cliente(ex, self)
         self.nome = modo
         self.nocional_max = float(nocional_max)
         self.dry_run = bool(dry_run)
@@ -324,6 +389,65 @@ class BinanceUSDM:
             self._relogio_em = agora
         except Exception as e:      # sem relógio a próxima ordem falha com -1021 e diz por quê
             log(f"corretora: não sincronizou o relógio com a Binance ({e})", "warning")
+
+    def _chamar(self, nome, fn, a, k):
+        """Regra 9. `-2015` vira `ChaveRecusada`; `-1021` ressincroniza o relógio e repete UMA
+        vez (é recusa certa: nada foi executado, e o id repetido ainda cairia na busca); 418,
+        429, `-1003` e `-1015` param tudo até o `Retry-After`."""
+        import ccxt
+        if nome not in _LOCAIS:
+            falta = self._pausa_ate - time.monotonic()
+            if falta > 0:
+                raise LimiteDeTaxa(f"Binance em pausa por limite de requisições por mais {falta:.0f}s; "
+                                   f"{nome} não foi enviado")
+        for tentativa in (1, 2):
+            try:
+                return fn(*a, **k)
+            except ccxt.BaseError as e:
+                if _codigo(e, "-2015", "-2014"):
+                    raise ChaveRecusada(
+                        "a Binance recusou a chave (IP, chave ou permissão). Se o IP de saída do "
+                        f"servidor mudou, só o aplicativo da Binance age agora: {str(e)[:160]}") from e
+                if isinstance(e, ccxt.InvalidNonce) or _codigo(e, "-1021"):
+                    if tentativa == 1:
+                        log(f"corretora: relógio fora da janela em {nome}; ressincronizando e "
+                            "repetindo uma vez", "warning")
+                        self._sincronizar_relogio(forcar=True)
+                        continue
+                    raise OrdemRecusada(f"relógio fora da janela da Binance mesmo depois de "
+                                        f"ressincronizar: {str(e)[:160]}") from e
+                if (isinstance(e, (ccxt.DDoSProtection, ccxt.RateLimitExceeded))
+                        or _codigo(e, "-1003", "-1015")):
+                    pausa = self._pausar()
+                    raise LimiteDeTaxa(f"limite de requisições da Binance; nada sai pelos próximos "
+                                       f"{pausa:.0f}s: {str(e)[:160]}") from e
+                raise
+
+    def _pausar(self):
+        """Pausa global pelo `Retry-After` da resposta (segundos), ou `PAUSA_PADRAO_S`."""
+        cab = getattr(self.ex._ex, "last_response_headers", None) or {}
+        pausa = None
+        try:
+            for k, v in dict(cab).items():
+                if str(k).lower() == "retry-after":
+                    pausa = float(v)
+        except (TypeError, ValueError):
+            pausa = None
+        pausa = pausa if pausa and pausa > 0 else self.PAUSA_PADRAO_S
+        self._pausa_ate = max(self._pausa_ate, time.monotonic() + pausa)
+        log(f"corretora: limite de requisições da Binance; pausa de {pausa:.0f}s", "error")
+        return pausa
+
+    def _recarregar_mercados(self):
+        """Tick e lote podem mudar com o processo de pé; com os de ontem, o stop seria recusado
+        por precisão duas vezes e a posição fechada a mercado. Uma vez por dia, sem derrubar."""
+        if time.monotonic() - self._mercados_em < self.RECARGA_MERCADOS_S:
+            return
+        try:
+            self.ex.load_markets(True)
+            self._mercados_em = time.monotonic()
+        except Exception as e:
+            log(f"corretora: não recarregou os mercados ({type(e).__name__}: {e})", "warning")
 
     def _mercado(self, simbolo):
         return self.ex.market(perp(simbolo))
@@ -357,6 +481,17 @@ class BinanceUSDM:
             return str(r.get("dualSidePosition")).lower() == "true"
         except Exception as e:
             log(f"corretora: modo de posição não lido ({type(e).__name__}: {e})", "warning")
+            return None
+
+    def multi_ativos(self):
+        """True se a conta está em Multi-Assets, False se não, None se não deu para ler. Em
+        Multi-Assets a Binance recusa margem isolada (`-4168`): toda entrada sairia rejeitada
+        no preparo, depois de o sinal estar consumido."""
+        try:
+            r = self.ex.fapiPrivateGetMultiAssetsMargin()
+            return str(r.get("multiAssetsMargin")).lower() == "true"
+        except Exception as e:
+            log(f"corretora: modo Multi-Assets não lido ({type(e).__name__}: {e})", "warning")
             return None
 
     def posicoes(self):
@@ -434,18 +569,47 @@ class BinanceUSDM:
                         "ts": ms_para_sp(t.get("timestamp"))})
         return out
 
-    def income(self, simbolo=None, desde_ms=None):
-        """Taxa, funding e P&L realizados como a Binance os lançou (não como o modelo calcula)."""
-        params = {"limit": 1000}
+    JANELA_INCOME_MS = 7 * 86400 * 1000 - 1     # a Binance não garante mais que isso por chamada
+    HISTORICO_INCOME_MS = 90 * 86400 * 1000     # e só guarda três meses
+
+    def income(self, simbolo=None, desde_ms=None, tipo=None):
+        """Taxa, funding e P&L realizados como a Binance os lançou (não como o modelo calcula).
+
+        Em janelas de 7 dias com `endTime`, como os negócios (`execucao.JANELA_FILLS`): só com
+        `startTime`, uma posição de swing com mais de uma semana tinha o funding cortado sem
+        aviso. `tipo` filtra lá (`FUNDING_FEE`), para o limite de 1000 linhas ser de funding."""
+        agora = int(time.time() * 1000)
+        base_p = {"limit": 1000}
         if simbolo:
-            params["symbol"] = self._mercado(simbolo)["id"]
-        if desde_ms:
-            params["startTime"] = int(desde_ms)
-        out = []
-        for i in self.ex.fapiPrivateGetIncome(params):
-            out.append({"tipo": i.get("incomeType"), "valor": _f(i.get("income")),
-                        "moeda": i.get("asset"), "simbolo": i.get("symbol"),
-                        "ts": ms_para_sp(i.get("time"))})
+            base_p["symbol"] = self._mercado(simbolo)["id"]
+        if tipo:
+            base_p["incomeType"] = tipo
+        if not desde_ms:
+            janelas = [None]
+        else:
+            ini = max(int(desde_ms), agora - self.HISTORICO_INCOME_MS)
+            janelas = []
+            while ini <= agora:
+                janelas.append((ini, min(ini + self.JANELA_INCOME_MS, agora)))
+                ini += self.JANELA_INCOME_MS + 1
+        out, vistos = [], set()
+        for jan in janelas:
+            params = dict(base_p)
+            if jan:
+                params["startTime"], params["endTime"] = jan
+            for _ in range(50):                     # paginação por tempo dentro da janela
+                lote = self.ex.fapiPrivateGetIncome(params) or []
+                for i in lote:
+                    chave = (i.get("tranId"), i.get("incomeType"), i.get("time"), i.get("income"))
+                    if chave in vistos:
+                        continue
+                    vistos.add(chave)
+                    out.append({"tipo": i.get("incomeType"), "valor": _f(i.get("income")),
+                                "moeda": i.get("asset"), "simbolo": i.get("symbol"),
+                                "ts": ms_para_sp(i.get("time"))})
+                if len(lote) < 1000 or not jan:
+                    break
+                params["startTime"] = int(max(int(x.get("time") or 0) for x in lote))
         return out
 
     def verificar_chave(self):
@@ -463,6 +627,14 @@ class BinanceUSDM:
             problemas.append("sem restrição de IP")
         if not sim("enableFutures"):
             problemas.append("futuros desabilitado")
+        # O que o bot não usa não fica ligado: chave que vaza com spot, margem ou opções
+        # habilitados opera fora dos tetos que o livro conhece.
+        extras = [n for k, n in (("enableSpotAndMarginTrading", "spot e margem"),
+                                 ("enableMargin", "margem"),
+                                 ("enablePortfolioMarginTrading", "portfolio margin"),
+                                 ("enableVanillaOptions", "opções")) if sim(k)]
+        if extras:
+            problemas.append("habilitado sem uso pelo bot: " + ", ".join(extras))
         if problemas:
             raise ChaveInsegura("chave recusada: " + ", ".join(problemas))
         return {"verificavel": True, "ok": True}
@@ -520,6 +692,7 @@ class BinanceUSDM:
         `reduz=True` é para ordem que só fecha (TP, fechamento parcial): a Binance não aplica
         o nocional mínimo a ordem reduce-only, só o lote."""
         s = perp(simbolo)
+        self._recarregar_mercados()
         m = self._mercado(simbolo)
         q = self._lote(simbolo, qty)
         p = float(self.ex.price_to_precision(s, preco)) if preco is not None else None
@@ -558,7 +731,8 @@ class BinanceUSDM:
             return {"id": f"dry-{client_oid}", "client_oid": client_oid, "simbolo": base(simbolo),
                     "lado": lado, "tipo": tipo.upper(), "condicional": condicional,
                     "status": "dry_run", "qty": qty, "preenchido": 0.0, "preco": preco,
-                    "preco_medio": None, "gatilho": _f(p.get("stopPrice") or p.get("activationPrice")),
+                    "preco_medio": None, "gatilho": _f(p.get("stopPrice") or p.get("activatePrice")),
+                    "ativacao": _f(p.get("activatePrice")),
                     "reduce_only": bool(p.get("reduceOnly")),
                     "close_position": bool(p.get("closePosition")), "ts": pd.Timestamp.now(),
                     "params": p}
@@ -566,12 +740,6 @@ class BinanceUSDM:
         try:
             o = self.ex.create_order(s, tipo, lado, qty, preco, p)
         except ccxt.OrderNotFillable as e:
-            raise OrdemRecusada(str(e)) from e
-        except (ccxt.InvalidOrder, ccxt.DuplicateOrderId) as e:
-            if "-4116" in str(e) or isinstance(e, ccxt.DuplicateOrderId):
-                achada = self._achar_viva(simbolo, client_oid, condicional)   # já foi: devolve a mesma
-                if achada:
-                    return achada
             raise OrdemRecusada(str(e)) from e
         except getattr(ccxt, "OperationFailed", ccxt.NetworkError) as e:
             # `OperationFailed` é a mãe do `NetworkError` (timeout, 5xx) e é também onde o ccxt
@@ -583,6 +751,14 @@ class BinanceUSDM:
                 return achada
             raise EnvioIncerto(f"{client_oid}: {e}") from e
         except ccxt.ExchangeError as e:
+            # Id repetido: `-4116` nas normais, `-20132` nas condicionais (Algo), que o ccxt põe
+            # em BadRequest/ExchangeError e não em InvalidOrder. Os dois querem dizer "esta ordem
+            # já foi": busca e devolve a mesma. Sem o -20132, o reenvio idempotente de um stop
+            # (`_stop_da_ordem`) virava recusa e cancelava uma entrada que estava protegida.
+            if isinstance(e, ccxt.DuplicateOrderId) or _codigo(e, "-4116", "-20132"):
+                achada = self._achar_viva(simbolo, client_oid, condicional)
+                if achada:
+                    return achada
             raise OrdemRecusada(str(e)) from e
         return normalizar_ordem(o)
 
@@ -666,16 +842,51 @@ class BinanceUSDM:
 
         `ativacao=None` = já está armado: o campo não vai, e a Binance ativa no preço do momento.
         Mandar o preço de agora como ativação é recusado metade das vezes (`-2021`): para ela a
-        ativação tem de estar do lado que o preço ainda não alcançou."""
+        ativação tem de estar do lado que o preço ainda não alcançou.
+
+        O campo é `activatePrice`, o nome da doc do serviço Algo, para onde as condicionais vão
+        desde dez/2025. O ccxt 4.5.56 manda `activationPrice` (o nome antigo), e se a Binance o
+        ignorar o padrão dela é ativar NO PREÇO DE AGORA: o trailing de uma posição ainda não
+        armada seguiria o preço desde já e a fecharia de madrugada. Por isso o nome vai certo e
+        o que a Binance gravou é conferido na volta (`_conferir_ativacao`)."""
         d = _direcao(direcao)
         cb = round(float(callback_pct), 1)
         if not 0.1 <= cb <= 10:
             raise OrdemRecusada(f"callback {callback_pct}% fora de [0,1; 10]")
         p = {"callbackRate": cb, "workingType": "MARK_PRICE", "reduceOnly": True}
         if ativacao is not None:
-            p["activationPrice"] = self.ex.price_to_precision(perp(simbolo), ativacao)
-        return self._enviar_sem_teto(simbolo, "TRAILING_STOP_MARKET", _FECHA[d], qty, None, p,
-                                     client_oid, condicional=True)
+            p["activatePrice"] = self.ex.price_to_precision(perp(simbolo), ativacao)
+        o = self._enviar_sem_teto(simbolo, "TRAILING_STOP_MARKET", _FECHA[d], qty, None, p,
+                                  client_oid, condicional=True)
+        if ativacao is not None and o.get("status") != "dry_run":
+            self._conferir_ativacao(simbolo, o, float(p["activatePrice"]))
+        return o
+
+    def _conferir_ativacao(self, simbolo, o, enviada):
+        """A ativação que a Binance gravou é a que foi enviada? Se não, o trailing é cancelado e
+        a recusa sobe: o stop fixo continua lá, e um trailing ativado no lugar errado fecharia a
+        posição antes do que o plano manda. Sem o campo na resposta, lê de novo pelo id; sem o
+        campo nas duas, não dá para conferir e fica registrado."""
+        gravada = o.get("ativacao")
+        if gravada is None:
+            try:
+                lida = self.buscar(simbolo, o.get("client_oid"), condicional=True)
+                gravada = (lida or {}).get("ativacao")
+            except Exception as e:
+                log(f"corretora: ativação de {o.get('client_oid')} não relida ({e})", "warning")
+        if gravada is None:
+            log(f"corretora: a Binance não devolveu a ativação de {o.get('client_oid')}; "
+                "não deu para conferir", "warning")
+            return
+        if abs(gravada - enviada) <= 1e-9 * max(1.0, abs(enviada)):
+            return
+        try:
+            self.cancelar(simbolo, o["id"], condicional=True)
+        except Exception as e:
+            log(f"corretora: trailing {o.get('client_oid')} com ativação errada NÃO cancelou ({e})",
+                "error")
+        raise OrdemRecusada(f"trailing {o.get('client_oid')}: a Binance gravou ativação {gravada}, "
+                            f"enviada {enviada}; cancelado")
 
     def mover_stop(self, simbolo, ordem, novo_gatilho, novo_client_oid, qty=None):
         """Coloca o stop NOVO e só então cancela o antigo. A ordem inversa (cancelar e depois
