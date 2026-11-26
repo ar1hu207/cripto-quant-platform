@@ -115,9 +115,10 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
   (`[CX-4]`). Cobrar maker nos dois lados inventa lucro que não houve; cobrar a taxa de hoje
   sobre a entrada de ontem também.
 - **[LIVE] Conta em corretora — quatro regras, e o papel não muda.** A config `corretora`
-  nasce `papel`; `demo`/`binance` só na conta R (`CORRETORA_HABILITADA=1` no `ExecStart` dela, a
-  chave num arquivo que só a unit dela carrega; o usuário Linux é o mesmo das outras, então isso
-  separa o ambiente, não a permissão). Ligar isso é do dono, pela escada do `RUNBOOK-VM.md` §0.1. Fora do papel (`ARQUITETURA.md` §12):
+  nasce `papel`; `demo`/`binance` só na conta R (`CORRETORA_HABILITADA=1` no `ExecStart` dela).
+  Desde o `[LIVE-14]` a R roda como `cripto-r`, com checkout e venv de root em `/opt/cripto-r` e
+  estado (chave inclusive) em `/var/lib/cripto-r`: nada que ela executa ou lê é gravável pelo
+  `cripto` das outras três. Não aponte a R para código, venv ou arquivo de `/home/cripto`. Ligar isso é do dono, pela escada do `RUNBOOK-VM.md` §0.1. Fora do papel (`ARQUITETURA.md` §12):
   1. **A corretora é a verdade, o banco é a cópia.** O ciclo começa por `execucao.reconciliar()`
      e sem reconciliação recente a conta não abre. O livro nunca fecha posição de corretora por
      preço: ele lança o negócio que a fechou.
@@ -131,7 +132,7 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
   (`api.LIMITES_DINHEIRO`: teto por ordem, banca, perda total, risco, exposição, alavancagem)
   não sobem por HTTP nem em papel ou demo (era o atalho: voltar a papel, subir, entrar de novo),
   o canal de alerta não muda por HTTP, e o envio de verdade (`corretora_dry_run=0`) não liga por
-  HTTP: tudo isso é `deploy/r.sh config` no servidor, como `cripto`. Trocar de corretora exige `auto_trade=0`. Não abra exceção "só para o painel".
+  HTTP: tudo isso é `deploy/r.sh config` no servidor, como `cripto-r`. Trocar de corretora exige `auto_trade=0`. Não abra exceção "só para o painel".
 
   `abrir()` e `colocar_ordem()` recusam nessa conta. `trava_total_em` e `corretora_ns` são
   estado, fora do catálogo de propósito. O `/reset` recusa nela. `corretora_dry_run` **não é

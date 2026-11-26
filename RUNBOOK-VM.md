@@ -24,75 +24,109 @@ ainda não existe**: disco único, sem cron, e o blob está fora. Medido em 02/1
 
 ### 0.1 A conta R (dinheiro real), no dl380
 
-Unit: `deploy/cripto-bot-r.service` (cabeçalho com a instalação). Banco, log e chave em
-`/home/cripto/cripto-bot-r/`; porta 8003 só em loopback; o painel a alcança por `/testeR` na A.
-Todo comando abaixo roda **no servidor**, a partir de `/home/cripto/cripto-bot`.
-`deploy/r.sh` é o `python -m execucao` com o ambiente da R. Rode-o **como `cripto`**
-(`sudo -u cripto bash deploy/r.sh ...`), nunca com `sudo bash`: a pasta é gravável pelo `cripto`,
-que é o usuário do processo da A exposto na internet, e root executaria o que estiver lá.
+Unit: `deploy/cripto-bot-r.service` (cabeçalho com a instalação). Desde o `[LIVE-14]` a R roda
+**isolada das outras três** (o procedimento está em "Isolar a chave", abaixo):
+
+| | |
+|---|---|
+| Usuário | `cripto-r`, de sistema, sem shell de login. A, B e C seguem como `cripto` |
+| Código | `/opt/cripto-r/app`, checkout próprio, de root. O `git pull` da A não o troca |
+| Python | `/opt/cripto-r/venv` (e o interpretador em `/opt/cripto-r/python`), de root |
+| Estado | `/var/lib/cripto-r/` (700 `cripto-r`): `corretora.env`, `r.env`, `trading.db`, `plataforma.log`, `backup/` |
+| Rede | porta 8003 só em loopback; o painel a alcança por `/testeR` na A |
+
+Todo comando abaixo roda **no servidor**, com caminho absoluto (o `arthur` não entra em
+`/home/cripto`). `deploy/r.sh` é o `python -m execucao` com o ambiente da R:
+`sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh ...` (sem shell de login não atrapalha: o
+`sudo -u` roda o `bash` direto). Nada da R mora em pasta que o `cripto` escreva.
 
 **A escada para ligar** (cada degrau só depois do anterior conferido):
 
 ```bash
 # 0. Antes: chave do DEMO no corretora.env, unit instalada, canal de alerta da R definido.
 #    Telegram (o token não passa por chat nem por linha de comando: `-` lê da entrada padrão):
-#      sudo -u cripto bash deploy/r.sh config telegram_token=- telegram_chat_id=<id>  # cola, Enter (sem eco)
+#      sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config telegram_token=- telegram_chat_id=<id>  # cola, Enter (sem eco)
 #    ou push: abrir o painel na aba Conta real e inscrever o aparelho.
 
 # 1. PAPEL com a estratégia da A (risco da A, decisão do dono em 25/11) e os números desta conta.
 #    `config-de` lê o banco da A só para leitura e NÃO copia auto_trade, corretora*, banca,
-#    teto de perda nem Telegram.
-#    Confira antes onde está o banco da A: `grep DB_PATH .env` (sem a linha, é ./trading.db).
+#    teto de perda nem Telegram. (Feito em 26/11.) Para refazer: o `cripto-r` não lê
+#    /home/cripto, então a cópia do banco da A é feita pelo `cripto` (dono dele, com o python
+#    dele) e entregue por root; root não roda python do `cripto` nem abre o banco dele.
+#    Confira antes onde está o banco da A: `sudo grep DB_PATH /home/cripto/cripto-bot/.env`.
+sudo -u cripto /home/cripto/cripto-bot/venv/bin/python /home/cripto/cripto-bot/deploy/backup_banco.py \
+     /home/cripto/cripto-bot/trading.db /tmp/copia-a --manter 1     # imprime o nome da cópia
+sudo install -o cripto-r -g cripto-r -m 600 /tmp/copia-a/trading-*.db /var/lib/cripto-r/copia-a.db
+sudo rm -rf /tmp/copia-a
 #    O comando imprime todos os limites como ficaram: leia antes do degrau 2.
-sudo -u cripto bash deploy/r.sh config-de /home/cripto/cripto-bot/trading.db \
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config-de /var/lib/cripto-r/copia-a.db \
      banca_alocada=200 perda_total_max=60 \
      noite_ativo=1 noite_inicio=19:30 noite_fim=08:15     # ajuste à hora em que o dl380 desliga/volta
+sudo rm /var/lib/cripto-r/copia-a.db
 
 # 2. DEMO (dinheiro de mentira, ordens de verdade). auto_trade tem de estar 0 para trocar.
-sudo -u cripto bash deploy/r.sh config corretora=demo
-sudo -u cripto bash deploy/r.sh estado                    # confere conta x livro
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config corretora=demo
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh estado          # confere conta x livro
 
 # 3. Para o real: feche tudo no demo, volte ao papel, zere o livro, troque a chave no
-#    corretora.env (BINANCE_KEY/BINANCE_SECRET) e entre em binance SEM enviar nada.
-sudo -u cripto bash deploy/r.sh config corretora=papel
-sudo -u cripto bash deploy/r.sh reset RESET               # zera o livro (recusa se já houve dinheiro real)
-sudo systemctl restart cripto-bot-r                       # recarrega o corretora.env
-sudo -u cripto bash deploy/r.sh config corretora=binance corretora_dry_run=1   # imprime TODOS os limites
-sudo journalctl -u cripto-bot-r -n 80 --no-pager          # as ordens montadas, nenhuma enviada
+#    /var/lib/cripto-r/corretora.env (BINANCE_KEY/BINANCE_SECRET) e entre em binance SEM enviar nada.
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config corretora=papel
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh reset RESET     # zera o livro (recusa se já houve dinheiro real)
+sudo systemctl restart cripto-bot-r                                 # recarrega o corretora.env
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config corretora=binance corretora_dry_run=1   # imprime TODOS os limites
+sudo journalctl -u cripto-bot-r -n 80 --no-pager                    # as ordens montadas, nenhuma enviada
 
 # 4. Envio real: só aqui, no servidor (pelo painel é recusado).
-sudo -u cripto bash deploy/r.sh config corretora_dry_run=0
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config corretora_dry_run=0
 
 # 5. O dono liga o auto_trade (painel ou `config auto_trade=1`). Nada liga sozinho.
 ```
 
 Na conta R, em QUALQUER modo, o painel **só aperta**: teto por ordem, banca, perda total,
 risco, exposição e alavancagem não sobem por HTTP, e o canal de alerta (Telegram) não muda por
-HTTP. Afrouxar é `sudo -u cripto bash deploy/r.sh config chave=valor`, que imprime os limites
-como ficaram. O teto de perda total é sticky e só solta subindo o teto, também por aqui.
+HTTP. Afrouxar é `sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config chave=valor`, que
+imprime os limites como ficaram. O teto de perda total é sticky e só solta subindo o teto,
+também por aqui.
 
 **Pânico sem painel:** `sudo cripto-panico-r`. Tenta o serviço; se ele não confirmar, PARA a
-unit e fecha direto na corretora. A unit fica parada no fim: religar é ato seu. Instalar a
-cópia de root uma vez (e de novo só depois de ler o diff de `deploy/panico.sh`):
-`sudo install -o root -g root -m 755 deploy/panico.sh /usr/local/sbin/cripto-panico-r`.
-
-**Deploy com a R no ar** (a receita do dl380 congela A, B e C; a R entra junto):
+unit e fecha direto na corretora. A unit fica parada no fim: religar é ato seu. A cópia de root
+sai do checkout de root, e de novo a cada deploy em que `deploy/panico.sh` mudar (leia o diff):
 
 ```bash
-sudo -u cripto bash deploy/r.sh config auto_trade=0       # congela (o deploy nunca religa)
-sudo systemctl start cripto-bot-r-backup                  # backup antes de trocar o código
-# ... git checkout do commit, como na receita ...
-sudo systemctl restart cripto-bot cripto-bot-b cripto-bot-c cripto-bot-r
-curl -s http://127.0.0.1:8003/health                      # o commit novo, e "ok"
-sudo -u cripto bash deploy/r.sh estado
+sudo install -o root -g root -m 755 /opt/cripto-r/app/deploy/panico.sh /usr/local/sbin/cripto-panico-r
+sudo cmp /opt/cripto-r/app/deploy/panico.sh /usr/local/sbin/cripto-panico-r && echo igual
+```
+
+**Deploy da R.** Desde o `[LIVE-14]` a R tem checkout próprio: a receita do dl380 (o `git merge`
+em `/home/cripto/cripto-bot` e o restart de A, B e C) **não troca o código da R**. A R vai para
+o mesmo commit em seguida, por root, sempre por `git checkout` e nunca copiando arquivo:
+
+```bash
+SHA=<o commit da main que A, B e C acabaram de receber>
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh config auto_trade=0   # congela (o deploy nunca religa)
+sudo systemctl start cripto-bot-r-backup                                  # backup antes de trocar o código
+sudo git -C /opt/cripto-r/app fetch -q origin
+sudo git -C /opt/cripto-r/app diff --stat HEAD "$SHA" -- deploy/ requirements.txt   # o que muda fora do .py
+sudo git -C /opt/cripto-r/app checkout -q --detach "$SHA"
+sudo /opt/cripto-r/venv/bin/python -m compileall -q /opt/cripto-r/app/*.py   # portão; o __pycache__ fica de root
+# Só se requirements.txt mudou (o uv de root, nunca o da home do cripto; o .lock que ele recria sai 0666):
+#   sudo /opt/cripto-r/uv/bin/uv pip install --compile-bytecode --python /opt/cripto-r/venv/bin/python \
+#        -r /opt/cripto-r/app/requirements.txt && sudo chmod 644 /opt/cripto-r/venv/.lock
+# Só se a unit, o drop-in, o backup ou o pânico mudaram: os `install` do cabeçalho de cada um,
+# do checkout de root, e `sudo systemctl daemon-reload`.
+sudo systemctl restart cripto-bot-r
+curl -s http://127.0.0.1:8003/health                                      # o commit novo, e "ok"
+sudo -u cripto-r bash /opt/cripto-r/app/deploy/r.sh estado
 ```
 
 **Backup diário da R** (o banco do dinheiro real não tinha nenhum): timer do systemd
 (`deploy/cripto-bot-r-backup.timer`, instalação no cabeçalho do `.service` dele), ao meio-dia de
 São Paulo e, se o servidor estava desligado na hora, assim que ele liga. Não é cron: o cron das
 03:17 caía com o dl380 desligado e nunca rodava. Cópia pela API de backup do SQLite (nunca `cp`
-do banco vivo), `integrity_check` na cópia, permissão só do dono, 30 dias, em pasta só dela.
-**Copie a pasta para fora do dl380** de vez em quando: disco único.
+do banco vivo), `integrity_check` na cópia, permissão só do dono, 30 dias, em
+`/var/lib/cripto-r/backup/`, como `cripto-r`. Manual: `sudo systemctl start cripto-bot-r-backup`
+e `sudo journalctl -u cripto-bot-r-backup -n 3 --no-pager`. **Copie a pasta para fora do dl380**
+de vez em quando: disco único.
 
 **Chave sem restrição de IP (decisão do dono, 26/11/2026).** O IP de saída do dl380 é dinâmico:
 chave presa a IP pararia a cada troca (-2015), com posição aberta. Então a chave real é criada
@@ -104,23 +138,96 @@ backup, nem print, nem chat); `/status` mostra `chave_aviso`. A Binance pode APA
 que fique 30 dias sem uso: com a R parada esse tempo, crie outra. Quando houver IP fixo (proxy
 num servidor com IP fixo, ou IP fixo do provedor), prenda a chave a ele e tire a linha.
 
-**Isolar a chave (pendente, decisão do dono).** As quatro units rodam como `cripto`: a A,
-exposta na internet, consegue ler o `corretora.env`. Isolar de verdade é um usuário só da R:
+**Isolar a chave (feito em 26/11/2026, `[LIVE-14]`).** As quatro units rodavam como `cripto`, e
+quem tomasse o processo da A (exposto na internet) lia o `corretora.env` e o
+`/proc/<pid>/environ` da R, lia e escrevia o banco dela e, o pior, **alterava o código que a R
+executa** (o checkout e o venv da A são do `cripto`). Por isso a receita que estava aqui (usuário
+novo + `setfacl` dando ao `cripto-r` leitura do código da A) não fechava o furo: a R seguiria
+rodando código que o `cripto` escreve, e no restart seguinte rodaria o do invasor com o usuário
+novo. Isolar exige que nada que a R execute ou leia seja gravável pelo `cripto`: código, venv,
+interpretador, env files e a própria pasta de estado (fora de `/home/cripto`, que é dele e onde
+ele poderia renomear a pasta da R e pôr outra no lugar). O que foi feito, com a R em papel,
+`auto_trade=0`, sem posição e saldo zero:
 
 ```bash
-sudo useradd --system --home /home/cripto/cripto-bot-r --shell /usr/sbin/nologin cripto-r
-sudo chown -R cripto-r:cripto-r /home/cripto/cripto-bot-r && sudo chmod 700 /home/cripto/cripto-bot-r
-# o código e o venv da A precisam ficar LEGÍVEIS para cripto-r (ex.: setfacl -R -m u:cripto-r:rX
-# /home/cripto /home/cripto/cripto-bot), e o .env da A também (é dele que vem DASH_PASS).
-# Na unit: User=cripto-r. Em panico.sh, r.sh e no cron: USUARIO=cripto-r.
-# Teste no contêiner ANTES de ter posição aberta: restart, /health, `r.sh estado`.
+# usuário
+sudo useradd --system --user-group --home-dir /var/lib/cripto-r --no-create-home \
+     --shell /usr/sbin/nologin cripto-r
+# código: checkout próprio, de root
+sudo install -d -o root -g root -m 755 /opt/cripto-r
+sudo git clone -q https://github.com/ar1hu207/cripto-quant-platform.git /opt/cripto-r/app
+sudo git -C /opt/cripto-r/app checkout -q --detach <sha>
+# python: uv de root vindo do PyPI (o da home do cripto não serve: ele o altera), o mesmo
+# CPython da A (3.12.16) baixado de novo, e as MESMAS versões de pacote da A (lista conferida
+# com diff: 40 = 40)
+sudo python3 -m venv /opt/cripto-r/uv && sudo /opt/cripto-r/uv/bin/pip install -q uv==0.13.6
+sudo env UV_PYTHON_INSTALL_DIR=/opt/cripto-r/python UV_PYTHON_BIN_DIR=/opt/cripto-r/python/bin \
+     /opt/cripto-r/uv/bin/uv python install 3.12.16
+sudo env UV_PYTHON_INSTALL_DIR=/opt/cripto-r/python /opt/cripto-r/uv/bin/uv venv \
+     --python /opt/cripto-r/python/cpython-3.12.16-linux-x86_64-gnu/bin/python3.12 /opt/cripto-r/venv
+sudo /opt/cripto-r/uv/bin/uv pip install --compile-bytecode --python /opt/cripto-r/venv/bin/python \
+     -r /opt/cripto-r/app/requirements.txt -c <versões da A>
+sudo chmod 644 /opt/cripto-r/python/.lock /opt/cripto-r/venv/.lock     # o uv os cria 0666
+# estado: R parada, backup (.backup + integrity_check) e então mv, sem ler nada
+sudo systemctl stop cripto-bot-r-backup.timer cripto-bot-r
+sudo install -d -o cripto-r -g cripto-r -m 700 /var/lib/cripto-r /var/lib/cripto-r/backup
+sudo mv /home/cripto/cripto-bot-r/{corretora.env,trading.db,trading.db-wal,trading.db-shm,.conta,plataforma.log} /var/lib/cripto-r/
+sudo mv /home/cripto/backup-r/* /var/lib/cripto-r/backup/
+# r.env: só as chaves que a plataforma lê do ambiente (levantadas no código: DASH_USER,
+# DASH_PASS, CORS_ORIGINS, VAPID_PUBLIC, VAPID_PRIVATE, VAPID_SUB; o resto vai no ExecStart)
+sudo sh -c "umask 077; grep -E '^[[:space:]]*(DASH_USER|DASH_PASS|VAPID_PUBLIC|VAPID_PRIVATE|VAPID_SUB|CORS_ORIGINS)[[:space:]]*=' \
+     /home/cripto/cripto-bot/.env > /var/lib/cripto-r/r.env"
+sudo chown -R cripto-r:cripto-r /var/lib/cripto-r
+sudo rmdir /home/cripto/cripto-bot-r /home/cripto/backup-r
+# units do checkout de root; o pânico de novo, conferido com cmp
+sudo install -m 644 /opt/cripto-r/app/deploy/cripto-bot-r.service /opt/cripto-r/app/deploy/cripto-bot-r-backup.service \
+     /opt/cripto-r/app/deploy/cripto-bot-r-backup.timer /etc/systemd/system/
+sudo install -D -m 644 /opt/cripto-r/app/deploy/cripto-bot-r.service.d/zzzz-depois-do-lxc.conf \
+     /etc/systemd/system/cripto-bot-r.service.d/zzzz-depois-do-lxc.conf
+sudo systemctl daemon-reload && sudo systemctl start cripto-bot-r cripto-bot-r-backup.timer
 ```
 
-**Endurecer a unit (pendente, testar no contêiner).** `NoNewPrivileges` e `UMask` já estão.
-`PrivateTmp=yes`, `ProtectSystem=full` e `ProtectHome=read-only` + `ReadWritePaths=` precisam de
-namespace de montagem, que contêiner LXC sem privilégio pode não dar: a unit falharia ao subir.
-Teste por drop-in (`systemctl edit cripto-bot-r`), restart, `/health`; se falhar, `systemctl
-revert cripto-bot-r`.
+A, B e C não foram tocadas (units, código, permissões e `.env` como estavam; o `.env` da A só
+foi lido para gerar o `r.env`). A rota `/testeR` da A segue falando com `127.0.0.1:8003`.
+
+**Pendência (decisão do dono): a senha do painel da R é a da A.** O `r.env` nasceu copiado do
+`.env` da A, então quem tomar a A conhece a `DASH_PASS` da R. Pelo HTTP os limites do dinheiro só
+apertam, mas dá para ligar o `auto_trade` e disparar o pânico. Separar exige uma senha própria
+no `r.env` e o painel mandando credencial diferente para a aba Conta real (hoje o repasse
+`/testeR` da A usa a mesma).
+
+**Endurecer a unit (feito em 26/11/2026, `[LIVE-14]`).** Primeiro a causa de o
+`NoNewPrivileges=yes` da unit não valer (`systemctl show` dizia `no`, o processo tinha
+`NoNewPrivs: 0`): o gerador `/etc/systemd/system-generators/lxc` do contêiner (distrobuilder)
+grava a cada boot e `daemon-reload` o `/run/systemd/system/service.d/zzz-lxc-service.conf`, que
+vale para **todo** serviço e põe `NoNewPrivileges=no`, `ProtectKernelTunables=no`,
+`ProtectControlGroups=no` (e `ProtectProc`/`ProcSubset`/`PrivateNetwork` no padrão). Drop-in
+vence a unit, e os drop-ins são aplicados pela ordem do nome do arquivo, de qualquer
+diretório. Diretiva escrita na unit que esse arquivo também define não vale, e o
+`override.conf` do `systemctl edit` ordena antes dele e também não vale. Por isso o drop-in da R
+se chama `zzzz-depois-do-lxc.conf` e as três moram nele.
+
+Teste: um drop-in `zzzz-teste.conf` (`systemctl edit --stdin --drop-in=zzzz-teste.conf`), uma
+diretiva por vez, acumulando, com restart e espera de um ciclo completo, mais `/health`,
+journal e log sem erro a cada passo, e no fim o scan da Binance (72/72, 0 falhas) dentro da
+sandbox inteira. **O contêiner aceitou todas** (`NoNewPrivileges`, `PrivateTmp`,
+`ProtectSystem=strict` + `ReadWritePaths=/var/lib/cripto-r`, `ProtectHome`, `PrivateDevices`,
+`ProtectKernelTunables/Modules/Logs`, `ProtectControlGroups`, `RestrictAddressFamilies=AF_INET
+AF_INET6 AF_UNIX`, `RestrictNamespaces`, `LockPersonality`, `RestrictSUIDSGID`,
+`CapabilityBoundingSet=` vazio, `SystemCallFilter=@system-service`). Foram para a unit e para o
+drop-in versionados, e o de teste saiu (`systemctl revert cripto-bot-r`, que só apaga drop-in:
+a unit em `/etc` não tem versão de fornecedor e fica). `systemd-analyze security cripto-bot-r`:
+**9.2 UNSAFE → 2.0 OK**. Conferir sempre no processo:
+
+```bash
+PID=$(systemctl show -p MainPID --value cripto-bot-r)
+grep -E 'NoNewPrivs|CapBnd|Seccomp' /proc/$PID/status     # NoNewPrivs 1, CapBnd 0, Seccomp 2
+```
+
+Depois de mexer em unit ou drop-in: `restart` e `/health` (diretiva que o contêiner recusa
+derruba o serviço no boot, com `status=226/NAMESPACE` ou parecido no journal). Se cair:
+`sudo systemctl revert cripto-bot-r`, reinstalar a unit do checkout de root, e só depois o
+drop-in.
 
 ## 1. Fatos
 
