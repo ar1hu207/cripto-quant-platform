@@ -708,6 +708,7 @@ uma queda do mercado parecer dinheiro sumido (`_conferir_saldo`).
 | Limite de nocional por ordem, antes da rede | `corretora_nocional_max` |
 | `/reset` recusado em modo corretora e em banco com histórico de `binance` | `api.reset` |
 | `/panico` cancela e fecha LÁ, e varre a conta | `execucao.panico`, `deploy/panico.sh` |
+| O DCA (simulação: soma unidades, não compra nada) não cria plano nem aporta nessa conta | `dca._so_no_papel` |
 
 **Aproximações declaradas.** A alavancagem é truncada para inteiro. O trailing só reenvia o
 stop quando ele anda `corretora_trailing_passo_r` (0,1R). Com `noite_ativo`, entre `noite_inicio`
@@ -722,6 +723,16 @@ liquidação não vem nos negócios: numa liquidação o livro subestima a perda
 banca é a conferência de carteira. Toda quantidade enviada passa por `corretora._lote`, que
 absorve o resíduo de ponto flutuante antes de truncar para o lote (`0.062 - 0.021` sairia
 `0.040`, um lote a menos no stop).
+
+**No painel.** A conta R é a quarta aba (`web/app/api.js`, `CONTAS.R`, rota `/testeR`). O que a
+tela mostra sobre ela não sai da aba, sai do `config.corretora` que o `/estado` devolve
+(`APX.modo()`): a mesma instância é papel no primeiro degrau da esteira, demo no segundo e
+dinheiro no último. Disso dependem três coisas. A **moeda**: `fmt.moeda()` dá `R$` no papel e
+`US$` em corretora, e nenhuma tela escreve o símbolo à mão. A **marca** ao lado da conexão:
+"demo da Binance", "Binance · dry-run" ou "dinheiro real". E a **moldura vermelha** na tela
+inteira (`body.modo-real`), só quando a ordem vai à Binance com dinheiro, isto é, `binance`
+sem `corretora_dry_run`: no demo e no dry-run a marca é âmbar, porque vermelho que aparece à
+toa deixa de avisar. O rodapé deixa de dizer "dinheiro fictício" fora do papel.
 
 ---
 

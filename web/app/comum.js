@@ -108,4 +108,17 @@
     el.innerHTML = render(valor);
     if (ant !== undefined && ant !== valor && !A.RM) { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
   };
+
+  /* ================= pânico na conta em corretora ================= */
+  /* [LIVE-6] O que o pânico NÃO resolveu, item por item. No papel só uma posição pode falhar ao fechar;
+     na conta em corretora a falha pode ser uma posição, uma ordem que não cancelou ou a varredura da
+     conta, cada uma com o erro que a Binance devolveu. "N posições não fecharam" com só o primeiro erro
+     escondia o resto, e a frase "as ordens foram canceladas" podia ser falsa. */
+  A.panicoFalhas = function (fl) {
+    return '<p><b class="neg">' + fl.length + (fl.length === 1 ? ' item ficou sem resolver na corretora' : ' itens ficaram sem resolver na corretora') + '</b>:</p>' +
+      fl.map(function (f) { return '<p class="mono" style="font-size:12px;margin:4px 0"><b>' + A.esc(f.ativo ? F.par(f.ativo) : 'a conta') + '</b>' + (f.erro ? ' · ' + A.esc(f.erro) : '') + '</p>'; }).join('') +
+      '<p>O Apollo está desligado. Aperte o pânico de novo e confira na Binance: posição ou ordem que sobrou lá continua valendo.</p>';
+  };
+  /* posição que a varredura fechou na corretora e o livro não conhecia: entra no aviso do pânico */
+  A.panicoVarridas = function (r) { var n = (r.varridas || []).length; return n ? ' · ' + n + (n === 1 ? ' fechada fora do livro' : ' fechadas fora do livro') : ''; };
 })();

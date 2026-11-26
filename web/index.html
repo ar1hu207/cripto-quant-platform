@@ -114,10 +114,17 @@ h1,h2,h3{text-wrap:balance}
 .conta{font-family:var(--f-mono);font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);color:var(--txt2);white-space:nowrap;transition:color .18s,border-color .18s}
 .conta:hover{color:var(--txt);border-color:var(--line2)}
 .conta[aria-pressed="true"]{color:var(--accent);border-color:rgba(var(--accent-rgb),var(--glow));box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),var(--glow-lo))}
-.conta.lock{border-style:dashed;color:var(--mute)}
 .conta-teste .conta[aria-pressed="true"]{color:var(--warn);border-color:rgba(var(--warn-rgb),.6);box-shadow:inset 0 0 0 1px rgba(var(--warn-rgb),.3)}
 .conn{display:inline-flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11.5px;color:var(--txt2);white-space:nowrap}
 .conn .led{width:7px;height:7px}
+/* [LIVE-6] em que a conta opera, quando não é papel: âmbar no demo e no dry-run, vermelho com dinheiro real */
+.modo-conta{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid rgba(var(--warn-rgb),.6);color:var(--warn);white-space:nowrap}
+.modo-conta.real{border-color:rgba(var(--neg-rgb),.75);color:var(--neg);box-shadow:inset 0 0 0 1px rgba(var(--neg-rgb),.3)}
+.modo-conta[hidden]{display:none}
+/* dinheiro de verdade nunca parece paper: a moldura da tela inteira fica vermelha (casca.js liga a classe) */
+body.modo-real::after{content:"";position:fixed;inset:0;border:2px solid var(--neg);box-shadow:inset 0 0 22px rgba(var(--neg-rgb),.22);pointer-events:none;z-index:95}
+body.modo-real .topbar{border-color:rgba(var(--neg-rgb),.6)}
+body.modo-real .conta[aria-pressed="true"]{color:var(--neg);border-color:rgba(var(--neg-rgb),.7);box-shadow:inset 0 0 0 1px rgba(var(--neg-rgb),.3)}
 .top-acts{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .menu{position:relative}
 .menu-pop{position:absolute;right:0;top:calc(100% + 8px);min-width:250px;max-width:calc(100vw - 32px);border:1px solid rgba(var(--accent-rgb),var(--glow-lo));border-radius:12px;background:rgba(var(--panel-rgb),.98);backdrop-filter:blur(10px);box-shadow:0 14px 36px rgba(var(--bg-rgb),.7);padding:8px;display:grid;gap:2px;z-index:45}
@@ -394,10 +401,9 @@ select.inp{font-family:var(--f-ui)}
   .nav-item{flex:none}
   .side-foot .sub{display:none}
   .top-acts{margin-left:0;width:100%;justify-content:space-between}
-  /* a barra de topo comia ~120 px antes do primeiro número: a conta Real (desabilitada, só anúncio) e o nome
-     da paleta saem no celular; a bolinha da paleta continua abrindo o seletor */
+  /* a barra de topo comia ~120 px antes do primeiro número: o nome da paleta sai no celular; a bolinha da
+     paleta continua abrindo o seletor */
   .topbar{padding:8px 10px;gap:8px}
-  .conta.lock{display:none}
   #pal-nome{display:none}
   .view-head h1{font-size:21px}
   /* no celular o widget vira só a esfera (o painel que ela abre tem voz e chat): 124 px eram 39% de uma tela de 320 */
@@ -463,9 +469,10 @@ select.inp{font-family:var(--f-ui)}
         <button type="button" class="conta" data-conta="A" title="Produção: as regras de hoje">Paper A</button>
         <button type="button" class="conta" data-conta="B" title="Teste A/B: outra instância, banca própria">Conta B</button>
         <button type="button" class="conta" data-conta="C" title="A Paper A sem TP2 e TP3: depois do TP1 o resto corre no trailing. Banca própria">Conta C</button>
-        <button type="button" class="conta lock" disabled title="Esteira testnet → dry-run → live (PLANO-LIVE-BINANCE)">Real · em esteira</button>
+        <button type="button" class="conta" data-conta="R" title="A instância que opera na Binance Futures. Em que degrau ela está (papel, demo ou dinheiro real) aparece ao lado, lido do backend">Conta real</button>
       </div>
       <span class="conn" id="conn"><span class="led off" aria-hidden="true"></span><span>conectando…</span></span>
+      <span class="modo-conta" id="modo-conta" hidden></span>
       <div class="top-acts">
         <div class="menu">
           <button type="button" class="btn ghost sm" id="pal-btn" aria-haspopup="true" aria-expanded="false" aria-controls="pal-pop"><span class="acc" style="padding:0;border:0"><i id="pal-dot"></i></span><span id="pal-nome">Paleta</span></button>
@@ -488,7 +495,7 @@ select.inp{font-family:var(--f-ui)}
     </header>
     <div class="offline-bar" role="status"><span class="led bad" aria-hidden="true"></span><span id="offline-txt">backend offline · reconectando a cada 3 s. Os números abaixo são do último retrato.</span></div>
     <div id="view-root" class="view-root"></div>
-    <footer class="foot">Apollux · paper trading: dinheiro fictício, preço real da Binance · <span id="pal-foot">Osso</span></footer>
+    <footer class="foot">Apollux · <span id="foot-modo">paper trading: dinheiro fictício, preço real da Binance</span> · <span id="pal-foot">Osso</span></footer>
   </main>
 </div>
 

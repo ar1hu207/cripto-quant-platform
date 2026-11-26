@@ -1649,6 +1649,89 @@ def test_linha_de_comando_em_conta_de_papel_nao_toca_em_nada(banco, capsys):
     assert "papel" in capsys.readouterr().out and db.get_config()["auto_trade"] == "0"
 
 
+# ============================================================================ o pânico visto do painel
+
+def test_panico_pela_rota_diz_o_que_a_varredura_fechou_fora_do_livro(cliente, conta):
+    """[LIVE-6] Posição que a conta tinha e o livro não: a varredura fecha, e a resposta diz."""
+    conta._abre("SOL/USDT", "LONG", 1.0, 100.0, conta._id(), Falsa.TAKER)
+    j = cliente.post("/panico").json()
+    assert j["ok"] and j["fechadas"] == 0 and not conta.pos
+    assert [v["ativo"] for v in j["varridas"]] == ["SOL/USDT"]
+
+
+def test_o_repasse_espera_o_panico_da_corretora_e_nao_chama_demora_de_fora_do_ar(banco, monkeypatch):
+    """[LIVE-6] O pânico na corretora fecha posição por posição lá e passa de 30 s. A conta A
+    espera por ele o que o `deploy/panico.sh` espera; e tempo esgotado não é "fora do ar": a
+    requisição chegou, a ação pode ter sido executada, e a resposta diz isso."""
+    from fastapi.testclient import TestClient
+    import api
+    esperas = []
+
+    class _Resposta:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def abre(req, timeout=None):
+        rota = req.full_url.rsplit("/", 1)[-1]
+        esperas.append((rota, timeout))
+        if rota == "fechar":
+            raise TimeoutError("timed out")
+        return _Resposta()
+
+    monkeypatch.setattr(api, "CONTA", "A")
+    monkeypatch.setattr(api.urllib.request, "urlopen", abre)
+    cli = TestClient(api.app, client=("127.0.0.1", 5555))
+    assert cli.post("/testeR/panico").status_code == 200
+    assert cli.get("/testeR/estado").status_code == 200
+    assert esperas == [("panico", 170), ("estado", 30)]
+    r = cli.post("/testeR/fechar", json={"id": 1})
+    assert r.status_code == 504 and "Conta real não respondeu a tempo" in r.text
+    assert "PODE ter sido executada" in r.text and "fora do ar" not in r.text
+
+
+# ============================================================================ o que é só de papel
+
+def test_dca_nao_cria_plano_na_conta_em_corretora(cliente, conta):
+    """[LIVE-6] O DCA soma unidades numa tabela e não compra nada: na conta que opera em
+    corretora ele mostraria "acumulado" de moeda que nunca foi comprada."""
+    import dca
+    j = cliente.post("/dca", json={"ativo": "BTC/USDT", "valor_aporte": 50, "freq_dias": 7}).json()
+    assert j["ok"] is False and "simulação" in j["erro"]
+    with pytest.raises(ValueError, match="simulação"):
+        dca.criar("BTC/USDT", 50, 7)
+    with db.conectar() as c:
+        assert c.execute("SELECT COUNT(*) FROM dca").fetchone()[0] == 0
+
+
+def test_plano_de_dca_do_papel_para_de_aportar_quando_a_conta_vai_para_a_corretora(banco, sem_rede):
+    import dca
+    from fastapi.testclient import TestClient
+    import api
+    dca.criar("BTC/USDT", 50, 7)
+    dca.processar_devidos()                                    # no papel o 1º aporte sai no 1º ciclo
+    with db.conectar() as c:
+        pid, n = c.execute("SELECT id, n_aportes FROM dca").fetchone()
+        assert n == 1
+        c.execute("UPDATE dca SET ultimo_aporte='1970-01-01 00:00:00'")     # vencido de novo
+    db.set_config("corretora", "demo", "teste")
+    dca.processar_devidos()                                    # o worker passa e não aporta
+    cli = TestClient(api.app, client=("127.0.0.1", 5555))
+    j = cli.post("/dca/aportar", json={"id": pid}).json()      # nem à mão
+    assert j["ok"] is False and "simulação" in j["erro"]
+    with db.conectar() as c:
+        assert c.execute("SELECT n_aportes, total_investido FROM dca").fetchone()[:] == (1, 50.0)
+    assert cli.post("/dca/remover", json={"id": pid}).json() == {"ok": True}   # remover segue valendo
+
+
 # ============================================================================ prova ao vivo (demo)
 # Roda só com RODAR_DEMO=1 e a chave do Demo Trading no ambiente. Manda ordens DE VERDADE para a
 # Binance Demo (dinheiro de mentira): é a prova de que o livro e a conta batem, negócio a

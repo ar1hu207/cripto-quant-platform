@@ -10,6 +10,7 @@ import re
 import pandas as pd
 
 import db
+import execucao
 import mercado
 import simulador
 from logbot import log
@@ -18,9 +19,20 @@ from logbot import log
 _PAR = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,5}$")
 VALOR_MAX = 1e9            # R$ por aporte: sanidade, não política
 FREQ_MAX_DIAS = 3650
+SO_PAPEL = "o DCA é simulação e esta conta opera em corretora: nenhuma moeda seria comprada"
+
+
+def _so_no_papel():
+    """[LIVE-6] O DCA soma unidades numa tabela e não compra nada. Na conta que opera em
+    corretora ele poria "acumulado" de uma moeda que nunca foi comprada ao lado de posições que
+    existem de verdade, com o painel dizendo "compra spot". Enquanto não houver DCA com ordem
+    real (fora do PLANO-LIVE), ele não cria plano nem aporta nessa conta."""
+    if execucao.real():
+        raise ValueError(SO_PAPEL)
 
 
 def criar(ativo, valor_aporte, freq_dias):
+    _so_no_papel()
     # Validação aqui, e não só na rota: `aportar()` confia no plano gravado. Valor negativo ou
     # NaN viraria unidades negativas/NaN no acumulado; `freq_dias` 0 aportava a cada ciclo do
     # worker (15 s); e um par que não existe só falhava depois, a cada ciclo, no preço ao vivo.
@@ -54,6 +66,7 @@ def criar(ativo, valor_aporte, freq_dias):
 
 def aportar(plano):
     """Executa 1 aporte (compra valor_aporte do ativo no preço ao vivo, acumula unidades)."""
+    _so_no_papel()
     pid = plano["id"] if isinstance(plano, dict) else plano
     with db.conectar() as c:                                   # leitura curta: so pega o plano
         p = c.execute("SELECT * FROM dca WHERE id=? AND status='ativo'", (pid,)).fetchone()
@@ -75,6 +88,8 @@ def aportar(plano):
 
 def processar_devidos():
     """Worker: executa aportes vencidos (agora - ultimo_aporte >= freq_dias)."""
+    if execucao.real():       # [LIVE-6] plano criado no papel não aporta depois que a conta sai dele;
+        return                # e não é erro de plano: sem este retorno o log ganharia uma linha por ciclo
     agora = pd.Timestamp.now()
     with db.conectar() as c:
         planos = [dict(r) for r in c.execute("SELECT id,ultimo_aporte,freq_dias FROM dca WHERE status='ativo'")]

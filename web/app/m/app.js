@@ -18,7 +18,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var esc = A.esc;
   function ic(n, cls) { return '<svg class="ic' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + n + '"/></svg>'; }
-  function cur(v, sinal) { var a = Math.abs(v || 0); return (sinal ? (v > 0 ? '+' : v < 0 ? '−' : '') : (v < 0 ? '−' : '')) + '<span class="cur">R$</span>' + F.f2(a); }
+  function cur(v, sinal) { var a = Math.abs(v || 0); return (sinal ? (v > 0 ? '+' : v < 0 ? '−' : '') : (v < 0 ? '−' : '')) + '<span class="cur">' + F.moeda() + '</span>' + F.f2(a); }
   function chipLado(d, extra) { return '<span class="chip ' + (d === 'LONG' ? 'long' : 'short') + '">' + esc(d) + (extra ? ' ' + esc(extra) : '') + '</span>'; }
   function p1(v) { return F.f1(+v || 0); }
   /* contagem num título: a Syne desenha o zero como a letra "o" ("Sinais · o"), então o número vai em mono */
@@ -34,6 +34,16 @@
   var pal0 = A.paletaInicial(); if (pal0) A.pintaPaleta(pal0);
   if (A.CONTA !== 'A') document.body.classList.add('conta-teste');
   var NOME_CONTA = A.NOME_CONTA;
+  /* [LIVE-6] O que a conta É vem do backend (A.modo lê o /estado), não da aba. `valendo` = a ordem vai à
+     Binance com dinheiro de verdade: só aí a moldura fica vermelha. No demo e no dry-run a marca é âmbar. */
+  function modoConta() {
+    var md = A.modo(), seco = String(((A.estado || {}).config || {}).corretora_dry_run) === '1';
+    return { md: md, seco: seco, valendo: md === 'binance' && !seco,
+      curto: md === 'papel' ? '' : md === 'demo' ? 'DEMO' : seco ? 'DRY-RUN' : 'DINHEIRO REAL',
+      frase: md === 'papel' ? 'paper trading: dinheiro fictício, preço real' : md === 'demo' ? 'conta demo da Binance: ordens de verdade, dinheiro de teste'
+        : seco ? 'conta real em dry-run: lê a Binance e não envia ordem' : 'conta real: ordens e dinheiro de verdade na Binance Futures' };
+  }
+  A.on('estado', function () { document.body.classList.toggle('modo-real', modoConta().valendo); });
 
   /* ================= estado compartilhado entre telas ================= */
   var M = { pnlHist: {}, saidas: {}, precos: {}, health: null, tr: null, trSig: '', mes: null };
@@ -163,11 +173,11 @@
   async function executaPanico() {
     try {
       var r = await A.api('/panico', {});
-      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
+      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + A.panicoVarridas(r) + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
       A.carregar();
       /* posição que falhou ao fechar volta nomeada em `falhas`: um toast de 3 s não basta para isso */
       var fl = r.falhas || [];
-      if (fl.length) await sheet({ titulo: 'Pânico incompleto', perigo: true, cancelar: 'Entendi', corpo: '<p class="note"><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return esc(F.par(f.ativo)); }).join(', ') + '.</p><p class="note">O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p>' });
+      if (fl.length) await sheet({ titulo: 'Pânico incompleto', perigo: true, cancelar: 'Entendi', corpo: A.modo() !== 'papel' ? A.panicoFalhas(fl) : '<p class="note"><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return esc(F.par(f.ativo)); }).join(', ') + '.</p><p class="note">O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p>' });
       return !fl.length;
     } catch (err) { A.toast('Pânico falhou: ' + A.erroTxt(err), 'neg'); return false; }
   }
@@ -222,7 +232,7 @@
       '<h4' + (o.voltar ? ' class="det"' : '') + '>' + titulo + '</h4>' + (o.extra || '') +
       (o.semConta ? '' : '<button type="button" class="acct" data-acao="conta" aria-label="Conta: ' + NOME_CONTA + '. Trocar"><span class="avatar">' + A.CONTA + '</span>' + NOME_CONTA + '</button>') +
       '<button type="button" class="ib danger" data-acao="panico" aria-label="Pânico">' + ic('panico') + '</button></div>' +
-      '<div class="conn" id="m-conn"><span class="led off"></span><span>conectando…</span></div>' +
+      '<div class="conn" id="m-conn"><span class="led off"></span><span class="modo" hidden></span><span>conectando…</span></div>' +
       '<div class="offline-bar" role="status">' + ic('alerta') + '<span id="m-off-txt">backend offline · reconectando. Os números abaixo são do último retrato.</span></div>';
   }
   function pintaConn() {
@@ -230,6 +240,7 @@
     var led = el.querySelector('.led'), t = el.querySelector('span:last-child'), e = A.estado, on = e && String((e.config || {}).auto_trade) === '1';
     if (A.online === false) { led.className = 'led bad'; t.textContent = 'backend offline'; return; }
     if (!e) return;
+    var mc = modoConta(), mo = el.querySelector('.modo'); mo.hidden = !mc.curto; mo.textContent = mc.curto;
     var h = M.health, vivo = h ? h.status === 'ok' : true;
     led.className = 'led' + (vivo ? '' : ' bad');
     t.textContent = (vivo ? 'ao vivo' : 'ciclo parado') + (h && h.ciclo_ha_s != null ? ' · ciclo há ' + Math.round(h.ciclo_ha_s) + ' s' : '') + ' · Apollo ' + (on ? 'ligado' : 'desligado');
@@ -469,7 +480,7 @@
         '<div class="sig-conv" style="margin-top:10px"><span>convicção</span><span class="n" style="font-size:28px">' + c + '</span><span class="bar" style="height:8px"><i style="--w:' + c + '%"></i></span></div>' +
         '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px"><span class="chip" id="sn-st">aguardando preço ao vivo</span><span class="mono txt2" style="font-size:12px" id="sn-px"></span></div></section>' +
         '<section class="m-card"><h5>Por quê</h5><ul class="m-why">' + (s.motivos || '').split(', ').filter(Boolean).map(function (x) { return '<li>' + ic('confirmar') + '<span>' + esc(F.decBR(x)) + '</span></li>'; }).join('') + '</ul><div id="sn-wr" class="note"></div></section>' +
-        '<section class="m-card"><h5>Ticket</h5><div class="flds"><label class="fld">VALOR R$<input class="inp" id="tk-valor" type="number" inputmode="decimal" min="1" step="1"></label>' +
+        '<section class="m-card"><h5>Ticket</h5><div class="flds"><label class="fld">VALOR ' + F.moeda() + '<input class="inp" id="tk-valor" type="number" inputmode="decimal" min="1" step="1"></label>' +
         '<label class="fld">ALAVANC.<input class="inp" id="tk-lev" type="number" inputmode="numeric" min="1" max="125" step="1" value="' + lev0 + '"></label>' +
         '<label class="fld">RISCO %<input class="inp" id="tk-risco" type="number" inputmode="decimal" min="0.1" max="20" step="0.1" value="' + (+risco0.toFixed(2)) + '"></label></div>' +
         '<div id="tk-prev" style="display:grid;gap:0"></div><p class="note">Execução ' + exec + '. O risco digitado aqui só dimensiona este trade; não muda a config.</p></section>' +
@@ -818,7 +829,8 @@
       this.notif();
     },
     update: function () {
-      var h = M.health; $('mx-foot').textContent = 'Apollux · ' + NOME_CONTA + (h ? ' · v' + h.versao + (h.commit ? ' · ' + String(h.commit).slice(0, 7) : '') : '') + ' · paper trading: dinheiro fictício, preço real';
+      /* [LIVE-6] o rodapé diz o que a conta É agora, como a casca do desktop */
+      var h = M.health; $('mx-foot').textContent = 'Apollux · ' + NOME_CONTA + (h ? ' · v' + h.versao + (h.commit ? ' · ' + String(h.commit).slice(0, 7) : '') : '') + ' · ' + modoConta().frase;
     }
   };
 

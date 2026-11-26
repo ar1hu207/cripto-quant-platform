@@ -191,7 +191,7 @@
   function $(id) { return S && S.root.querySelector('#' + id); }
 
   /* ---------- KPIs ---------- */
-  function cur(v, sinal) { var a = Math.abs(v); return (sinal ? (v > 0 ? '+' : v < 0 ? '−' : '') : (v < 0 ? '−' : '')) + '<span class="cur">R$</span>' + F.f2(a); }
+  function cur(v, sinal) { var a = Math.abs(v); return (sinal ? (v > 0 ? '+' : v < 0 ? '−' : '') : (v < 0 ? '−' : '')) + '<span class="cur">' + F.moeda() + '</span>' + F.f2(a); }
   function kpis(e) {
     var rg = e.risco || {}, m = e.metricas || {}, eq = e.equity_total, pd = rg.pnl_dia || 0, base = eq - pd;
     A.contar($('pn-eq'), eq, function (v) { return cur(v); });
@@ -508,7 +508,7 @@
     el.innerHTML = '<div class="ord">' + l.map(function (o) {
       var c = A.ts(o.criada_em), x = A.ts(o.expira_em), tot = c && x ? x - c : 0, pas = c ? Date.now() - c : 0, falta = x ? Math.max(0, Math.round((x - Date.now()) / 60000)) : null;
       return '<div class="ord-item"><div class="ord-top"><span class="mono strong">' + A.esc(F.par(o.ativo)) + '</span><span class="chip ' + (o.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(o.direcao) + '</span><span class="px">' + F.px(o.preco_limite) + '</span></div>' +
-        '<div class="ord-meta">descansa há ' + A.idade(o.criada_em) + (falta != null ? ' · expira em ' + falta + ' min' : '') + ' · R$ ' + F.f0(o.valor_reais) + ' · ' + A.esc(o.alavancagem) + 'x</div>' +
+        '<div class="ord-meta">descansa há ' + A.idade(o.criada_em) + (falta != null ? ' · expira em ' + falta + ' min' : '') + ' · ' + F.moeda() + ' ' + F.f0(o.valor_reais) + ' · ' + A.esc(o.alavancagem) + 'x</div>' +
         '<div class="prog" aria-hidden="true"><i style="--w:' + (tot ? Math.min(100, pas / tot * 100) : 0).toFixed(1) + '%"></i></div></div>';
     }).join('') + '<div class="ord-note">ordem que expira não devolve o sinal · maker só na entrada · já conta nos tetos</div></div>';
   }

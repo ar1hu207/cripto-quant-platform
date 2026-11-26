@@ -1160,6 +1160,21 @@ def _estado_vigia(agora=None):
     return (idade is not None and idade <= VIGIA_CICLO_S) or subindo, idade
 
 
+# [LIVE-6] Quanto a A espera pela resposta de outra conta. O pânico da conta em corretora fecha
+# posição por posição NA Binance, e cada uma são várias chamadas de rede: com algumas abertas
+# passa de 30 s. Estourar a espera não para o pânico (a conta R vai até o fim), mas o painel
+# dizia "Conta real fora do ar" na hora em que a pessoa mais precisa saber o que aconteceu.
+# 170 s é a espera do `deploy/panico.sh`.
+ESPERA_REPASSE_S = 30
+ESPERA_REPASSE_LENTA_S = {"panico": 170}
+
+
+def _estourou(e):
+    """A falha do repasse foi tempo esgotado (e não conexão recusada)? No tempo esgotado a
+    requisição CHEGOU: a ação pode ter sido executada, e a resposta tem de dizer isso."""
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
 def _repassar(conta, metodo, caminho, query, corpo, auth, ctype):
     """[AB-1] A requisição vai para a instância B como veio, e a resposta volta como veio.
     Erro HTTP da B (401, 422...) é devolvido com o status DELA: mascarar como 502 esconderia,
@@ -1171,7 +1186,8 @@ def _repassar(conta, metodo, caminho, query, corpo, auth, ctype):
     req = urllib.request.Request(url, data=corpo if metodo == "POST" else None,
                                  headers=cab, method=metodo)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        espera = ESPERA_REPASSE_LENTA_S.get(caminho.strip("/"), ESPERA_REPASSE_S)
+        with urllib.request.urlopen(req, timeout=espera) as r:
             return r.status, r.read(), r.headers.get("Content-Type", "application/json")
     except urllib.error.HTTPError as e:
         return e.code, e.read(), e.headers.get("Content-Type", "text/plain")
@@ -1201,8 +1217,12 @@ async def _rota_teste(conta, repassar, caminho, request):
             repassar, request.method, caminho, request.url.query, corpo,
             request.headers.get("Authorization"), request.headers.get("Content-Type"))
     except (urllib.error.URLError, OSError) as e:
-        return PlainTextResponse(f"{ROTULO_CONTA.get(conta, 'Teste ' + conta)} fora do ar: {e}",
-                                 status_code=502)
+        nome = ROTULO_CONTA.get(conta, "Teste " + conta)
+        if _estourou(e):            # [LIVE-6] chegou lá e não respondeu a tempo: não é "fora do ar"
+            return PlainTextResponse(
+                f"{nome} não respondeu a tempo. A ação PODE ter sido executada: confira as "
+                "posições e as ordens da conta antes de repetir.", status_code=504)
+        return PlainTextResponse(f"{nome} fora do ar: {e}", status_code=502)
     return Response(content=dados, status_code=st, media_type=ctype)
 
 
@@ -1741,7 +1761,9 @@ def panico(pular_pendentes: bool = False):
                 pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
         return {"ok": not r["falhas"], "fechadas": r["fechadas"], "pnl": r["pnl"],
                 "auto_desligado": True, "pendentes_pulados": pulados,
-                "ordens_canceladas": r["ordens_canceladas"], "falhas": r["falhas"]}
+                "ordens_canceladas": r["ordens_canceladas"], "falhas": r["falhas"],
+                # [LIVE-6] o que a varredura fechou e o livro não conhecia: o painel diz
+                "varridas": r["varridas"]}
     # -1 = sem LIMIT (SQLite). Eram 200: o kill-switch promete TODAS, e com 205 abertas sobravam 5.
     abertas = db.listar("posicoes", -1, "WHERE status='aberta'")
     n, total, falhas = 0, 0.0, []

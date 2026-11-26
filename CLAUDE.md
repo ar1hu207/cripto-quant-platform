@@ -130,7 +130,9 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
   estado, fora do catálogo de propósito. O `/reset` recusa nela. `corretora_dry_run` **não é
   modo seguro com posição aberta**: nele nada é enviado, nem fechamento, nem pânico (o `POST
   /config` recusa ligá-lo assim). Quantidade que sai de subtração passa por `execucao._lote`
-  antes de virar ordem ou de ir para o livro.
+  antes de virar ordem ou de ir para o livro. O DCA é simulação e não roda nessa conta
+  (`dca._so_no_papel`). No painel, moeda, marca e moldura vermelha saem do `config.corretora`
+  do `/estado` (`APX.modo()`), nunca da aba: tela nova não escreve `R$` à mão, usa `fmt.moeda()`.
 - **Sem `DASH_PASS` o backend recusa acesso externo, e não há bandeira para desligar isso.**
   Existiu uma (`PERMITIR_SEM_SENHA`) e foi ela que deixou `/reset`, `/panico`, `/config` e
   `/auto` abertos na internet: a guarda só protege se não houver como desligá-la.

@@ -297,3 +297,85 @@ def test_cada_montagem_de_view_recebe_um_no_novo():
     js = _ler(WEB, "app", "casca.js")
     assert "v.init(mount)" in js and "v.init(viewRoot)" not in js
     assert re.search(r"viewRoot\.innerHTML = head\(route\) \+ '<div class=\"view-mount\"></div>'", js)
+
+
+# ---------------------------------------------------------------- [LIVE-6] a conta real no painel
+
+def _contas_do_front():
+    js = _ler(WEB, "app", "api.js")
+    return dict(re.findall(r"^\s+([A-Z]): \{ nome: '[^']*', papel: '[^']*', rota: '([^']*)' \}", js, re.M))
+
+
+def test_a_conta_real_tem_aba_e_a_rota_dela_existe_no_backend():
+    """Conta no front e repasse no backend nascem juntos: uma aba cujo prefixo o backend nao
+    repassa responde 404 em toda requisicao, e um repasse sem aba ninguem ve."""
+    import api
+    rotas = _contas_do_front()
+    assert rotas["A"] == "" and rotas["R"] == "/testeR"
+    assert {k: v for k, v in rotas.items() if v} == {k: f"/teste{k}" for k in api.CONTAS_TESTE}
+    html = _ler(WEB, "index.html")
+    assert set(re.findall(r'class="conta" data-conta="([A-Z])"', html)) == set(rotas)
+    # o botao travado que anunciava a conta saiu junto com o anuncio
+    assert "em esteira" not in html and ".conta.lock" not in html
+    # conta desconhecida no localStorage cai na A; conta nova nao exige mexer na validacao
+    js = _ler(WEB, "app", "api.js")
+    assert "hasOwnProperty.call(CONTAS, salva)" in js and "hasOwnProperty.call(CONTAS, c)" in js
+
+
+def test_a_moeda_da_tela_segue_o_modo_que_o_backend_diz():
+    """Em corretora o saldo e USDT. O simbolo sai de um lugar so (fmt.moeda), lido do /estado e
+    nao da aba: a conta R no degrau de papel ainda e ficticia, e um 'R$' escrito a mao numa
+    tela mostraria em reais o dinheiro que esta na Binance."""
+    js = _ler(WEB, "app", "api.js")
+    assert "function moeda() { return modo() === 'papel' ? 'R$' : 'US$'; }" in js
+    assert "estado.config.corretora" in js and "c === 'demo' || c === 'binance' ? c : 'papel'" in js
+    for rel in (("app", "api.js"), ("app", "casca.js"), ("app", "m", "app.js"),
+                ("app", "views", "painel.js"), ("app", "views", "carteira.js")):
+        s = _ler(WEB, *rel)
+        for fixo in ('<span class="cur">R$</span>', "'R$\\u00a0'", "Valor (R$)", "VALOR R$", "' · R$ '"):
+            assert fixo not in s, f"{'/'.join(rel)} ainda escreve {fixo!r} a mao"
+
+
+def test_dinheiro_real_nunca_parece_paper():
+    """A promessa que a Carteira fazia desde o primeiro front: com dinheiro de verdade a moldura
+    inteira fica vermelha. Vermelho so quando a ordem VAI com dinheiro (binance, sem dry-run):
+    no demo e no dry-run a marca e ambar, porque vermelho a toa deixa de avisar. E o rodape nao
+    pode dizer 'dinheiro ficticio' numa conta que opera."""
+    for pagina, js in (("index.html", ("app", "casca.js")), ("m.html", ("app", "m", "app.js"))):
+        css = _ler(WEB, pagina)
+        assert re.search(r"body\.modo-real::after\{[^}]*position:fixed;inset:0;border:2px solid var\(--neg\)[^}]*pointer-events:none",
+                         css), pagina
+        s = _ler(WEB, *js)
+        assert "classList.toggle('modo-real'" in s, js
+        assert re.search(r"valendo ?[:=] ?md === 'binance' && !seco", s), js
+        assert "conta real: ordens e dinheiro de verdade na Binance Futures" in s, js
+    html = _ler(WEB, "index.html")
+    assert '<span id="foot-modo">paper trading: dinheiro fictício, preço real da Binance</span>' in html
+    assert html.count("dinheiro fictício") == 1                # só dentro do span que o modo troca
+    assert 'id="modo-conta" hidden' in html
+    # o rotulo "(paper)" do mapa da Carteira so aparece onde e paper
+    assert "binance futures (paper)" not in _ler(VIEWS, "carteira.js")
+
+
+def test_panico_incompleto_na_corretora_lista_cada_item_com_o_erro():
+    """Na conta em corretora a falha do panico pode ser posicao, ordem que nao cancelou ou a
+    varredura; o dialogo do papel dizia 'N posicoes nao fecharam', mostrava so o primeiro erro e
+    afirmava que as ordens tinham sido canceladas. As duas casas usam a mesma lista (comum.js)."""
+    comum = _ler(WEB, "app", "comum.js")
+    assert "A.panicoFalhas = function (fl)" in comum and "A.esc(f.erro)" in comum
+    assert "f.ativo ? F.par(f.ativo) : 'a conta'" in comum
+    for rel in (("app", "casca.js"), ("app", "m", "app.js")):
+        s = _ler(WEB, *rel)
+        assert "A.modo() !== 'papel' ? A.panicoFalhas(fl) :" in s, rel
+        assert "A.panicoVarridas(r)" in s, rel
+
+
+def test_o_dca_nao_e_oferecido_na_conta_em_corretora():
+    """O DCA e simulacao: na conta que opera em corretora o backend recusa (dca._so_no_papel) e a
+    Carteira esconde o formulario em vez de oferecer uma compra que nao acontece."""
+    s = _ler(VIEWS, "carteira.js")
+    assert "var parado = A.modo() !== 'papel';" in s
+    assert "$('ct-dca-f').style.display = parado ? 'none' : '';" in s
+    # a conta real nao entra no cartao que diz "paper"
+    assert "k !== eu && k !== 'R'" in s
+

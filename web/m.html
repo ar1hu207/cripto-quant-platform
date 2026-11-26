@@ -73,6 +73,13 @@ ul{margin:0;padding:0;list-style:none}
 .avatar{width:26px;height:26px;border-radius:50%;background:rgba(var(--txt-rgb),.08);border:1px solid var(--line2);display:grid;place-items:center;font-family:var(--f-display);font-weight:700;font-size:11px}
 .conta-teste .acct{border-color:rgba(var(--warn-rgb),.6);color:var(--warn)}
 .conta-teste .acct .avatar{border-color:rgba(var(--warn-rgb),.6)}
+/* [LIVE-6] dinheiro de verdade nunca parece paper: moldura vermelha na tela inteira e a conta em vermelho
+   (app.js liga a classe quando o backend diz `binance` sem dry-run) */
+body.modo-real::after{content:"";position:fixed;inset:0;border:2px solid var(--neg);box-shadow:inset 0 0 18px rgba(var(--neg-rgb),.22);pointer-events:none;z-index:95}
+.modo-real .acct{border-color:rgba(var(--neg-rgb),.7);color:var(--neg)}
+.modo-real .acct .avatar{border-color:rgba(var(--neg-rgb),.7)}
+.conn .modo{color:var(--warn);white-space:nowrap;flex:none}
+.modo-real .conn .modo{color:var(--neg);font-weight:600}
 .ib{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;border:1px solid var(--line2);background:var(--panel2);flex:none}
 .ib.danger{color:var(--neg);border-color:rgba(var(--neg-rgb),.5);background:rgba(var(--neg-rgb),.08)}
 .ib .ic{width:19px;height:19px}
