@@ -69,7 +69,7 @@ ORDEM_SUMIDA_S = 60.0                # ordem que a corretora não conhece depois
 saude = {"modo": "papel", "reconciliado_em": None, "reconciliacoes": 0, "falhas": 0,
          "ultimo_erro": None, "divergencias": 0, "ultima_divergencia": None,
          "adotadas": 0, "orfas_canceladas": 0, "stops_repostos": 0, "fechadas_fora": 0,
-         "ordens_de_fora": 0, "saldo": None, "noite": False}
+         "ordens_de_fora": 0, "saldo": None, "noite": False, "chave_aviso": None}
 _reconciliado = {"mono": None}
 
 
@@ -1508,6 +1508,7 @@ def reconciliar(cfg=None):
     cfg = db.get_config() if cfg is None else cfg
     c = obter(cfg)
     _reconferir_chave(c)
+    saude["chave_aviso"] = getattr(c, "aviso_chave", None)   # [LIVE-11] o que o dono aceitou
     with _lock:
         try:
             pxs = c.posicoes()

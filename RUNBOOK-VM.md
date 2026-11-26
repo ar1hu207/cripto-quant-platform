@@ -87,6 +87,16 @@ linha pronta no cabeçalho de `deploy/backup_banco.py`. Cópia pela API de backu
 `cp` do banco vivo), `integrity_check` na cópia, 30 dias. **Copie a pasta para fora do dl380**
 de vez em quando: disco único.
 
+**Chave sem restrição de IP (decisão do dono, 26/11/2026).** O IP de saída do dl380 é dinâmico:
+chave presa a IP pararia a cada troca (-2015), com posição aberta. Então a chave real é criada
+SEM IP, e o `corretora.env` leva `BINANCE_CHAVE_SEM_IP=1`. O que continua barrado: saque,
+transferência, spot, margem, portfolio margin e opções. O risco aceito: se a chave vazar para
+fora do servidor, quem a tiver opera a conta de futuros de qualquer lugar (não saca), até o saldo
+dela. Por isso: na conta de futuros só o que se aceita perder; a chave não sai do dl380 (nem
+backup, nem print, nem chat); `/status` mostra `chave_aviso`. A Binance pode APAGAR chave sem IP
+que fique 30 dias sem uso: com a R parada esse tempo, crie outra. Quando houver IP fixo (proxy
+num servidor com IP fixo, ou IP fixo do provedor), prenda a chave a ele e tire a linha.
+
 **Isolar a chave (pendente, decisão do dono).** As quatro units rodam como `cripto`: a A,
 exposta na internet, consegue ler o `corretora.env`. Isolar de verdade é um usuário só da R:
 

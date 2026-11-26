@@ -19,8 +19,10 @@
 #   sudo -u cripto sh -c 'umask 077; cat > /home/cripto/cripto-bot-r/corretora.env'
 #       BINANCE_DEMO_KEY=...        (fase demo)
 #       BINANCE_DEMO_SECRET=...
-#       BINANCE_KEY=...             (só no go-live; leitura + futuros, sem saque, com IP fixo)
+#       BINANCE_KEY=...             (só no go-live; leitura + futuros, sem saque, sem transferência)
 #       BINANCE_SECRET=...
+#       BINANCE_CHAVE_SEM_IP=1      (SÓ se a chave não for presa a IP; decisão do dono, 26/11:
+#                                    o IP de saída do dl380 é dinâmico. Tire quando houver IP fixo)
 #     (termina com Ctrl-D numa linha vazia)
 #   sudo cp deploy/cripto-bot-r.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-r

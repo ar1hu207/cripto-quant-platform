@@ -50,8 +50,13 @@ dinheiro fictício; os testes em `tests/test_corretora.py` reproduzem cada uma c
    a chave pode fazer; com saque habilitado, transferência habilitada, sem restrição de IP, ou
    sem dar para conferir, toda ENTRADA é recusada (`bloqueio_entrada`). Fechar, stop e pânico
    seguem: recusar subir, como era, deixava a posição que já existe sem ninguém para fechá-la,
-   justamente no dia em que algo está errado. Não há bandeira para desligar: é a lógica do
-   `DASH_PASS` (CLAUDE.md §2).
+   justamente no dia em que algo está errado. Não há bandeira para desligar saque, transferência
+   ou o resto: é a lógica do `DASH_PASS` (CLAUDE.md §2).
+   UMA exceção, decisão do dono em 26/11/2026 ([LIVE-11]): o IP de saída do dl380 é dinâmico, e
+   chave presa a IP é recusada (-2015) a cada troca, com posição aberta. `BINANCE_CHAVE_SEM_IP=1`
+   no `corretora.env` aceita a chave SEM restrição de IP, e só isso. Mora no arquivo da chave, no
+   servidor: nenhuma rota HTTP, nem a config do banco, a liga. A chave aceita assim fica marcada
+   (`aviso_chave`, no `/status`); a que tiver restrição de IP passa sem aviso, com ou sem a linha.
 
 Fronteiras que só este módulo atravessa: o símbolo (`BTC/USDT` no sistema, `BTC/USDT:USDT` na
 perp) e o tempo (ms UTC na corretora, `pd.Timestamp` naive em hora de São Paulo no resto —
@@ -377,7 +382,7 @@ class BinanceUSDM:
     RECARGA_MERCADOS_S = 86400          # tick e lote mudam com o processo de pé; o dl380 religa de manhã, mas não é garantia
     PAUSA_PADRAO_S = 60.0               # limite de taxa sem `Retry-After`
 
-    def __init__(self, ex, modo, nocional_max, dry_run=False):
+    def __init__(self, ex, modo, nocional_max, dry_run=False, aceita_sem_ip=False):
         if modo not in ("demo", "binance"):
             raise ValueError(f"modo inválido: {modo!r}")
         if not nocional_max or float(nocional_max) <= 0:
@@ -385,6 +390,8 @@ class BinanceUSDM:
         self._pausa_ate = 0.0           # monotonic: até quando nada vai à Binance (limite de taxa)
         self.bloqueio_entrada = None    # regra 8: o motivo de não ABRIR nada, ou None
         self.chave_conferida_em = None  # monotonic da última conferência da chave
+        self.aceita_sem_ip = bool(aceita_sem_ip)  # [LIVE-11] só pelo corretora.env (`obter`)
+        self.aviso_chave = None         # o que a chave tem de mais frouxo e foi aceito pelo dono
         self._mercados_em = time.monotonic()      # a fábrica já carregou
         self.ex = _Cliente(ex, self)
         self.nome = modo
@@ -646,8 +653,12 @@ class BinanceUSDM:
             problemas.append("saque habilitado")
         if sim("enableInternalTransfer") or sim("permitsUniversalTransfer"):
             problemas.append("transferência habilitada")
+        aviso = None
         if not sim("ipRestrict"):
-            problemas.append("sem restrição de IP")
+            if self.aceita_sem_ip:      # [LIVE-11] decisão do dono, 26/11: IP de saída dinâmico
+                aviso = "chave sem restrição de IP (aceita por BINANCE_CHAVE_SEM_IP no corretora.env)"
+            else:
+                problemas.append("sem restrição de IP")
         if not sim("enableFutures"):
             problemas.append("futuros desabilitado")
         # O que o bot não usa não fica ligado: chave que vaza com spot, margem ou opções
@@ -660,15 +671,17 @@ class BinanceUSDM:
             problemas.append("habilitado sem uso pelo bot: " + ", ".join(extras))
         if problemas:
             raise ChaveInsegura("chave recusada: " + ", ".join(problemas))
-        return {"verificavel": True, "ok": True}
+        return {"verificavel": True, "ok": True, "aviso": aviso}
 
     def conferir_chave(self):
         """Regra 8 sem travar o fechamento: confere e guarda o motivo de não abrir (None = pode).
         Falha de rede na conferência também bloqueia a entrada, e quem chama tenta de novo."""
         self.chave_conferida_em = time.monotonic()
         try:
-            self.verificar_chave()
+            self.aviso_chave = (self.verificar_chave() or {}).get("aviso")
             self.bloqueio_entrada = None
+            if self.aviso_chave:
+                log(f"corretora: {self.aviso_chave}", "warning")
         except ChaveInsegura as e:
             self.bloqueio_entrada = str(e)
         except Exception as e:
@@ -1041,6 +1054,9 @@ def obter(cfg=None, env=None, preco_fn=None, saldo_fn=None, fabrica_ccxt=_client
         raise ErroCorretora(f"corretora={modo} sem {pref}_KEY/{pref}_SECRET no ambiente")
     teto = _f(cfg.get("corretora_nocional_max")) or NOCIONAL_MAX_PADRAO
     dry = str(cfg.get("corretora_dry_run") or "0").strip().lower() in ("1", "true", "sim")
-    c = BinanceUSDM(fabrica_ccxt(modo, chave, segredo), modo, teto, dry_run=dry)
+    # [LIVE-11] Do AMBIENTE (o corretora.env da R), nunca de `cfg`: a config é gravável por HTTP.
+    sem_ip = modo == "binance" and (env.get("BINANCE_CHAVE_SEM_IP") or "").strip() == "1"
+    c = BinanceUSDM(fabrica_ccxt(modo, chave, segredo), modo, teto, dry_run=dry,
+                    aceita_sem_ip=sem_ip)
     c.conferir_chave()                  # modo binance: chave insegura bloqueia a ENTRADA (regra 8)
     return c

@@ -888,6 +888,45 @@ def test_binance_com_chave_que_saca_nao_abre_mas_fecha():
     assert c.abrir_mercado("SOL/USDT", "LONG", 0.1, "e3")["client_oid"] == "e3"
 
 
+def _obter_binance(ex, **env):
+    return C.obter({"corretora": "binance", "BINANCE_CHAVE_SEM_IP": "1", "chave_sem_ip": "1"},
+                   env={"BINANCE_KEY": "a", "BINANCE_SECRET": "b", **env},
+                   fabrica_ccxt=lambda *a: ex)
+
+
+def test_chave_sem_ip_so_e_aceita_pelo_ambiente_do_servidor():
+    """[LIVE-11] Decisão do dono em 26/11: IP de saída dinâmico. A linha no corretora.env aceita
+    a chave sem restrição de IP; a config do banco (gravável por HTTP) não, mesmo com o nome igual."""
+    ex = _ExFake()
+    ex.restricoes["ipRestrict"] = False
+    c = _obter_binance(ex)                                       # só a config pede: recusa
+    assert "restrição de IP" in c.bloqueio_entrada and c.aviso_chave is None
+    for valor in ("0", "true", "sim", " ", "yes"):               # só "1" liga
+        assert "restrição de IP" in _obter_binance(ex, BINANCE_CHAVE_SEM_IP=valor).bloqueio_entrada
+    c = _obter_binance(ex, BINANCE_CHAVE_SEM_IP="1")
+    assert c.bloqueio_entrada is None and "sem restrição de IP" in c.aviso_chave
+    assert c.abrir_mercado("SOL/USDT", "LONG", 0.1, "e1")["client_oid"] == "e1"
+    ex.restricoes["ipRestrict"] = True                           # o dono prendeu a IP depois
+    assert c.conferir_chave() is None and c.aviso_chave is None
+
+
+@pytest.mark.parametrize("campo,valor,motivo", [
+    ("enableWithdrawals", True, "saque"),
+    ("enableInternalTransfer", True, "transferência"),
+    ("permitsUniversalTransfer", True, "transferência"),
+    ("enableSpotAndMarginTrading", True, "spot e margem"),
+    ("enableFutures", False, "futuros"),
+])
+def test_chave_sem_ip_aceita_nao_afrouxa_mais_nada(campo, valor, motivo):
+    ex = _ExFake()
+    ex.restricoes["ipRestrict"] = False
+    ex.restricoes[campo] = valor
+    c = _obter_binance(ex, BINANCE_CHAVE_SEM_IP="1")
+    assert motivo in c.bloqueio_entrada and "IP" not in c.bloqueio_entrada
+    with pytest.raises(C.ChaveInsegura, match=motivo):
+        c.abrir_mercado("SOL/USDT", "LONG", 0.1, "e1")
+
+
 def test_conferencia_que_falha_por_rede_tambem_barra_a_entrada():
     ex = _ExFake()
     def cai():

@@ -1725,6 +1725,16 @@ def test_troca_para_conta_com_chave_insegura_e_recusada(papel):
     assert r.status_code == 422 and "restrição de IP" in str(r.json())
 
 
+def test_chave_aceita_sem_ip_aparece_no_status(conta):
+    """[LIVE-11] O que o dono aceitou fica à vista no `/status`, a cada reconciliação."""
+    conta.aviso_chave = "chave sem restrição de IP (aceita por BINANCE_CHAVE_SEM_IP no corretora.env)"
+    execucao.reconciliar()
+    assert "sem restrição de IP" in execucao.saude["chave_aviso"]
+    conta.aviso_chave = None
+    execucao.reconciliar()
+    assert execucao.saude["chave_aviso"] is None
+
+
 def test_bloqueio_de_chave_e_reconferido_e_avisa(conta, monkeypatch):
     avisos = []
     monkeypatch.setattr(execucao, "_avisar", lambda texto, nivel="error": avisos.append(texto))
