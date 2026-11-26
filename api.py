@@ -492,6 +492,38 @@ async def auth_basica(request: Request, call_next):
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
+# Cabeçalhos de segurança no BACKEND. O `web/vercel.json` já os põe no front do Vercel, mas o
+# backend serve o MESMO `web/index.html` em `GET /` (mais `/app`, `/vendor`, `/config.js`) e,
+# pelo Funnel, essa cópia é pública: sem estes cabeçalhos ela saía sem CSP e enquadrável, e o
+# front tinha a proteção que a sua gêmea servida daqui não tinha. Registrado DEPOIS do CORS de
+# propósito: é o middleware mais EXTERNO, então carimba TODA resposta — inclusive os 401/429/503
+# que a auth devolve sozinha e o preflight que o CORS responde. O CSP é o MESMO texto do
+# vercel.json (o mesmo HTML roda sob ele no Vercel, prova de que não quebra o painel); servido
+# daqui, `connect-src 'self'` é a própria origem, e o host do dl380 segue listado para o caso de
+# a página ser aberta direto no Funnel. Só acrescenta cabeçalho: não afrouxa guarda nenhuma.
+_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; img-src 'self' data:; "
+        "connect-src 'self' https://arthur-dl380.taild8de53.ts.net; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+_CABECALHOS_SEGURANCA = {
+    "Content-Security-Policy": _CSP,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    # HSTS: o Funnel é HTTPS. `max-age` de 2 anos; sem `preload` (domínio compartilhado .ts.net).
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+}
+
+
+@app.middleware("http")
+async def cabecalhos_seguranca(request: Request, call_next):
+    resp = await call_next(request)
+    for k, v in _CABECALHOS_SEGURANCA.items():
+        resp.headers.setdefault(k, v)   # setdefault: não pisa num cabeçalho que a rota já pôs
+    return resp
+
+
 # ---------- catálogo de configuração ----------
 # Lista FECHADA do que pode ser gravado na config, com tipo e faixa. Sem isto, POST /config
 # aceitava qualquer chave com qualquer valor e o erro só aparecia lá no float() de
