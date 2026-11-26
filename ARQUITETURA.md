@@ -710,8 +710,9 @@ posições da conta no fim e devolve como falha tudo o que ainda estiver aberto 
 `NetworkError`. Sem tradução, um IP de saída que mudou de madrugada aparecia como envio incerto.
 Toda chamada ao ccxt passa por `corretora._Cliente`: `-2015` vira `ChaveRecusada` (e o dono é
 avisado do porquê, uma vez a cada 30 min), `-1021` ressincroniza o relógio e repete uma vez,
-e o limite de taxa vira `LimiteDeTaxa` com pausa global pelo `Retry-After` (insistir durante um
-ban de IP faz a Binance aumentá-lo). O trailing vai com `activatePrice`, o nome do serviço Algo
+e o limite de taxa vira `LimiteDeTaxa` com pausa pelo `Retry-After`: total no IP banido (418;
+insistir aumenta o ban), e só de leitura e entrada no 429, deixando sair stop, fechamento e
+cancelamento. O trailing vai com `activatePrice`, o nome do serviço Algo
 (o ccxt 4.5.56 manda o antigo), e a ativação gravada é conferida na volta: diferente, ele é
 cancelado. `FINISHED` só é "executada" com `actualQty` > 0. O funding vem em janelas de 7 dias.
 

@@ -1521,9 +1521,12 @@ def reconciliar(cfg=None):
     saude["chave_aviso"] = getattr(c, "aviso_chave", None)   # [LIVE-11] o que o dono aceitou
     with _lock:
         try:
+            # [LIVE-13] Saldo PRIMEIRO: lido depois das posições, um stop que executasse entre
+            # as duas leituras sumia da carteira com a posição ainda "aberta" na leitura, o
+            # ciclo contava como completo, a banca descia, e a saída lançava a perda de novo.
+            saldo = c.saldo()
             pxs = c.posicoes()
             abertas_ex = c.ordens_abertas()
-            saldo = c.saldo()
         except Exception as e:
             saude["falhas"] += 1
             saude["ultimo_erro"] = f"{pd.Timestamp.now()} leitura: {type(e).__name__}: {str(e)[:140]}"
@@ -1667,6 +1670,9 @@ def _orfas(c, abertas_ex, cfg):
             log(f"órfã {o.get('client_oid')} não cancelou: {e}", "error")
 
 
+_queda_saldo = {"n": 0}            # ciclos completos seguidos com a carteira abaixo da banca
+
+
 def _conferir_saldo(c, saldo, cfg, ajustar=True):
     """O livro não pode achar que tem mais dinheiro do que a conta tem. Se a CARTEIRA da
     corretora ficar abaixo da banca do livro por mais que a folga, saiu dinheiro por fora
@@ -1702,6 +1708,13 @@ def _conferir_saldo(c, saldo, cfg, ajustar=True):
                       "banca_livro": round(banca, 2)}
     folga = max(1.0, 0.02 * banca)
     if not ajustar or cart >= esperada - folga:
+        _queda_saldo["n"] = 0
+        return
+    # [LIVE-13] Só com a diferença em DOIS ciclos completos seguidos: a carteira da Binance pode
+    # refletir uma saída um instante antes de a posição sumir da leitura (regra 4), e a banca só
+    # desce, então o erro de um ciclo ficaria para sempre.
+    _queda_saldo["n"] += 1
+    if _queda_saldo["n"] < 2:
         return
     with db.conectar() as con:
         abertas = [dict(r) for r in con.execute(
@@ -1716,6 +1729,7 @@ def _conferir_saldo(c, saldo, cfg, ajustar=True):
         nova = cart + taxas - funding
         with db.conectar() as con:
             con.execute("UPDATE banca SET atual=? WHERE id=1", (nova,))
+        _queda_saldo["n"] = 0
         _divergencia(f"carteira na corretora ({cart:.2f}) abaixo da banca do livro "
                      f"({banca:.2f}): banca ajustada para {nova:.2f}")
 
@@ -1767,9 +1781,17 @@ def panico(batida=None):
                                            _coid("x", f"p{int(time.time() * 1000) % 10 ** 9}"))
                     if ext.get("status") == "dry_run":      # nada saiu: não é "varrida"
                         raise ValueError("corretora_dry_run ligado: o fechamento NÃO foi enviado")
-                    if not float(ext.get("preenchido") or 0) and ext.get("status") != "preenchida":
+                    feito = float(ext.get("preenchido") or 0)
+                    if not feito and ext.get("status") != "preenchida":
                         # aceita não é executada: só conta como varrida o que encheu
                         raise C.EnvioIncerto(f"fechamento voltou '{ext.get('status')}' sem executar")
+                    if ext.get("status") != "preenchida" and feito < float(px["qty"]) * (1 - 1e-9):
+                        # [LIVE-13] Executou só PARTE: stop e alvos ficam (cancelar tudo deixava
+                        # o resto aberto sem stop, e ele entrava em `varridas` com a qty inteira).
+                        res["falhas"].append({"ativo": px["simbolo"], "erro": (
+                            f"varredura fechou só {feito:g} de {px['qty']:g}; o resto segue "
+                            "aberto, com o stop lá")})
+                        continue
                     c.cancelar_tudo(px["simbolo"])
                     # fechada, mas fora do livro: a reconciliação lança a saída se a linha existir
                     res["varridas"].append({"ativo": px["simbolo"], "direcao": px["direcao"],
@@ -1790,12 +1812,26 @@ def panico(batida=None):
             # A prova do pânico é a conta, não as respostas: o que ainda estiver aberto lá depois
             # de tudo isso é falha, mesmo que nenhuma chamada tenha levantado (revisão de 26/11).
             ja = {f.get("ativo") for f in res["falhas"]}
-            for px in c.posicoes():
+            seguem = c.posicoes()
+            abertos = {px["simbolo"] for px in seguem}
+            for px in seguem:
                 if px["simbolo"] not in ja:
                     res["falhas"].append({"ativo": px["simbolo"],
                                           "erro": f"segue ABERTA na corretora depois do pânico "
                                                   f"({px['direcao']} qty {px['qty']:g})"})
-            for o in c.ordens_abertas():
+            ordens = c.ordens_abertas()
+            for s in abertos:
+                # [LIVE-13] A mensagem dizia "segue aberta, com o stop" sem olhar: diz o que há.
+                if not any(o.get("simbolo") == s and o.get("condicional") and _nosso(o.get("client_oid"))
+                           for o in ordens):
+                    res["falhas"].append({"ativo": s, "erro": "SEM STOP na corretora: feche no "
+                                          "aplicativo da Binance (Futuros > Posições)"})
+            for o in ordens:
+                if o.get("simbolo") in abertos and (o.get("condicional") or o.get("reduce_only")):
+                    # [LIVE-13] Stop e alvo de posição que o pânico NÃO fechou ficam: cancelá-los
+                    # deixava a posição aberta e nua, e com o `panico.sh` a unit fica parada, sem
+                    # reconciliação para repor. A entrada pendente sai sempre.
+                    continue
                 if _nosso(o.get("client_oid")):
                     try:
                         c.cancelar(o["simbolo"], o["id"], condicional=bool(o.get("condicional")))
@@ -1987,6 +2023,12 @@ def _cli(argv):
     (`api.LIMITES_DINHEIRO`). Imprime os limites como ficaram."""
     os.umask(0o077)         # como o `UMask=` da unit: banco, -wal e log que a CLI criar não ficam legíveis
     _carregar_env(os.environ.get("ARQUIVOS_ENV"))
+    if argv[:1] in (["estado"], ["panico"]) and not os.path.isfile(db.DB):
+        # [LIVE-13] O `init_db` criava um banco NOVO, em papel, no caminho errado: o pânico
+        # dizia "nada a fazer" e saía 0 sem ter tocado a corretora.
+        print(f"ERRO: o banco {db.DB} não existe. DB_PATH errado? NADA foi feito na corretora. "
+              "Para fechar agora: app da Binance, Futuros > Posições.")
+        return 2
     db.init_db()            # idempotente; o serviço faz o mesmo ao subir, e o banco pode ser novo
     if argv[:1] == ["config-de"] and real(db.get_config()) and modo(db.get_config()) == "binance":
         print("recusado: config-de com a conta em binance voltaria os limites aos da outra conta. "

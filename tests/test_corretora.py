@@ -110,6 +110,8 @@ class _ExFake:
                 # O nome antigo (`activationPrice`) não é lido (revisão de 26/11, R5 #1).
                 info["activatePrice"] = str(self.ativacao_gravada or params.get("activatePrice")
                                             or self.mark)
+                if getattr(self, "sem_ativacao", False):    # a Binance não devolve o campo
+                    info.pop("activatePrice")
             o = {"id": oid, "clientOrderId": coid, "symbol": s, "type": "market", "side": lado,
                  "status": "open", "amount": qty, "filled": 0.0, "price": None, "average": None,
                  "stopPrice": float(params["stopPrice"]) if params.get("stopPrice") else None,
@@ -1052,3 +1054,38 @@ class TestDemoAoVivo:
         b.cancelar_tudo(self.S)
         assert self._espera(lambda: b.ordens_abertas(self.S) == [])
         assert any(f["ordem_id"] == e["id"] for f in b.fills(self.S))
+
+
+# ------------------------------------------------------------------ [LIVE-13] revisão de dinheiro de 26/11
+
+def test_trailing_sem_ativacao_devolvida_e_cancelado():
+    """Enviada a ativação e nada volta (nem na releitura): não dá para saber onde ativa. Fica o
+    stop fixo; o trailing sai."""
+    ex = _ExFake()
+    ex.sem_ativacao = True
+    with pytest.raises(C.OrdemRecusada, match="não devolvida"):
+        _bin(ex).colocar_trailing("SOL/USDT", "LONG", 0.1, 105.0, 1.5, "tr9")
+    (o,) = [x for x in ex.ordens.values() if x["clientOrderId"] == "tr9"]
+    assert o["info"]["algoStatus"] == "CANCELED"
+
+
+def test_limite_de_requisicoes_deixa_passar_stop_fechamento_e_cancelamento():
+    """429 por excesso de leitura parava TUDO, inclusive o stop de uma posição nova: ela ficava
+    sem stop até o fim da pausa. Só o ban de IP (418) para tudo."""
+    ex = _ExFake()
+    b = _bin(ex)
+    ex.erros["fetch_balance"] = [ccxt.RateLimitExceeded(
+        'binanceusdm {"code":-1003,"msg":"Too many requests; current limit is 2400 per minute."}')]
+    with pytest.raises(C.LimiteDeTaxa, match="só stop"):
+        b.saldo()
+    n = len(ex.chamadas)
+    with pytest.raises(C.LimiteDeTaxa):
+        b.saldo()                                                       # leitura: não vai
+    with pytest.raises(C.LimiteDeTaxa):
+        b.abrir_mercado("SOL/USDT", "LONG", 0.1, "e1")                  # entrada: não vai
+    assert len(ex.chamadas) == n
+    ex.posicao = 0.1
+    s = b.colocar_stop("SOL/USDT", "LONG", 95.0, "s1", qty=0.1)         # stop: vai
+    assert s["client_oid"] == "s1"
+    assert b.fechar_mercado("SOL/USDT", "LONG", 0.1, "f1")["status"] == "preenchida"
+    assert b.cancelar("SOL/USDT", s["id"], condicional=True) is not None

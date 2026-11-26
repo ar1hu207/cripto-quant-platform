@@ -41,8 +41,10 @@ dinheiro fictício; os testes em `tests/test_corretora.py` reproduzem cada uma c
 9. **Recusa da chave e limite de taxa não são "rede".** O ccxt põe o `-2015` (chave, IP ou
    permissão) e o 418/429 em `DDoSProtection`, que é filho de `NetworkError`: sem tradução, um
    IP de saída que mudou aparecia como envio incerto. Todo acesso ao ccxt passa por
-   `_Cliente`, que os traduz (`ChaveRecusada`, `LimiteDeTaxa`) e, no limite de taxa, PARA de
-   chamar até o `Retry-After`: insistir durante um ban de IP faz a Binance aumentá-lo.
+   `_Cliente`, que os traduz (`ChaveRecusada`, `LimiteDeTaxa`) e para de chamar até o
+   `Retry-After`: com IP banido (418) para TUDO (insistir aumenta o ban); no limite de
+   requisições (429) para leitura e entrada, e deixa sair stop, fechamento e cancelamento
+   ([LIVE-13]: parar tudo deixava a posição nova sem stop durante a pausa).
 7. **Teto de nocional por ordem**, última linha antes da corretora: um bug de dimensionamento
    vira recusa, não ordem (`PLANO-LIVE` Fase 6). E `dry_run`: monta a ordem inteira, já
    arredondada, e não manda.
@@ -353,6 +355,17 @@ def _codigo(e, *codigos):
     return any(_re.search(_re.escape(c) + r"(?!\d)", txt) for c in codigos)
 
 
+def _so_reduz(nome, a, k):
+    """A chamada só tira exposição: cancelamento, ou ordem `reduceOnly`/`closePosition`."""
+    if nome in ("cancel_order", "cancel_all_orders"):
+        return True
+    if nome != "create_order":
+        return False
+    p = k.get("params") if "params" in k else (a[5] if len(a) > 5 else None)
+    p = p if isinstance(p, dict) else {}
+    return bool(p.get("reduceOnly") or p.get("closePosition"))
+
+
 class _Cliente:
     """O cliente ccxt com a regra 9 do módulo: TODA chamada à Binance passa por aqui, inclusive
     leitura, busca depois de timeout e o pânico. Traduzir só no `_enviar` deixaria a
@@ -387,7 +400,8 @@ class BinanceUSDM:
             raise ValueError(f"modo inválido: {modo!r}")
         if not nocional_max or float(nocional_max) <= 0:
             raise ValueError("nocional_max é obrigatório e positivo: sem teto, sem ordem")
-        self._pausa_ate = 0.0           # monotonic: até quando nada vai à Binance (limite de taxa)
+        self._pausa_ate = 0.0           # monotonic: até quando nada vai à Binance (IP banido)
+        self._pausa_abrir_ate = 0.0     # até quando só sai o que reduz (limite de requisições)
         self.bloqueio_entrada = None    # regra 8: o motivo de não ABRIR nada, ou None
         self.chave_conferida_em = None  # monotonic da última conferência da chave
         self.aceita_sem_ip = bool(aceita_sem_ip)  # [LIVE-11] só pelo corretora.env (`obter`)
@@ -420,11 +434,14 @@ class BinanceUSDM:
 
     def _chamar(self, nome, fn, a, k):
         """Regra 9. `-2015` vira `ChaveRecusada`; `-1021` ressincroniza o relógio e repete UMA
-        vez (é recusa certa: nada foi executado, e o id repetido ainda cairia na busca); 418,
-        429, `-1003` e `-1015` param tudo até o `Retry-After`."""
+        vez (é recusa certa: nada foi executado, e o id repetido ainda cairia na busca); 418
+        para tudo até o `Retry-After`; 429, `-1003` e `-1015` param o que não reduz exposição."""
         import ccxt
         if nome not in _LOCAIS:
-            falta = self._pausa_ate - time.monotonic()
+            agora = time.monotonic()
+            falta = self._pausa_ate - agora
+            if not _so_reduz(nome, a, k):
+                falta = max(falta, self._pausa_abrir_ate - agora)
             if falta > 0:
                 raise LimiteDeTaxa(f"Binance em pausa por limite de requisições por mais {falta:.0f}s; "
                                    f"{nome} não foi enviado")
@@ -448,13 +465,20 @@ class BinanceUSDM:
                                         f"ressincronizar: {str(e)[:160]}") from e
                 if (isinstance(e, (ccxt.DDoSProtection, ccxt.RateLimitExceeded))
                         or _codigo(e, "-1003", "-1015")):
-                    pausa = self._pausar()
-                    raise LimiteDeTaxa(f"limite de requisições da Binance; nada sai pelos próximos "
-                                       f"{pausa:.0f}s: {str(e)[:160]}") from e
+                    # [LIVE-13] IP banido (418) para TUDO: insistir aumenta o ban. Limite de
+                    # requisições (429) para leitura e entrada, e deixa passar stop, fechamento
+                    # e cancelamento: parar tudo deixava a posição sem stop durante a pausa.
+                    ban = bool(_codigo(e, "418")) or "banned" in str(e).lower()
+                    pausa = self._pausar(total=ban)
+                    quem = ("IP banido; nada sai" if ban else
+                            "limite de requisições; só stop, fechamento e cancelamento saem")
+                    raise LimiteDeTaxa(f"Binance: {quem} pelos próximos {pausa:.0f}s: "
+                                       f"{str(e)[:160]}") from e
                 raise
 
-    def _pausar(self):
-        """Pausa global pelo `Retry-After` da resposta (segundos), ou `PAUSA_PADRAO_S`."""
+    def _pausar(self, total=True):
+        """Pausa pelo `Retry-After` da resposta (segundos), ou `PAUSA_PADRAO_S`. `total=False`
+        pausa só o que não reduz exposição (`_so_reduz`)."""
         cab = getattr(self.ex._ex, "last_response_headers", None) or {}
         pausa = None
         try:
@@ -464,7 +488,10 @@ class BinanceUSDM:
         except (TypeError, ValueError):
             pausa = None
         pausa = pausa if pausa and pausa > 0 else self.PAUSA_PADRAO_S
-        self._pausa_ate = max(self._pausa_ate, time.monotonic() + pausa)
+        if total:
+            self._pausa_ate = max(self._pausa_ate, time.monotonic() + pausa)
+        else:
+            self._pausa_abrir_ate = max(self._pausa_abrir_ate, time.monotonic() + pausa)
         log(f"corretora: limite de requisições da Binance; pausa de {pausa:.0f}s", "error")
         return pausa
 
@@ -929,19 +956,18 @@ class BinanceUSDM:
                 gravada = (lida or {}).get("ativacao")
             except Exception as e:
                 log(f"corretora: ativação de {o.get('client_oid')} não relida ({e})", "warning")
-        if gravada is None:
-            log(f"corretora: a Binance não devolveu a ativação de {o.get('client_oid')}; "
-                "não deu para conferir", "warning")
-            return
-        if abs(gravada - enviada) <= 1e-9 * max(1.0, abs(enviada)):
+        # [LIVE-13] Sem o campo nas duas leituras, NÃO dá para saber onde ativa: cancela, como
+        # se estivesse errada. O stop fixo continua; o demo provou que o campo volta no normal.
+        if gravada is not None and abs(gravada - enviada) <= 1e-9 * max(1.0, abs(enviada)):
             return
         try:
             self.cancelar(simbolo, o["id"], condicional=True)
         except Exception as e:
             log(f"corretora: trailing {o.get('client_oid')} com ativação errada NÃO cancelou ({e})",
                 "error")
-        raise OrdemRecusada(f"trailing {o.get('client_oid')}: a Binance gravou ativação {gravada}, "
-                            f"enviada {enviada}; cancelado")
+        raise OrdemRecusada(f"trailing {o.get('client_oid')}: a Binance gravou ativação "
+                            f"{'(não devolvida)' if gravada is None else gravada}, enviada "
+                            f"{enviada}; cancelado")
 
     def mover_stop(self, simbolo, ordem, novo_gatilho, novo_client_oid, qty=None):
         """Coloca o stop NOVO e só então cancela o antigo. A ordem inversa (cancelar e depois

@@ -329,6 +329,7 @@ def conta(banco, sem_rede, monkeypatch):
     execucao.usar(f)
     for d in (execucao._escrita, execucao._falta_fill, execucao._avisado, execucao._recusas):
         d.clear()
+    execucao._queda_saldo["n"] = 0
     execucao._reconciliado["mono"] = None
     execucao.reconciliar()
     yield f
@@ -787,6 +788,8 @@ def test_leitura_da_conta_falhou_a_reconciliacao_falha_e_a_conta_para_de_abrir(c
 
 def test_dinheiro_que_saiu_por_fora_desce_a_banca_do_livro(conta):
     conta.carteira -= 300.0                                       # saque
+    execucao.reconciliar()
+    assert _banca() == pytest.approx(1000.0)                      # [LIVE-13] um ciclo: espera
     execucao.reconciliar()
     assert _banca() == pytest.approx(700.0)
     conta.carteira += 5000.0                                      # depósito NÃO sobe a banca
@@ -1406,7 +1409,8 @@ def test_panico_com_recusa_que_nao_e_a_do_reduce_only_e_falha(conta):
     conta.fechar_mercado = protege_o_preco
     r = execucao.panico()
     assert "ETH/USDT" in conta.pos
-    assert [f["ativo"] for f in r["falhas"]] == ["ETH/USDT"] and not r["varridas"]
+    assert {f["ativo"] for f in r["falhas"]} == {"ETH/USDT"} and not r["varridas"]
+    assert any("SEM STOP" in f["erro"] for f in r["falhas"])      # de fora do livro: sem stop
 
 
 def test_panico_confere_a_conta_no_fim_e_acusa_o_que_ficou(conta):
@@ -2224,6 +2228,92 @@ def test_a_conta_real_chega_pelo_repasse_da_A_e_so_por_ela(banco, monkeypatch):
             assert cli.get("/testeR/estado", headers={"Authorization": cred}).status_code == 404
     finally:
         srv.shutdown()
+
+
+def _recusa_fechar(conta, parcial_na_varredura=False):
+    """O `fechar_mercado` recusa com proteção de preço (-4131) o fechamento do livro; na
+    varredura, recusa de novo ou executa só metade e o resto expira."""
+    orig = conta.fechar_mercado
+    vez = {"n": 0}
+
+    def fm(simbolo, direcao, qty, coid):
+        vez["n"] += 1
+        if vez["n"] == 1 or not parcial_na_varredura:
+            conta.chamadas.append("fechar_mercado")
+            raise C.OrdemRecusada("binance -4131 The counterparty's best price does not meet "
+                                  "the PERCENT_PRICE filter limit.")
+        o = orig(simbolo, direcao, qty / 2, coid)
+        o.update(status="expirada", qty=qty)
+        return o
+    conta.fechar_mercado = fm
+
+
+def test_panico_que_nao_fecha_nao_cancela_o_stop(conta):
+    """[LIVE-13] Revisão de 26/11: o laço final do pânico cancelava o stop de toda ordem nossa,
+    inclusive da posição que ele NÃO conseguiu fechar. Ela ficava aberta e nua, e com o
+    `panico.sh` a unit fica parada, sem reconciliação para repor."""
+    _abrir(conta)
+    _recusa_fechar(conta)
+    r = execucao.panico()
+    assert "BTC/USDT" in conta.pos
+    assert [o for o in conta.abertas() if o["tipo"] == "STOP_MARKET"]        # o stop ficou
+    assert r["falhas"] and not any("SEM STOP" in f["erro"] for f in r["falhas"])
+
+
+def test_varredura_que_executa_so_parte_nao_tira_o_stop_do_resto(conta):
+    _abrir(conta)
+    _recusa_fechar(conta, parcial_na_varredura=True)
+    r = execucao.panico()
+    assert conta.pos["BTC/USDT"]["qty"] == pytest.approx(0.5)
+    assert [o for o in conta.abertas() if o["tipo"] == "STOP_MARKET"]
+    assert not r["varridas"] and any("só 0.5" in f["erro"] for f in r["falhas"])
+
+
+def test_panico_diz_quando_a_posicao_que_sobrou_esta_sem_stop(conta):
+    _abrir(conta)
+    _recusa_fechar(conta)
+    for o in conta.abertas():
+        o_ = conta.ordens[o["id"]]
+        o_["status"] = "cancelada"                                         # alguém tirou o stop
+    r = execucao.panico()
+    assert any("SEM STOP" in f["erro"] for f in r["falhas"])
+
+
+def test_carteira_le_antes_das_posicoes_e_ajusta_so_na_segunda_vez(conta):
+    """[LIVE-13] Um stop que executasse entre a leitura das posições e a do saldo entrava duas
+    vezes na banca (ajuste + saída). Saldo primeiro, e o ajuste só com a diferença em dois
+    ciclos completos seguidos."""
+    execucao._queda_saldo["n"] = 0
+    banca = db.get_banca()["atual"]
+    conta.carteira = banca - 100.0
+    conta.chamadas.clear()
+    execucao.reconciliar()
+    assert conta.chamadas.index("saldo") < conta.chamadas.index("posicoes")
+    assert db.get_banca()["atual"] == pytest.approx(banca)                 # um ciclo: espera
+    execucao.reconciliar()
+    assert db.get_banca()["atual"] == pytest.approx(banca - 100.0)         # dois: ajusta
+
+
+def test_carteira_que_volta_zera_a_contagem(conta):
+    execucao._queda_saldo["n"] = 0
+    banca = db.get_banca()["atual"]
+    conta.carteira = banca - 100.0
+    execucao.reconciliar()
+    conta.carteira = banca
+    execucao.reconciliar()
+    conta.carteira = banca - 100.0
+    execucao.reconciliar()
+    assert db.get_banca()["atual"] == pytest.approx(banca)
+
+
+def test_panico_pela_linha_de_comando_com_banco_que_nao_existe(conta, monkeypatch, tmp_path, capsys):
+    """[LIVE-13] O `init_db` criava um banco novo em papel no caminho errado, e o pânico saía 0
+    dizendo "nada a fazer" sem tocar a corretora."""
+    falso = tmp_path / "nao-existe" / "trading.db"
+    monkeypatch.setattr(db, "DB", str(falso))
+    assert execucao._cli(["panico"]) == 2
+    assert execucao._cli(["estado"]) == 2
+    assert not falso.exists() and "NADA foi feito" in capsys.readouterr().out
 
 
 def test_panico_pela_linha_de_comando_desliga_cancela_e_fecha(conta, capsys):
