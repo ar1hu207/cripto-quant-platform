@@ -30,6 +30,7 @@ class _ExFake:
         self.seq = 1000
         self.margem = {}
         self.lev = {}
+        self.hedge = False
         self.restricoes = {"enableWithdrawals": False, "enableInternalTransfer": False,
                            "permitsUniversalTransfer": False, "ipRestrict": True, "enableFutures": True}
         self.relogio_sincronizado = 0
@@ -39,7 +40,11 @@ class _ExFake:
         return {"id": s.split("/")[0] + "USDT", "limits": {"amount": {"min": 0.01}, "cost": {"min": 5.0}}}
 
     def amount_to_precision(self, s, q):
-        return str(int(float(q) * 100) / 100)           # trunca, como o ccxt (TRUNCATE)
+        n = int(float(q) * 100)                         # trunca, como o ccxt (TRUNCATE)
+        if n <= 0:                                      # ccxt 4.5: levanta, não devolve "0"
+            raise ccxt.InvalidOrder(f"binanceusdm amount of {s} must be greater than minimum "
+                                    "amount precision of 0.01")
+        return str(n / 100)
 
     def price_to_precision(self, s, p):
         return f"{float(p):.2f}"
@@ -54,6 +59,8 @@ class _ExFake:
     def create_order(self, s, tipo, lado, qty, preco, params):
         self.chamadas.append(("create_order", s, tipo, lado, qty, preco, dict(params)))
         coid = params["newClientOrderId"]
+        if getattr(self, "falha_no_envio", None) is not None:
+            raise self.falha_no_envio
         if self.timeout_perde:
             raise ccxt.RequestTimeout("timeout")
         if coid in self.coids:                                         # demo: -4116
@@ -153,7 +160,12 @@ class _ExFake:
         self.lev[s] = lev
 
     def fetch_balance(self):
-        return {"USDT": {"free": 200.0, "total": 205.0}, "info": {"totalUnrealizedProfit": "5.0"}}
+        return {"USDT": {"free": 200.0, "total": 205.0},
+                "info": {"totalUnrealizedProfit": "5.0", "totalWalletBalance": "200.0",
+                         "totalMarginBalance": "205.0"}}
+
+    def fapiPrivateGetPositionSideDual(self, params=None):
+        return {"dualSidePosition": self.hedge}
 
     def fetch_positions(self, simbolos=None):
         if self.posicao:
@@ -306,6 +318,80 @@ def test_timeout_em_condicional_busca_pelo_id_de_algo():
     assert o["condicional"] and o["client_oid"] == "i4"
     busca = [c for c in ex.chamadas if c[0] == "fetch_order"][-1]
     assert busca[3] == {"trigger": True, "clientAlgoId": "i4"}
+
+
+def test_resto_de_subtracao_nao_perde_um_lote():
+    """`0.3 - 0.1` é `0.19999999999999998` em float. Truncado cru vira 0,19: um lote a menos no
+    stop ou no fechamento, que ficaria aberto e sem proteção."""
+    ex = _ExFake()
+    c = _bin(ex)
+    assert c.arredondar("SOL/USDT", 0.3 - 0.1, reduz=True)[0] == 0.2
+    ex.posicao = 0.2
+    c.fechar_mercado("SOL/USDT", "LONG", 0.3 - 0.1, "x1")
+    c.colocar_stop("SOL/USDT", "LONG", 95.0, "s1", qty=0.3 - 0.1)
+    assert [x[4] for x in _creates(ex)] == [0.2, 0.2]
+    assert c.arredondar("SOL/USDT", 0.2999, reduz=True)[0] == 0.29     # e não arredonda para cima
+
+
+def test_menos_que_um_lote_e_abaixo_do_minimo_e_nao_erro_cru_do_ccxt():
+    ex = _ExFake()
+    c = _bin(ex)
+    with pytest.raises(C.AbaixoDoMinimo):
+        c.arredondar("SOL/USDT", 0.004, reduz=True)
+    with pytest.raises(C.AbaixoDoMinimo):
+        c.colocar_tp("SOL/USDT", "LONG", 110.0, 0.004, "t1")
+    assert not _creates(ex)
+
+
+def test_erro_de_operacao_que_nao_e_de_rede_tambem_e_envio_incerto():
+    """-1000/-1001/-1006/-1008 da Binance chegam como `OperationFailed`, que não é
+    `NetworkError` nem `ExchangeError`: subiam crus."""
+    ex = _ExFake()
+    ex.falha_no_envio = ccxt.OperationFailed('binanceusdm {"code":-1001,"msg":"Internal error"}')
+    with pytest.raises(C.EnvioIncerto):
+        _bin(ex).abrir_mercado("SOL/USDT", "LONG", 0.5, "e1")
+
+
+def test_ordem_morta_com_o_mesmo_id_nao_confirma_o_envio():
+    """O envio falhou e a busca acha uma ordem CANCELADA com o id: não é a resposta deste envio.
+    Devolvê-la faria o `mover_stop` cancelar o stop bom por causa de um que não existe."""
+    ex = _ExFake()
+    c = _bin(ex)
+    morto = c.colocar_stop("SOL/USDT", "LONG", 95.0, "s1", qty=0.5)
+    c.cancelar("SOL/USDT", morto["id"], condicional=True)
+    ex.timeout_perde = True
+    with pytest.raises(C.EnvioIncerto):
+        c.colocar_stop("SOL/USDT", "LONG", 96.0, "s1", qty=0.5)
+    ex.timeout_perde = False
+    with pytest.raises(C.OrdemRecusada):                               # -4116 de id já usado
+        c.colocar_stop("SOL/USDT", "LONG", 96.0, "s1", qty=0.5)
+
+
+def test_se_a_busca_depois_da_falha_tambem_falha_e_envio_incerto(monkeypatch):
+    ex = _ExFake(timeout_perde=True)
+    c = _bin(ex)
+
+    def sem_rede(*a, **k):
+        raise ccxt.RequestTimeout("x")
+    monkeypatch.setattr(ex, "fetch_order", sem_rede)
+    with pytest.raises(C.EnvioIncerto):
+        c.abrir_mercado("SOL/USDT", "LONG", 0.5, "e1")
+
+
+def test_mover_stop_nao_cancela_o_antigo_se_o_novo_voltou_morto(monkeypatch):
+    ex = _ExFake()
+    c = _bin(ex)
+    antigo = c.colocar_stop("SOL/USDT", "LONG", 95.0, "s1", qty=0.5)
+    monkeypatch.setattr(c, "colocar_stop", lambda *a, **k: {"id": "9", "status": "cancelada"})
+    with pytest.raises(C.ErroCorretora):
+        c.mover_stop("SOL/USDT", antigo, 96.0, "s2", qty=0.5)
+    assert not [x for x in ex.chamadas if x[0] == "cancel_order"]
+
+
+def test_trailing_ja_armado_vai_sem_preco_de_ativacao():
+    ex = _ExFake()
+    _bin(ex).colocar_trailing("SOL/USDT", "LONG", 0.5, None, 1.0, "r1")
+    assert "activationPrice" not in _creates(ex)[0][6]
 
 
 def test_ordem_sem_client_oid_nao_sai():
@@ -496,7 +582,15 @@ def test_preparar_simbolo_isola_aplica_lev_e_cacheia():
 
 def test_saldo_posicoes_fills_income_normalizados():
     b = _bin()
-    assert b.saldo() == {"livre": 200.0, "total": 205.0, "unrealized": 5.0}
+    # `carteira` e `equity` vêm dos campos da Binance, não de somar `total` com `unrealized`:
+    # o `total` do ccxt aqui JÁ inclui os 5 de não realizado, e somar de novo daria 210.
+    assert b.saldo() == {"livre": 200.0, "total": 205.0, "unrealized": 5.0,
+                         "carteira": 200.0, "equity": 205.0}
+    assert b.hedge() is False
+    b.ex.hedge = True
+    assert b.hedge() is True
+    b.ex.fapiPrivateGetPositionSideDual = lambda params=None: (_ for _ in ()).throw(ConnectionError("x"))
+    assert b.hedge() is None                                 # não leu: quem diz é a primeira ordem
     (p,) = b.posicoes()
     assert (p["simbolo"], p["direcao"], p["qty"], p["liq"], p["margem_modo"]) == ("SOL/USDT", "LONG", 0.08, 58.15, "isolated")
     (f,) = b.fills("SOL/USDT")

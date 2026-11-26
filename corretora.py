@@ -109,6 +109,14 @@ def ms_para_sp(ms):
     return pd.Timestamp(int(ms), unit="ms", tz="UTC").tz_convert(FUSO).tz_localize(None)
 
 
+def sp_para_ms(ts):
+    """`pd.Timestamp` naive em hora de São Paulo (o banco) -> ms UTC (a corretora). A volta do
+    `ms_para_sp`, com o fuso ESCRITO: não depende do fuso da máquina onde o processo roda."""
+    if ts is None:
+        return None
+    return int(pd.Timestamp(ts).tz_localize(FUSO).timestamp() * 1000)
+
+
 def _direcao(d):
     d = str(d).upper()
     if d not in DIRECOES:
@@ -191,7 +199,10 @@ class Papel:
 
     def saldo(self):
         s = self._saldo() if self._saldo else None
-        return {"livre": s, "total": s, "unrealized": 0.0}
+        return {"livre": s, "total": s, "unrealized": 0.0, "carteira": s, "equity": s}
+
+    def hedge(self):
+        return False
 
     def posicoes(self):
         return []                       # no papel a posição é a linha do banco
@@ -205,8 +216,11 @@ class Papel:
     def preparar_simbolo(self, simbolo, alavancagem):
         return None
 
-    def arredondar(self, simbolo, qty, preco=None):
+    def arredondar(self, simbolo, qty, preco=None, reduz=False):
         return qty, preco
+
+    def preco_valido(self, simbolo, preco):
+        return preco
 
     def abrir_mercado(self, simbolo, direcao, qty, client_oid):
         px = self._preco(base(simbolo))
@@ -245,9 +259,9 @@ class Papel:
         o["gatilho"] = ativacao
         return o
 
-    def mover_stop(self, simbolo, ordem, novo_gatilho, novo_client_oid):
+    def mover_stop(self, simbolo, ordem, novo_gatilho, novo_client_oid, qty=None):
         return self.colocar_stop(simbolo, "LONG" if ordem.get("lado") == "sell" else "SHORT",
-                                 novo_gatilho, novo_client_oid, qty=ordem.get("qty"))
+                                 novo_gatilho, novo_client_oid, qty=qty or ordem.get("qty"))
 
     def cancelar(self, simbolo, ordem_id, condicional=False):
         return True
@@ -256,6 +270,9 @@ class Papel:
         return 0
 
     def buscar(self, simbolo, client_oid, condicional=False):
+        return None
+
+    def buscar_por_id(self, simbolo, ordem_id):
         return None
 
     def fills(self, simbolo, desde_ms=None):
@@ -317,11 +334,30 @@ class BinanceUSDM:
     # -------------------------------------------------------------- leitura
 
     def saldo(self):
+        """`carteira` é o saldo sem o não realizado e `equity` é com ele, lidos dos campos da
+        própria Binance (`totalWalletBalance`, `totalMarginBalance`). O `total` do ccxt fica por
+        compatibilidade e NÃO se soma ao `unrealized`: conforme a versão ele já o inclui."""
         b = self.ex.fetch_balance()
         u = b.get("USDT") or {}
         info = b.get("info") or {}
-        return {"livre": _f(u.get("free")), "total": _f(u.get("total")),
-                "unrealized": _f(info.get("totalUnrealizedProfit")) or 0.0}
+        unreal = _f(info.get("totalUnrealizedProfit")) or 0.0
+        carteira = _f(info.get("totalWalletBalance"))
+        equity = _f(info.get("totalMarginBalance"))
+        if equity is None and carteira is not None:
+            equity = carteira + unreal
+        return {"livre": _f(u.get("free")), "total": _f(u.get("total")), "unrealized": unreal,
+                "carteira": carteira if carteira is not None else _f(u.get("total")),
+                "equity": equity}
+
+    def hedge(self):
+        """True se a conta está em Hedge Mode (posição nos dois lados), False em One-way, None
+        se não deu para ler. Este adapter só opera One-way: não manda `positionSide`."""
+        try:
+            r = self.ex.fapiPrivateGetPositionSideDual()
+            return str(r.get("dualSidePosition")).lower() == "true"
+        except Exception as e:
+            log(f"corretora: modo de posição não lido ({type(e).__name__}: {e})", "warning")
+            return None
 
     def posicoes(self):
         out = []
@@ -371,6 +407,16 @@ class BinanceUSDM:
                   else {"origClientOrderId": client_oid})
         try:
             return normalizar_ordem(self.ex.fetch_order(None, perp(simbolo), params))
+        except ccxt.OrderNotFound:
+            return None
+
+    def buscar_por_id(self, simbolo, ordem_id):
+        """A ordem NORMAL com este id da corretora, ou None. É como se descobre de quem foi um
+        fechamento que o bot não mandou: a liquidação chega com `client_oid` começando em
+        `autoclose-`, e a redução forçada (ADL) em `adl_autoclose`."""
+        import ccxt
+        try:
+            return normalizar_ordem(self.ex.fetch_order(str(ordem_id), perp(simbolo)))
         except ccxt.OrderNotFound:
             return None
 
@@ -445,18 +491,45 @@ class BinanceUSDM:
             self._preparados[s] = lev
         return lev
 
-    def arredondar(self, simbolo, qty, preco=None):
+    def preco_valido(self, simbolo, preco):
+        """O preço no passo que a corretora aceita. O livro grava ESTE número como stop, para
+        que o gatilho do banco e o da corretora sejam o mesmo."""
+        return float(self.ex.price_to_precision(perp(simbolo), preco))
+
+    def _lote(self, simbolo, qty):
+        """`qty` truncada para o lote do símbolo, sem perder um lote para o ponto flutuante.
+
+        O ccxt trunca pelo texto do número: `0.062 - 0.021` é `0.040999999999999995` e sairia
+        `0.040`, um lote a menos. Num stop ou num fechamento, esse lote ficaria aberto e sem
+        proteção. A folga de 1e-9 (relativa) é mil vezes maior que o resíduo de uma conta em
+        float e um milhão de vezes menor que qualquer lote: absorve o ruído e não arredonda
+        para cima quantidade nenhuma que alguém tenha pedido.
+
+        Quando o resultado é zero o ccxt levanta `InvalidOrder` em vez de devolver "0": aqui
+        vira `AbaixoDoMinimo`, que é o que quem chama sabe tratar."""
+        import ccxt
+        try:
+            return float(self.ex.amount_to_precision(perp(simbolo), float(qty) * (1 + 1e-9)))
+        except ccxt.InvalidOrder as e:
+            raise AbaixoDoMinimo(f"{simbolo}: qty {qty} não chega a um lote ({e})") from e
+
+    def arredondar(self, simbolo, qty, preco=None, reduz=False):
         """Quantidade e preço como VÃO ser enviados (truncados para baixo pelo ccxt). Abaixo do
-        lote mínimo ou do nocional mínimo: `AbaixoDoMinimo`, nunca arredonda para cima."""
+        lote mínimo ou do nocional mínimo: `AbaixoDoMinimo`, nunca arredonda para cima.
+
+        `reduz=True` é para ordem que só fecha (TP, fechamento parcial): a Binance não aplica
+        o nocional mínimo a ordem reduce-only, só o lote."""
         s = perp(simbolo)
         m = self._mercado(simbolo)
-        q = float(self.ex.amount_to_precision(s, qty))
+        q = self._lote(simbolo, qty)
         p = float(self.ex.price_to_precision(s, preco)) if preco is not None else None
         lim = m.get("limits") or {}
         qmin = _f((lim.get("amount") or {}).get("min")) or 0.0
         cmin = _f((lim.get("cost") or {}).get("min")) or 0.0
         if q <= 0 or q < qmin:
             raise AbaixoDoMinimo(f"{simbolo}: qty {qty} vira {q}, lote mínimo {qmin}")
+        if reduz:
+            return q, p
         ref = p if p is not None else self._mark(simbolo)
         if cmin and q * ref < cmin:
             raise AbaixoDoMinimo(f"{simbolo}: nocional {q * ref:.2f} < mínimo {cmin}")
@@ -471,6 +544,8 @@ class BinanceUSDM:
         if not client_oid:
             raise ValueError("toda ordem leva client_oid (regra 5)")
         s = perp(simbolo)
+        if qty is not None:
+            qty = self._lote(simbolo, qty)              # o que VAI, sem resíduo de ponto flutuante
         if com_teto and qty is not None:
             ref = ref_preco or preco or self._mark(simbolo)
             nocional = float(qty) * float(ref)
@@ -494,12 +569,15 @@ class BinanceUSDM:
             raise OrdemRecusada(str(e)) from e
         except (ccxt.InvalidOrder, ccxt.DuplicateOrderId) as e:
             if "-4116" in str(e) or isinstance(e, ccxt.DuplicateOrderId):
-                achada = self.buscar(simbolo, client_oid, condicional)   # já foi: devolve a mesma
+                achada = self._achar_viva(simbolo, client_oid, condicional)   # já foi: devolve a mesma
                 if achada:
                     return achada
             raise OrdemRecusada(str(e)) from e
-        except ccxt.NetworkError as e:                  # inclui RequestTimeout
-            achada = self.buscar(simbolo, client_oid, condicional)
+        except getattr(ccxt, "OperationFailed", ccxt.NetworkError) as e:
+            # `OperationFailed` é a mãe do `NetworkError` (timeout, 5xx) e é também onde o ccxt
+            # põe os -1000/-1001/-1006/-1008 da Binance ("não sei se executei"): todos são
+            # envio incerto, e nenhum pode subir cru para quem chamou.
+            achada = self._achar_viva(simbolo, client_oid, condicional)
             if achada:
                 log(f"corretora: rede falhou no envio de {client_oid}, mas a ordem existe", "warning")
                 return achada
@@ -507,6 +585,23 @@ class BinanceUSDM:
         except ccxt.ExchangeError as e:
             raise OrdemRecusada(str(e)) from e
         return normalizar_ordem(o)
+
+    def _achar_viva(self, simbolo, client_oid, condicional):
+        """A ordem com este id, se ela serve de resposta para o envio que acabou de falhar: viva
+        (aberta, parcial) ou executada. Uma ordem MORTA com o mesmo id (cancelada, expirada,
+        rejeitada) não confirma nada: devolvê-la faria o `mover_stop` cancelar o stop bom por
+        causa de um stop que não existe. A própria busca pode falhar (a rede já estava ruim):
+        isso também é "não sei", nunca exceção crua."""
+        try:
+            achada = self.buscar(simbolo, client_oid, condicional)
+        except Exception as e:
+            log(f"corretora: busca de {client_oid} depois da falha também falhou ({e})", "warning")
+            return None
+        if achada and achada.get("status") in ("cancelada", "expirada", "rejeitada"):
+            log(f"corretora: {client_oid} existe mas está {achada.get('status')}; não confirma "
+                "o envio", "warning")
+            return None
+        return achada
 
     def abrir_mercado(self, simbolo, direcao, qty, client_oid):
         d = _direcao(direcao)
@@ -565,13 +660,18 @@ class BinanceUSDM:
 
     def colocar_trailing(self, simbolo, direcao, qty, ativacao, callback_pct, client_oid):
         """Trailing nativo: ativa em `ativacao` e devolve `callback_pct`% do melhor preço. É o que
-        segue a posição de noite. Aproximação declarada: o do bot é em R/ATR, este é em %."""
+        segue a posição de noite. Aproximação declarada: o do bot é em R/ATR, este é em %.
+
+        `ativacao=None` = já está armado: o campo não vai, e a Binance ativa no preço do momento.
+        Mandar o preço de agora como ativação é recusado metade das vezes (`-2021`): para ela a
+        ativação tem de estar do lado que o preço ainda não alcançou."""
         d = _direcao(direcao)
         cb = round(float(callback_pct), 1)
         if not 0.1 <= cb <= 10:
             raise OrdemRecusada(f"callback {callback_pct}% fora de [0,1; 10]")
-        p = {"activationPrice": self.ex.price_to_precision(perp(simbolo), ativacao),
-             "callbackRate": cb, "workingType": "MARK_PRICE", "reduceOnly": True}
+        p = {"callbackRate": cb, "workingType": "MARK_PRICE", "reduceOnly": True}
+        if ativacao is not None:
+            p["activationPrice"] = self.ex.price_to_precision(perp(simbolo), ativacao)
         return self._enviar_sem_teto(simbolo, "TRAILING_STOP_MARKET", _FECHA[d], qty, None, p,
                                      client_oid, condicional=True)
 
@@ -600,6 +700,10 @@ class BinanceUSDM:
         novo = self.colocar_stop(simbolo, direcao, novo_gatilho, novo_client_oid, qty=qty)
         if novo.get("id") == ordem.get("id"):
             return novo
+        if novo.get("status") in ("cancelada", "expirada", "rejeitada"):
+            # o antigo só sai quando o novo está de pé
+            raise ErroCorretora(f"mover_stop {simbolo}: o stop novo voltou {novo.get('status')}; "
+                                "o antigo fica")
         if not self.cancelar(simbolo, ordem["id"], condicional=True):
             log(f"corretora: stop antigo {ordem.get('client_oid')} já não existia ao mover", "warning")
         return novo
