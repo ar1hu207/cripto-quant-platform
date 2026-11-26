@@ -145,7 +145,7 @@
   var html = css + '<div class="v-painel">' +
     '<section class="kpis" aria-label="Conta">' +
       '<div class="kpi"><div class="kpi-lbl">Equity</div><div class="kpi-val" id="pn-eq">—</div><div class="kpi-sub" id="pn-eq-s">—</div></div>' +
-      '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">P&amp;L do dia</div><div class="kpi-val" id="pn-dia">—</div><div class="kpi-sub" id="pn-dia-s" title="P&amp;L do dia = equity de agora − equity do primeiro retrato do dia (a mesma base da trava). São duas partes: o que FECHOU hoje (inclusive a parte de ontem de um trade que atravessou a meia-noite) e quanto o P&amp;L das posições abertas andou desde 00h.">—</div></div>' +
+      '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">P&amp;L do dia</div><div class="kpi-val" id="pn-dia">—</div><div class="kpi-sub" id="pn-dia-s" title="P&amp;L do dia = equity de agora − equity do primeiro retrato do dia (a mesma base da trava). São três parcelas que somam: o que FECHOU hoje (o trade inteiro, inclusive a parte de antes da meia-noite), o P&amp;L em aberto agora, e menos o P&amp;L que já estava em aberto às 00h (esse já contou no equity de ontem).">—</div></div>' +
       '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">P&amp;L do mês</div><div class="kpi-val" id="pn-mes">—</div><div class="kpi-sub" id="pn-mes-s">—</div></div>' +
       '<div class="kpi"><span class="kpi-div" aria-hidden="true"></span><div class="kpi-lbl">Win rate</div><div class="kpi-val" id="pn-wr">—</div><div class="kpi-sub" id="pn-wr-s">—</div></div>' +
     '</section>' +
@@ -201,8 +201,14 @@
        o "hoje" do Dia a dia, que é só o FECHADO, e a tela não dizia por quê: um trade aberto ontem que fecha
        hoje entra inteiro no fechado, mas a parte dele que andou até 00h já estava no equity de ontem. A
        identidade é exata: pnl_dia = realizado_hoje + (P&L aberto agora − P&L aberto às 00h). */
-    var real = rg.realizado_hoje || 0, dAb = Math.round((pd - real) * 100) / 100;
-    $('pn-dia-s').innerHTML = 'fechado hoje <span class="' + F.cls(real) + '">' + F.money(real) + '</span> · aberto <span class="' + F.cls(dAb) + '">' + F.money(dAb) + '</span> desde 00h';
+    /* A diferença (pd − real) aparecia como "aberto −R$ 15,66 desde 00h" com as posições abertas em
+       +R$ 74: o dono leu como "o aberto é −15,66". As três parcelas agora são números que estão na tela
+       (fechado, aberto agora) mais o que já estava em aberto às 00h e entrou no equity de ontem, com sinal
+       de contribuição para que somem: pd = real + unrealAgora − aberto00h. */
+    var real = rg.realizado_hoje || 0, unrealD = eq - ((e.banca || {}).atual || 0);
+    var ontem = Math.round((pd - real - unrealD) * 100) / 100;
+    $('pn-dia-s').innerHTML = 'fechado hoje <span class="' + F.cls(real) + '">' + F.money(real) + '</span> · em aberto <span class="' + F.cls(unrealD) + '">' + F.money(unrealD) + '</span>' +
+      (Math.abs(ontem) >= 0.01 ? ' · <span title="P&amp;L que já estava em aberto às 00h: entrou no equity de ontem, então sai do dia de hoje.">' + F.money(ontem) + ' que já era de ontem</span>' : '');
     A.contar(d, pd, function (v) { return cur(v, true) + '<span class="pct">' + (base > 0 ? F.pct(pd / base * 100) : '') + '</span>'; });
     /* mês: equity de agora contra o último ponto da curva ANTES do dia 1. Sem ponto antes (curva nasceu
        neste mês, ou reset), compara com o primeiro ponto e o rótulo diz desde quando. */

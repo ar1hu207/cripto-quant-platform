@@ -353,12 +353,13 @@
       A.contar($('p-eq'), eq, function (v) { return cur(v); });
       /* P&L do dia = equity agora − 1º retrato do dia (a base da trava). Decomposto como no desktop:
          pnl_dia = fechado hoje + (aberto agora − aberto às 00h). */
-      var real = rg.realizado_hoje || 0, dAb = Math.round((pd - real) * 100) / 100;
+      var real = rg.realizado_hoje || 0;
       var mes = M.mes, mesTxt = mes ? F.money(mes.pnl) + ' · ' + F.pct(((e.banca || {}).atual || 0) - mes.pnl > 0 ? mes.pnl / (((e.banca || {}).atual || 0) - mes.pnl) * 100 : 0) + ' no mês' : 'mês …';
       $('p-chips').innerHTML = '<span class="chip lg ' + (pd > 0 ? 'long' : pd < 0 ? 'short' : '') + '">' + F.money(pd) + (base > 0 ? ' · ' + F.pct(pd / base * 100) : '') + ' hoje</span>' +
         '<span class="chip lg' + (mes ? (mes.pnl > 0 ? ' long' : mes.pnl < 0 ? ' short' : '') : '') + '" title="P&L FECHADO no mês' + (mes && !mes.completo ? ', desde ' + mes.desde + ' (500 trades)' : '') + '">' + mesTxt + '</span>';
-      var unreal = eq - ((e.banca || {}).atual || 0);
-      $('p-dec').innerHTML = 'hoje: fechado <b class="' + F.cls(real) + '">' + F.money(real) + '</b> · aberto <b class="' + F.cls(dAb) + '">' + F.money(dAb) + '</b> desde 00h<br>em aberto agora <b class="' + F.cls(unreal) + '">' + F.money(unreal) + '</b> · mês = só o fechado';
+      var unreal = eq - ((e.banca || {}).atual || 0), ontem = Math.round((pd - real - unreal) * 100) / 100;
+      $('p-dec').innerHTML = 'hoje: fechado <b class="' + F.cls(real) + '">' + F.money(real) + '</b> · em aberto agora <b class="' + F.cls(unreal) + '">' + F.money(unreal) + '</b>' +
+        (Math.abs(ontem) >= 0.01 ? '<br>' + F.money(ontem) + ' que já era de ontem (aberto às 00h)' : '') + ' · mês = só o fechado';
       $('p-trava').innerHTML = travaHtml(e);
       var h = e.equity_hist || [], pico = h.reduce(function (a, x) { return Math.max(a, x.equity_total); }, eq), ddA = pico ? (eq / pico - 1) * 100 : 0;
       var on = String(cfg.auto_trade) === '1', payoff = m.perda_media ? Math.abs(m.ganho_medio / m.perda_media) : 0;
