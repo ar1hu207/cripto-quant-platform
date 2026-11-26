@@ -1334,6 +1334,28 @@ def cliente(conta):
     return TestClient(api.app, client=("127.0.0.1", 5555))
 
 
+def test_panico_desliga_cancela_la_e_fecha_tudo(cliente, conta):
+    db.set_config("auto_trade", "1", "teste")
+    _abrir(conta)
+    db.set_config("exec_modo", "post_only", "teste")
+    simulador.executar(semear_sinal(ativo="ETH/USDT"), 50.0, 2)
+    conta._abre("SOL/USDT", "LONG", 1.0, 100.0, conta._id(), Falsa.TAKER)   # fora do livro
+    j = cliente.post("/panico").json()
+    assert j["auto_desligado"] and db.get_config()["auto_trade"] == "0"
+    assert j["fechadas"] == 1 and j["ordens_canceladas"] == 1
+    assert not conta.pos and not conta.abertas()
+    assert _ordens()[-1]["status"] == "cancelada" and _pos()[0]["status"] == "fechada"
+
+
+def test_panico_com_a_ordem_ja_cheia_fecha_a_posicao_que_nasceu(cliente, conta):
+    db.set_config("exec_modo", "post_only", "teste")
+    simulador.executar(semear_sinal(), 50.0, 2)
+    conta.encher(conta.abertas("LIMIT")[0]["id"])                 # encheu e o ciclo ainda não viu
+    j = cliente.post("/panico").json()
+    assert not conta.pos and not conta.abertas()
+    assert j["fechadas"] == 1 and _trades()[0]["motivo_saida"] == "panico"
+
+
 def test_ordem_cancelada_pelo_panico_antes_do_envio_nao_vai_para_a_corretora(conta):
     sid = semear_sinal()
     simulador.executar(sid, 50.0, 2)
@@ -1347,6 +1369,35 @@ def test_ordem_cancelada_pelo_panico_antes_do_envio_nao_vai_para_a_corretora(con
     assert "ETH/USDT" not in conta.pos
 
 
+def test_reset_e_recusado_na_conta_em_corretora(cliente, conta):
+    pid, _ = _abrir(conta)
+    r = cliente.post("/reset", json={"confirmar": "RESET"})
+    assert r.status_code == 409 and _pos(pid)["status"] == "aberta"
+
+
+def test_banco_com_historico_de_dinheiro_real_nao_reseta_nem_em_papel(cliente, conta):
+    with db.conectar() as c:
+        c.execute("INSERT INTO trades(ativo,direcao,pnl_reais,corretora) VALUES('BTC/USDT','LONG',1,'binance')")
+    db.set_config("corretora", "papel", "teste")
+    r = cliente.post("/reset", json={"confirmar": "RESET"})
+    assert r.status_code == 409 and len(_trades()) == 1
+
+
+def test_status_publica_a_saude_da_conta(cliente, conta):
+    j = cliente.get("/status").json()
+    assert j["corretora"]["modo"] == "demo" and j["corretora"]["reconciliacoes"] >= 1
+
+
+def test_fechar_pela_rota_traduz_a_recusa_da_corretora(cliente, conta):
+    pid, _ = _abrir(conta)
+    conta.falhar["fechar_mercado"] = C.EnvioIncerto("timeout")
+    j = cliente.post("/fechar", json={"id": pid}).json()
+    assert j["ok"] is False and "reconciliação" in j["erro"]
+    assert _pos(pid)["status"] == "aberta" and len(conta.abertas("STOP_MARKET")) == 1
+
+
+# ---------------------------------------------------------------- a troca de modo
+
 @pytest.fixture
 def papel(banco, sem_rede, monkeypatch):
     """Banco em papel com a corretora falsa pronta para ser ligada pelo `POST /config`."""
@@ -1358,6 +1409,136 @@ def papel(banco, sem_rede, monkeypatch):
     monkeypatch.setenv("CORRETORA_HABILITADA", "1")
     yield TestClient(api.app, client=("127.0.0.1", 5555)), f
     execucao.usar(None)
+    import push
+    push.SIMBOLO = "R$"
+
+
+def test_trocar_para_demo_renasce_a_banca_no_menor_entre_saldo_e_alocado(papel):
+    cli, f = papel
+    r = cli.post("/config", json={"corretora": "demo", "banca_alocada": 200})
+    assert r.status_code == 200 and r.json()["corretora"] == "demo"
+    b = db.get_banca()
+    assert b["inicial"] == 200.0 and b["atual"] == 200.0          # saldo 5000, alocado 200
+    import push
+    assert push.SIMBOLO == "US$"
+
+
+def test_sem_a_variavel_da_instancia_a_troca_e_recusada(papel, monkeypatch):
+    cli, _ = papel
+    monkeypatch.delenv("CORRETORA_HABILITADA")
+    r = cli.post("/config", json={"corretora": "demo"})
+    assert r.status_code == 422 and db.get_config()["corretora"] == "papel"
+    assert db.get_banca()["atual"] == 1000.0
+
+
+def test_a_troca_exige_o_livro_vazio(papel):
+    cli, _ = papel
+    simulador.abrir(semear_sinal(), 50.0, 2)
+    r = cli.post("/config", json={"corretora": "demo"})
+    assert r.status_code == 422 and "posição" in str(r.json())
+    assert db.get_config()["corretora"] == "papel"
+
+
+def test_a_troca_recusa_livro_com_historico_de_outro_modo(papel):
+    cli, _ = papel
+    simulador.fechar(simulador.abrir(semear_sinal(), 50.0, 2), "manual")
+    r = cli.post("/config", json={"corretora": "demo"})
+    assert r.status_code == 422 and "histórico" in str(r.json())
+
+
+def test_a_troca_recusa_conta_com_posicao_ou_em_hedge(papel):
+    cli, f = papel
+    f.modo_hedge = True
+    assert cli.post("/config", json={"corretora": "demo"}).status_code == 422
+    f.modo_hedge = False
+    f._abre("BTC/USDT", "LONG", 1.0, 100.0, f._id(), 0.0)
+    assert cli.post("/config", json={"corretora": "demo"}).status_code == 422
+    assert db.get_config()["corretora"] == "papel"
+
+
+def test_binance_exige_teto_de_perda_total_e_canal_de_alerta(papel):
+    cli, _ = papel
+    r = cli.post("/config", json={"corretora": "binance"})
+    txt = str(r.json())
+    assert r.status_code == 422 and "perda_total_max" in txt and "canal de alerta" in txt
+    r = cli.post("/config", json={"corretora": "binance", "perda_total_max": 60})
+    assert r.status_code == 422 and "canal de alerta" in str(r.json())
+    r = cli.post("/config", json={"corretora": "binance", "perda_total_max": 60,
+                                  "telegram_token": "t", "telegram_chat_id": "1"})
+    assert r.status_code == 200 and db.get_config()["corretora"] == "binance"
+    # e, já em binance, não dá para zerar o teto nem apagar o canal
+    assert cli.post("/config", json={"perda_total_max": 0}).status_code == 422
+    assert cli.post("/config", json={"telegram_token": ""}).status_code == 422
+    assert db.get_config()["perda_total_max"] == "60.0"
+
+
+def test_estado_das_travas_nao_e_editavel_pelo_config(papel):
+    cli, _ = papel
+    assert cli.post("/config", json={"trava_total_em": ""}).status_code == 422
+    assert cli.post("/config", json={"corretora_ns": "abc"}).status_code == 422
+
+
+def test_hora_da_noite_e_validada(papel):
+    cli, _ = papel
+    assert cli.post("/config", json={"noite_inicio": "25:00"}).status_code == 422
+    assert cli.post("/config", json={"noite_inicio": "18:30", "noite_fim": "07:30"}).status_code == 200
+
+
+def test_dry_run_nao_liga_com_posicao_aberta_na_corretora(cliente, conta):
+    """Parece cautela e é o contrário: em dry_run nem o fechamento nem o pânico são enviados."""
+    _abrir(conta)
+    r = cliente.post("/config", json={"corretora_dry_run": 1})
+    assert r.status_code == 422 and db.get_config()["corretora_dry_run"] == "0"
+    simulador.fechar(_pos()[0]["id"], "manual")
+    assert cliente.post("/config", json={"corretora_dry_run": 1}).status_code == 200
+
+
+def test_voltar_ao_papel_exige_a_conta_vazia_la_tambem(cliente, conta):
+    conta._abre("SOL/USDT", "LONG", 1.0, 100.0, conta._id(), Falsa.TAKER)     # lá, fora do livro
+    r = cliente.post("/config", json={"corretora": "papel"})
+    assert r.status_code == 422 and db.get_config()["corretora"] == "demo"
+
+
+def test_estado_da_conta_em_corretora_traz_as_colunas_dela(cliente, conta):
+    _abrir(conta)
+    j = cliente.get("/estado").json()
+    assert j["posicoes"][0]["qty"] == 1.0 and j["posicoes"][0]["corretora"] == "demo"
+    assert "corretora_dry_run" in j["config"] and "noite_ativo" in j["config"]
+
+
+def test_a_troca_recusa_conta_com_ordem_aberta_de_antes(papel):
+    """Uma condicional reduce-only esquecida dispara na primeira posição que o bot abrir."""
+    cli, f = papel
+    f._nova("BTC/USDT", "sell", "STOP_MARKET", 1.0, "outrobanco-s1", condicional=True,
+            gatilho=90.0, reduce_only=True)
+    r = cli.post("/config", json={"corretora": "demo"})
+    assert r.status_code == 422 and db.get_config()["corretora"] == "papel"
+
+
+def test_estado_do_papel_nao_carrega_o_vazio_da_corretora(papel):
+    """O `/estado` é servido a cada 3 s nas quatro contas: no papel, as colunas e as chaves que
+    só a conta em corretora usa não viajam."""
+    cli, _ = papel
+    execucao.usar(None)
+    simulador.executar(semear_sinal(), 50.0, 2)
+    j = cli.get("/estado").json()
+    assert j["posicoes"] and j["config"]["corretora"] == "papel"
+    for chave in ("qty", "corretora", "stop_ext_id", "client_oid", "funding_pago"):
+        assert chave not in j["posicoes"][0]
+    for chave in ("corretora_dry_run", "banca_alocada", "noite_ativo", "corretora_ns"):
+        assert chave not in j["config"]
+    assert "corretora_dry_run" in cli.get("/config").json()       # a rota de config traz tudo
+
+
+def test_banco_em_modo_corretora_nao_sobe_em_instancia_de_papel(banco, monkeypatch):
+    import api
+    monkeypatch.delenv("CORRETORA_HABILITADA", raising=False)
+    api._guarda_corretora()                                       # papel: sobe
+    db.set_config("corretora", "binance", "teste")
+    with pytest.raises(RuntimeError, match="CORRETORA_HABILITADA"):
+        api._guarda_corretora()
+    monkeypatch.setenv("CORRETORA_HABILITADA", "1")
+    api._guarda_corretora()
     import push
     push.SIMBOLO = "R$"
 

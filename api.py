@@ -35,6 +35,7 @@ import signal_engine
 import mercado
 import dca
 import autotrader
+import execucao
 import logbot
 import push
 from logbot import log
@@ -141,6 +142,16 @@ def worker():
     log("worker iniciado")
     while _worker_on["v"]:
         try:
+            # [LIVE-4] Conta em corretora: o ciclo começa lendo a verdade de LÁ. Try próprio: uma
+            # leitura que falha não pode tirar do ciclo a marcação e o trailing das posições que
+            # já têm stop na corretora. O que a falha tira é a ENTRADA nova -- sem reconciliação
+            # recente `execucao._bloqueio_entrada` recusa abrir, e isso não depende deste try.
+            if execucao.real():
+                try:
+                    execucao.reconciliar()
+                except Exception as e:
+                    _health["erros"] += 1
+                    log(f"reconciliação com a corretora falhou: {type(e).__name__}: {e}", "error")
             simulador.processar_ordens()                # [EX-1] ordens post-only: enche ou expira
             simulador.atualizar()                       # marca/fecha posições no preço real
             # [F-9] o gestor de saída só roda no ciclo quando o auto-trader PODE agir sobre ele;
@@ -195,6 +206,7 @@ def worker():
 async def lifespan(app):
     _guarda_conta()                 # [AB-1] antes de abrir banco: conta B no banco da A não sobe
     db.init_db()
+    _guarda_corretora()             # [LIVE-4] banco em modo corretora só sobe na instância dela
     threading.Thread(target=worker, daemon=True).start()
     push.iniciar()                  # [PUSH-2] o relogio do resumo periodico; sem chave, no-op
     yield
@@ -301,6 +313,25 @@ def _guarda_conta():
         os.makedirs(pasta, exist_ok=True)
         with open(os.path.join(pasta, MARCA_CONTA), "w", encoding="utf-8") as f:
             f.write(CONTA + "\n")
+
+
+def _guarda_corretora():
+    """[LIVE-4] Um banco cuja config diz `corretora` != papel só sobe na instância que foi
+    posta para isso (`CORRETORA_HABILITADA=1` no `ExecStart` da unit dela).
+
+    As quatro contas leem o mesmo `.env`, então as chaves da Binance estão ao alcance de todas.
+    Sem esta recusa, restaurar o backup da conta real na pasta de uma conta de papel (ou apontar
+    o `DB_PATH` errado, o incidente de 10/11 do [AB-1]) faria um segundo processo mandar ordem
+    na mesma conta da corretora. Recusa o boot, e não "cai para papel": cair para papel deixaria
+    as posições reais do livro sendo marcadas e fechadas por preço, sem ordem nenhuma."""
+    modo = execucao.modo()
+    if modo != "papel" and not execucao.habilitada():
+        raise RuntimeError(f"conta {CONTA} recusada: o banco {db.DB} está em modo corretora "
+                           f"('{modo}') e esta instância não tem CORRETORA_HABILITADA=1. "
+                           "Só a instância da conta real opera em corretora.")
+    push.SIMBOLO = "US$" if modo != "papel" else "R$"
+
+
 # A senha tem 24 caracteres alfanuméricos (~10^43 combinações): força bruta é inviável
 # por construção, então o throttle serve para conter scanner barulhento, não como defesa
 # principal. Valores folgados porque o painel dispara ~5 requisições paralelas por ciclo
@@ -539,6 +570,21 @@ CONFIG_CATALOGO = {
     "recupera_lacuna_min":  ("float", 1.0, 1440.0),
     # [TD-1] filtro de lado pela tendência do diário (tendencia.py, T38)
     "tendencia_filtro":     ("enum", ("off", "d1", "d2")),
+    # [LIVE-2] conta em corretora (execucao.py). `corretora` é a chave que troca papel por
+    # ordem de verdade; o `POST /config` só a aceita na instância habilitada, com o livro vazio
+    # (`execucao.trocar_modo`). `trava_total_em` e `corretora_ns` são ESTADO e não estão aqui,
+    # pelo motivo da `trava_dia_em` logo abaixo: soltar o teto de perda total à mão é relaxar
+    # invariante, e trocar o prefixo dos ids deixaria órfãs as ordens que o livro tem na corretora.
+    "corretora":            ("enum", ("papel", "demo", "binance")),
+    "corretora_dry_run":    ("bool",),
+    "corretora_nocional_max": ("float", 5.0, 100000.0),
+    "banca_alocada":        ("float", 10.0, 1000000.0),
+    "perda_total_max":      ("float", 0.0, 1000000.0),     # 0 = sem teto (só aceito fora de `binance`)
+    "corretora_stop_adocao": ("float", 0.002, 0.2),
+    "corretora_trailing_passo_r": ("float", 0.02, 2.0),
+    "noite_ativo":          ("bool",),
+    "noite_inicio":         ("hora",),
+    "noite_fim":            ("hora",),
     # estado / integrações. `trava_dia_em` NÃO está aqui de propósito: limpar a trava à mão é
     # relaxar invariante (CLAUDE.md §2), e o `POST /config` a soltava no mesmo dia com um
     # `{"trava_dia_em": ""}`. Quem escreve nela é só `guarda_risco()` (trava) e o `/reset`.
@@ -781,6 +827,42 @@ CONFIG_RACIONAL = {
         "deles já tinham sido rompidos -- alvo mirado num nível que já não segurou nada. O "
         "replay T64 mediu o efeito no TP1 antes de ligar. Só vale para posição aberta depois "
         "da mudança: o plano de TP é calculado uma vez, na abertura."),
+    "corretora": (
+        "VIVO `papel` nas contas A, B e C, e é o padrão de todo banco novo. `demo` manda ordem "
+        "de verdade para a Binance Demo (dinheiro de mentira, API real); `binance` manda para a "
+        "conta real. Fora do papel o banco deixa de decidir o que aconteceu e passa a COPIAR o "
+        "que a corretora executou: stop, alvo e liquidação são ordens lá, e cada ciclo começa "
+        "reconciliando (`execucao.py`). A troca só é aceita na instância que sobe com "
+        "`CORRETORA_HABILITADA=1`, com o livro sem posição, sem ordem e sem histórico de outro "
+        "modo; `binance` exige ainda canal de alerta e `perda_total_max` > 0. Ligar isto é "
+        "decisão do dono (`toca-risco`)."),
+    "corretora_dry_run": (
+        "1 = a ordem é montada inteira (arredondamento, tetos, id) e registrada, e NÃO é "
+        "enviada. É o ensaio da chave real antes de valer: mostra o que o bot mandaria sem "
+        "mandar. Com ele ligado nenhuma posição nasce."),
+    "corretora_nocional_max": (
+        "VIVO 300 USDT por ordem, para a conta inicial de US$200. É a última linha: o tamanho "
+        "sai do risco por trade e dos tetos de exposição, e este número só morde se eles "
+        "falharem (um bug de sizing, uma config digitada errada). A ordem que passa dele é "
+        "recusada antes de ir à rede, sem consumir o sinal."),
+    "banca_alocada": (
+        "VIVO 200 USDT. Quanto da conta da corretora é do bot. A banca do livro nasce em "
+        "min(saldo da conta, este valor) na troca para `demo`/`binance`, e daí em diante anda "
+        "só pelo resultado dos trades. Depositar mais na corretora NÃO aumenta o tamanho das "
+        "posições: quem aumenta é o dono, aqui, com o livro vazio."),
+    "perda_total_max": (
+        "VIVO 0 (sem teto) no papel; OBRIGATÓRIO > 0 em `binance`. Perda acumulada, em USDT "
+        "contados da banca inicial do livro, a partir da qual a conta para de abrir e desliga "
+        "o auto-trader. É sticky e não tem virada de dia: só solta quando o dono SOBE o teto "
+        "(fica na auditoria). Existe porque a trava diária limita o dia e nada limitava a "
+        "soma dos dias."),
+    "noite_ativo": (
+        "VIVO 0. Com 1, entre `noite_inicio` e `noite_fim` a conta em corretora não abre, "
+        "cancela as entradas pendentes e entrega o trailing à Binance (ordem nativa, em % do "
+        "preço) para as posições abertas. É o desenho para o servidor que desliga à noite: o "
+        "stop fixo e os alvos já estão lá o tempo todo, e o que faltava era o trailing. "
+        "Aproximação declarada: o trailing do bot é em R e o nativo em %, então de noite a "
+        "distância é a de R convertida no preço de ativação."),
 }
 
 
@@ -788,6 +870,7 @@ _VERDADEIRO = {"1", "true", "sim", "on", "yes"}
 _FALSO = {"0", "false", "nao", "não", "off", "no"}
 _RE_PAR = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{2,6}$")
 _RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_RE_HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _validar_config(chave, valor):
@@ -862,6 +945,11 @@ def _validar_config(chave, valor):
             nums.append(n)
         return ",".join(str(int(n)) if n == int(n) else repr(n) for n in nums)
 
+    if tipo == "hora":
+        if not _RE_HORA.match(bruto):
+            raise ValueError(f"'{chave}': '{valor}' não é uma hora HH:MM")
+        return bruto
+
     if tipo == "data":
         if bruto and not _RE_DATA.match(bruto):
             raise ValueError(f"'{chave}': '{valor}' não é uma data AAAA-MM-DD (ou vazio)")
@@ -883,6 +971,26 @@ MASCARA = "••••••••"
 def _config_publica(cfg):
     """A config como ela pode sair pela API: segredo preenchido vira máscara."""
     return {k: (MASCARA if k in SEGREDOS and v else v) for k, v in cfg.items()}
+
+
+# [LIVE-4] O que só a conta em corretora preenche. Numa conta de papel estas colunas são todas
+# NULL e estas chaves não fazem nada, e o `/estado` é servido a cada poll de 3 s: mandá-las seria
+# engordar a resposta das quatro contas para carregar vazio (CLAUDE.md §2, o tamanho do
+# `/estado`). No papel elas saem da resposta; `GET /config` continua devolvendo tudo.
+_COLUNAS_CORRETORA = frozenset({
+    "corretora", "qty", "qty_inicial", "qty_preenchida", "client_oid", "ordem_ext_id",
+    "stop_ext_id", "stop_coid", "stop_seq", "stop_rel", "funding_pago", "noite", "tipo",
+    "pnl_modelo", "taxa_modelo", "funding_modelo"})
+_CHAVES_CORRETORA = frozenset({
+    "corretora_dry_run", "corretora_nocional_max", "banca_alocada", "perda_total_max",
+    "trava_total_em", "corretora_ns", "corretora_stop_adocao", "corretora_trailing_passo_r",
+    "noite_ativo", "noite_inicio", "noite_fim"})
+
+
+def _enxugar(linhas):
+    """Tira das linhas as colunas da corretora que estão vazias. Coluna preenchida nunca sai."""
+    return [{k: v for k, v in r.items() if not (v is None and k in _COLUNAS_CORRETORA)}
+            for r in linhas]
 
 
 def _sem_mascara(body):
@@ -1154,6 +1262,9 @@ def status():
             # capavam — só que este capava calado. Publicado do mesmo jeito e pela mesma
             # razão: quem lê `total` alto contra `ciclos` decide, e a decisão é do dono.
             "caps_tamanho": autotrader.CAPS_TAMANHO,
+            # [LIVE-4] a conta em corretora: quando reconciliou, quantas divergências, órfãs,
+            # stops repostos. No papel fica o dicionário parado em `modo: papel`.
+            "corretora": execucao.saude,
             "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
@@ -1178,6 +1289,18 @@ def reset(req: ResetReq):
     que um POST solto — curl, scanner, clique errado — não apague o histórico de pesquisa."""
     if req.confirmar != "RESET":
         raise HTTPException(400, 'Reset apaga todo o histórico. Envie {"confirmar": "RESET"}.')
+    # [LIVE-4] Em conta de corretora o reset apagaria do livro posições que continuam abertas
+    # LÁ, com stop e alvo, e devolveria a banca a um valor que a conta não tem. E o histórico de
+    # dinheiro real não é "simulação": é o registro do que foi ganho e perdido. Para zerar, a
+    # ordem é fechar tudo, voltar a `corretora=papel` e então resetar; banco que já operou em
+    # `binance` não reseta nunca -- arquiva-se o arquivo e sobe-se um novo.
+    if execucao.real():
+        raise HTTPException(409, "conta em corretora: o reset apagaria do livro posições que "
+                                 "seguem abertas lá. Feche tudo e volte a corretora=papel antes.")
+    with db.conectar() as c:
+        if c.execute("SELECT 1 FROM trades WHERE corretora='binance' LIMIT 1").fetchone():
+            raise HTTPException(409, "este banco tem histórico de dinheiro real e não é "
+                                     "resetável. Arquive o arquivo e suba um banco novo.")
     tabelas = ["sinais", "posicoes", "trades", "equity"]
     if req.incluir_dca:
         tabelas.append("dca")
@@ -1262,10 +1385,13 @@ def _amostrar_tempo(serie, alvo=125):
 def estado():
     """Tudo que a UI precisa num request só."""
     cfg = db.get_config()
+    publica = _config_publica(cfg)
+    if not execucao.real(cfg):
+        publica = {k: v for k, v in publica.items() if k not in _CHAVES_CORRETORA}
     return {
         "banca": db.get_banca(),
         "equity_total": round(equity_total(), 2),
-        "config": _config_publica(cfg),
+        "config": publica,
         # [Q-3] o nome do perfil de risco vigente ('experimento'|'conservador'|
         # 'personalizado'), DERIVADO da config acima — não é chave no banco (db.perfil_ativo).
         # Vem no /estado, e não no /status, apesar do poll de 3s: é uma string curta (~25 B),
@@ -1274,8 +1400,8 @@ def estado():
         # reusado de propósito: zero consulta a mais.
         "perfil_risco": db.perfil_ativo(cfg),
         "pendentes": db.listar("sinais", 30, "WHERE status='novo'"),
-        "posicoes": db.listar("posicoes", 50, "WHERE status='aberta'"),
-        "trades": db.listar("trades", 30),
+        "posicoes": _enxugar(db.listar("posicoes", 50, "WHERE status='aberta'")),
+        "trades": _enxugar(db.listar("trades", 30)),
         # [P2-11] a série INTEIRA (a poda a mantém pequena), reduzida a ~125 pontos pelo
         # _amostrar. Era `listar("equity", 500)[::-1]`: 500 linhas de 15s = 125 minutos, ou
         # seja o "gráfico da banca" mostrava ~2h e nunca a trajetória — que é a única
@@ -1294,7 +1420,7 @@ def estado():
         #
         # Elas PRECISAM aparecer: uma ordem pendente ja reserva exposicao nos tetos, entao um
         # painel que nao a mostra esconde risco comprometido.
-        "ordens": db.listar("ordens", 20, "WHERE status='pendente'"),
+        "ordens": _enxugar(db.listar("ordens", 20, "WHERE status='pendente'")),
         "auto": _auto["v"],
     }
 
@@ -1580,13 +1706,26 @@ def panico(pular_pendentes: bool = False):
     # bot ou terminou antes (e a posição dela está na lista que se fecha abaixo) ou confere o
     # `auto_trade` depois, dentro do mesmo lock, e desiste (`simulador._checar_tetos`). O mesmo
     # vale para ordem enchendo: `_abrir_da_ordem` só enche ordem ainda 'pendente', sob este lock.
+    em_corretora = execucao.real()
     with simulador._abrir_lock:
         db.set_config("auto_trade", "0", "POST /panico")    # mata o bot ANTES de fechar
         _auto["v"] = {"ativo": False, "motivo": "desligado pelo pânico"}   # /estado não mostra ciclo velho
         # [EX-1] Ordem post-only pendente é posição esperando o preço: sem cancelar aqui, ela
         # enchia no ciclo seguinte e o pânico deixava o sistema com posição aberta.
-        canceladas = _cancelar_ordens("panico")
+        # [LIVE-4] Na conta em corretora a ordem pendente está LÁ: marcar a linha como cancelada
+        # aqui deixaria a ordem viva na corretora com o livro dizendo que não existe. Quem a
+        # cancela é `execucao.panico`, lá, e só então resolve a linha.
+        canceladas = 0 if em_corretora else _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
+    if em_corretora:
+        r = execucao.panico()
+        pulados = 0
+        if pular_pendentes:
+            with db.conectar() as c:
+                pulados = c.execute("UPDATE sinais SET status='pulado' WHERE status='novo'").rowcount
+        return {"ok": not r["falhas"], "fechadas": r["fechadas"], "pnl": r["pnl"],
+                "auto_desligado": True, "pendentes_pulados": pulados,
+                "ordens_canceladas": r["ordens_canceladas"], "falhas": r["falhas"]}
     # -1 = sem LIMIT (SQLite). Eram 200: o kill-switch promete TODAS, e com 205 abertas sobravam 5.
     abertas = db.listar("posicoes", -1, "WHERE status='aberta'")
     n, total, falhas = 0, 0.0, []
@@ -1659,8 +1798,61 @@ def set_config(body: dict):
     if body and not limpo:                  # só veio a máscara de volta: nada a gravar
         return _config_publica(db.get_config())
     aceitos = _validar_lote(limpo)
+    _trocar_corretora(aceitos)
     db.set_configs(aceitos, "POST /config")
     return _config_publica(db.get_config())
+
+
+def _trocar_corretora(aceitos):
+    """[LIVE-4] As regras da chave `corretora`, que precisam do banco e da rede e por isso não
+    cabem no `_validar_cruzado`. Roda DEPOIS da validação do lote e ANTES de gravar: recusa com
+    o mesmo 422 e nada é gravado.
+
+    `binance` é dinheiro de verdade, e duas coisas deixam de ser opcionais nele: alguém tem de
+    ser avisado quando o livro e a conta divergirem (Telegram configurado ou push com aparelho
+    inscrito), e a perda total tem de ter teto. Valem também para quem tenta ZERAR o teto ou
+    apagar o Telegram com a conta já em `binance`."""
+    vigente = db.get_config()
+    final = {**vigente, **aceitos}
+    recusados = []
+    if str(final.get("corretora") or "papel") == "binance":
+        try:
+            teto = float(final.get("perda_total_max") or 0)
+        except (TypeError, ValueError):
+            teto = 0.0
+        if teto <= 0:
+            recusados.append("'perda_total_max': em corretora=binance o teto de perda total é "
+                             "obrigatório (> 0)")
+        telegram = bool(str(final.get("telegram_token") or "").strip()
+                        and str(final.get("telegram_chat_id") or "").strip())
+        if not telegram and not (push.estado()[0] and push.inscricoes()):
+            recusados.append("'corretora': binance exige canal de alerta (Telegram configurado "
+                             "ou push com um aparelho inscrito nesta conta)")
+    # Ligar o dry_run com exposição aberta parece cautela e é o contrário: em dry_run NADA é
+    # enviado, nem fechamento, nem stop movido, nem o pânico. A posição que já existe na
+    # corretora ficaria sem ninguém conseguindo mexer nela por aqui.
+    liga_dry = (str(aceitos.get("corretora_dry_run", "0")) in ("1", "true", "True")
+                and str(vigente.get("corretora_dry_run", "0")) not in ("1", "true", "True"))
+    if liga_dry and execucao.real(vigente):
+        with db.conectar() as c:
+            n_pos = c.execute("SELECT COUNT(*) FROM posicoes WHERE status='aberta' "
+                              "AND corretora IS NOT NULL").fetchone()[0]
+            n_ord = c.execute("SELECT COUNT(*) FROM ordens WHERE status='pendente'").fetchone()[0]
+        if n_pos or n_ord:
+            recusados.append(f"'corretora_dry_run': há {n_pos} posição(ões) e {n_ord} ordem(ns) "
+                             "na corretora. Em dry_run nada é enviado (nem fechamento, nem stop, "
+                             "nem pânico): feche tudo antes de ligar")
+    if not recusados and "corretora" in aceitos:
+        try:
+            execucao.trocar_modo(aceitos["corretora"], final)
+        except ValueError as e:
+            recusados.append(str(e))
+    if recusados:
+        log(f"config recusada: {recusados}", "error")
+        raise HTTPException(422, {"erro": "configuração recusada — nada foi gravado",
+                                  "recusados": recusados})
+    if "corretora" in aceitos:
+        push.SIMBOLO = "US$" if aceitos["corretora"] != "papel" else "R$"
 
 
 AUTO_PERMITIDAS = {"auto_trade", "auto_conviccao_min", "auto_max_posicoes", "auto_max_valor_frac",
