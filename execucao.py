@@ -1786,6 +1786,12 @@ def trocar_modo(novo, cfg=None):
     if novo == modo(vigente):
         return None
     cfg = {**vigente, **(cfg or {})}                # a config como VAI ficar (teto, dry_run, banca)
+    # Trocar de conta com o bot ligado é ele operar a conta nova sem ninguém ter dito que
+    # pode: o `auto_trade` da instância passava do papel para o demo e do demo para o dinheiro
+    # (revisão de 26/11). Ligar de novo é ato do dono, depois da troca.
+    if str(cfg.get("auto_trade", "0")) not in ("0", "false", "False", ""):
+        raise ValueError("'corretora': desligue o auto_trade antes de trocar de corretora "
+                         "(religar é passo seu, depois da troca)")
     if novo != "papel" and not habilitada():
         raise ValueError("'corretora': esta instância só opera em papel (a conta real é a que "
                          "sobe com CORRETORA_HABILITADA=1)")
@@ -1873,14 +1879,35 @@ def trocar_modo(novo, cfg=None):
 
 # ------------------------------------------------------------------------------ linha de comando
 
+_LIMITES_IMPRESSOS = ("corretora", "corretora_dry_run", "corretora_nocional_max", "banca_alocada",
+                      "perda_total_max", "risco_por_trade", "risco_aberto_max", "alavancagem_padrao",
+                      "auto_lev_max", "auto_trade")
+
+
 def _cli(argv):
-    """`python -m execucao estado|panico`, com o ambiente da conta R (`deploy/panico.sh` monta).
+    """`python -m execucao estado|panico|config chave=valor ...`, com o ambiente da conta R
+    (`deploy/panico.sh` monta).
 
     É o caminho para quando o serviço não responde: fala direto com a corretora, usando o banco
     e a chave da conta. `estado` só lê. `panico` desliga o `auto_trade` ANTES de fechar ([P1-7]),
-    cancela e fecha tudo; rodar duas vezes é seguro (todo fechamento é reduce-only)."""
+    cancela e fecha tudo; rodar duas vezes é seguro (todo fechamento é reduce-only).
+
+    `config` é o `POST /config` de quem está no servidor: o mesmo catálogo e as mesmas regras,
+    e é o único caminho que AFROUXA um limite do dinheiro real ou liga o envio de verdade
+    (`api.LIMITES_DINHEIRO`). Imprime os limites como ficaram."""
+    if argv[:1] == ["config"] and len(argv) > 1 and all("=" in a for a in argv[1:]):
+        import api                                  # o catálogo e as regras moram lá
+        corpo = dict(a.split("=", 1) for a in argv[1:])
+        try:
+            cfg = api.config_local(corpo)
+        except Exception as e:                      # 422 do catálogo: diz o quê, não o traceback
+            print(f"recusado: {getattr(e, 'detail', e)}")
+            return 1
+        for k in _LIMITES_IMPRESSOS:
+            print(f"  {k} = {cfg.get(k)}")
+        return 0
     if len(argv) != 1 or argv[0] not in ("estado", "panico"):
-        print("uso: python -m execucao estado|panico")
+        print("uso: python -m execucao estado|panico|config chave=valor ...")
         return 2
     cfg = db.get_config()
     if not real(cfg):

@@ -6,6 +6,7 @@ fecha em stop/liquidação e roda scans periódicos.
 Rodar:  uvicorn api:app --port 8000      |  Docs: http://localhost:8000/docs
 """
 import base64
+import contextlib
 import os
 import re
 import secrets
@@ -425,6 +426,20 @@ async def auth_basica(request: Request, call_next):
                 "Sem DASH_PASS o backend só atende o painel aberto nesta própria máquina.",
                 status_code=403)
         return await call_next(request)
+
+    # [LIVE-9] POST vindo de NAVEGADOR (tem `Origin`) só em JSON. Um formulário ou um
+    # `fetch(no-cors)` de qualquer página é requisição "simples": sai sem preflight e leva a
+    # credencial Basic que o navegador guardou para este host. Era assim que uma página
+    # qualquer podia mandar `POST /testeR/panico` e fechar a mercado as posições reais. JSON
+    # entre origens exige preflight, e o preflight não autoriza credencial. O painel já manda
+    # tudo em JSON; curl, a vigia e o `panico.sh` não mandam `Origin` e seguem entrando.
+    if request.method == "POST" and request.headers.get("origin") is not None:
+        tipo = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if tipo != "application/json":
+            log(f"POST de navegador sem JSON recusado: {request.url.path} "
+                f"(origin={request.headers.get('origin', '')[:80]})", "error")
+            return PlainTextResponse("POST de navegador só com Content-Type: application/json.",
+                                     status_code=403)
 
     ip = _cliente_ip(request)
     with _falhas_lock:
@@ -1166,7 +1181,7 @@ def _estado_vigia(agora=None):
 # dizia "Conta real fora do ar" na hora em que a pessoa mais precisa saber o que aconteceu.
 # 170 s é a espera do `deploy/panico.sh`.
 ESPERA_REPASSE_S = 30
-ESPERA_REPASSE_LENTA_S = {"panico": 170}
+ESPERA_REPASSE_LENTA_S = {("R", "panico"): 170}     # só a R: o pânico de B e C é local e rápido
 
 
 def _estourou(e):
@@ -1186,7 +1201,7 @@ def _repassar(conta, metodo, caminho, query, corpo, auth, ctype):
     req = urllib.request.Request(url, data=corpo if metodo == "POST" else None,
                                  headers=cab, method=metodo)
     try:
-        espera = ESPERA_REPASSE_LENTA_S.get(caminho.strip("/"), ESPERA_REPASSE_S)
+        espera = ESPERA_REPASSE_LENTA_S.get((conta, caminho.strip("/")), ESPERA_REPASSE_S)
         with urllib.request.urlopen(req, timeout=espera) as r:
             return r.status, r.read(), r.headers.get("Content-Type", "application/json")
     except urllib.error.HTTPError as e:
@@ -1299,8 +1314,9 @@ def status():
             # razão: quem lê `total` alto contra `ciclos` decide, e a decisão é do dono.
             "caps_tamanho": autotrader.CAPS_TAMANHO,
             # [LIVE-4] a conta em corretora: quando reconciliou, quantas divergências, órfãs,
-            # stops repostos. No papel fica o dicionário parado em `modo: papel`.
-            "corretora": execucao.saude,
+            # stops repostos. Só nela: no papel o dicionário fica parado e eram 290 bytes a
+            # mais a cada leitura do Apollo, nas três contas (revisão de 26/11).
+            **({"corretora": execucao.saude} if execucao.real() else {}),
             "saudavel": not (cego or cego_pos),
             "posicoes_abertas": len(db.listar("posicoes", 100, "WHERE status='aberta'"))}
 
@@ -1556,6 +1572,7 @@ def set_perfil(req: PerfilReq):
         raise HTTPException(422, f"perfil desconhecido: escolha um de {list(db.PERFIS_RISCO)}")
     antes = db.perfil_ativo()
     aceitos = _validar_lote(db.PERFIS_RISCO[req.perfil])
+    _recusar(_so_aperta(aceitos, db.get_config()))
     db.set_configs(aceitos, f"POST /perfil:{req.perfil}")     # todas as chaves ou nenhuma
     cfg = db.get_config()
     log(f"perfil de risco: {antes} -> {req.perfil} ({aceitos})")
@@ -1833,16 +1850,83 @@ def set_config(body: dict):
     """Grava configuração VALIDADA. Chave fora do catálogo, tipo errado ou valor fora de
     faixa -> 422 dizendo o que foi recusado, em vez de gravar lixo que só explode depois,
     longe daqui, dentro de guarda_risco()."""
+    return _gravar_config(body, "POST /config", local=False)
+
+
+def config_local(body):
+    """O `POST /config` para quem está NO SERVIDOR (`python -m execucao config chave=valor`).
+    Mesmo catálogo e mesmas regras da troca de modo; a única diferença é poder afrouxar os
+    limites do dinheiro real e ligar o envio de verdade, que pela senha do painel não dá."""
+    return _gravar_config(body, "linha de comando", local=True)
+
+
+def _gravar_config(body, origem, local):
     limpo = _sem_mascara(body)
     if body and not limpo:                  # só veio a máscara de volta: nada a gravar
         return _config_publica(db.get_config())
     aceitos = _validar_lote(limpo)
-    _trocar_corretora(aceitos)
-    db.set_configs(aceitos, "POST /config")
+    # Trocar de modo confere "livro vazio" e depois grava: sem o lock de abertura, uma entrada
+    # do bot entre as duas coisas ficaria no livro de uma conta que já mudou de corretora.
+    with (simulador._abrir_lock if "corretora" in aceitos else contextlib.nullcontext()):
+        _trocar_corretora(aceitos, local=local)
+        db.set_configs(aceitos, origem)
     return _config_publica(db.get_config())
 
 
-def _trocar_corretora(aceitos):
+# [LIVE-9] Em `binance`, a senha do painel só APERTA os limites do dinheiro. A senha mora no
+# navegador (localStorage do front no Vercel) e é a mesma das contas de papel: quem a leva (XSS,
+# merge malicioso que o Vercel publica, aparelho comprometido) não pode subir o teto por ordem,
+# a banca, a alavancagem ou soltar o teto de perda total. Afrouxar é no servidor, por
+# `python -m execucao config`, a mesma lógica do DASH_PASS sem bandeira para desligar.
+# chave -> True se 0 quer dizer "sem teto" (então zerar é o afrouxamento máximo).
+LIMITES_DINHEIRO = {
+    "corretora_nocional_max": False, "banca_alocada": False, "perda_total_max": True,
+    "risco_por_trade": False, "risco_aberto_max": True, "exposicao_max": True,
+    "limite_perda_dia": False, "alavancagem_padrao": False, "auto_lev_max": False,
+    "auto_max_posicoes": False, "auto_max_valor_frac": False,
+}
+_LIGADO = ("1", "true", "True")
+
+
+def _num_limite(chave, v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return float("inf") if LIMITES_DINHEIRO[chave] and x <= 0 else x
+
+
+def _so_aperta(aceitos, vigente, local=False):
+    """O que o lote AFROUXA na conta em `binance`, como lista de recusas (vazia = pode)."""
+    final = {**vigente, **aceitos}
+    if local or str(final.get("corretora") or "papel") != "binance":
+        return []
+    recusados = []
+    for k in sorted(set(aceitos) & set(LIMITES_DINHEIRO)):
+        antes = _num_limite(k, vigente.get(k, db.CONFIG_PADRAO.get(k)))
+        depois = _num_limite(k, aceitos[k])
+        if antes is not None and depois is not None and depois > antes * (1 + 1e-9):
+            recusados.append(f"'{k}': em corretora=binance a senha do painel só aperta este "
+                             f"limite ({vigente.get(k)} -> {aceitos[k]}). Para afrouxar: no "
+                             f"servidor, python -m execucao config {k}={aceitos[k]}")
+    era_real = (str(vigente.get("corretora")) == "binance"
+                and str(vigente.get("corretora_dry_run", "0")) not in _LIGADO)
+    vai_real = str(final.get("corretora_dry_run", "0")) not in _LIGADO
+    if vai_real and not era_real:
+        recusados.append("'corretora_dry_run': o envio de ordens com dinheiro de verdade só "
+                         "liga no servidor (python -m execucao config corretora_dry_run=0); "
+                         "pelo painel, a conta entra em binance com corretora_dry_run=1")
+    return recusados
+
+
+def _recusar(recusados):
+    if recusados:
+        log(f"config recusada: {recusados}", "error")
+        raise HTTPException(422, {"erro": "configuração recusada — nada foi gravado",
+                                  "recusados": recusados})
+
+
+def _trocar_corretora(aceitos, local=False):
     """[LIVE-4] As regras da chave `corretora`, que precisam do banco e da rede e por isso não
     cabem no `_validar_cruzado`. Roda DEPOIS da validação do lote e ANTES de gravar: recusa com
     o mesmo 422 e nada é gravado.
@@ -1853,7 +1937,7 @@ def _trocar_corretora(aceitos):
     apagar o Telegram com a conta já em `binance`."""
     vigente = db.get_config()
     final = {**vigente, **aceitos}
-    recusados = []
+    recusados = _so_aperta(aceitos, vigente, local=local)
     if str(final.get("corretora") or "papel") == "binance":
         try:
             teto = float(final.get("perda_total_max") or 0)
@@ -1886,10 +1970,7 @@ def _trocar_corretora(aceitos):
             execucao.trocar_modo(aceitos["corretora"], final)
         except ValueError as e:
             recusados.append(str(e))
-    if recusados:
-        log(f"config recusada: {recusados}", "error")
-        raise HTTPException(422, {"erro": "configuração recusada — nada foi gravado",
-                                  "recusados": recusados})
+    _recusar(recusados)
     if "corretora" in aceitos:
         push.SIMBOLO = "US$" if aceitos["corretora"] != "papel" else "R$"
 
@@ -1905,6 +1986,7 @@ def set_auto(body: dict):
     """Liga/desliga e ajusta o auto-trader (experimento). Whitelist de chaves E validação
     de valores: a whitelist sozinha deixava passar auto_max_posicoes="banana"."""
     aceitos = _validar_lote(body, AUTO_PERMITIDAS)
+    _recusar(_so_aperta(aceitos, db.get_config()))
     db.set_configs(aceitos, "POST /auto")
     cfg = db.get_config()
     return {"ok": True, "config": {k: cfg[k] for k in AUTO_PERMITIDAS if k in cfg},

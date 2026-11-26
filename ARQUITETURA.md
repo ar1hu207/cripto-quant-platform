@@ -725,7 +725,10 @@ cancelado. `FINISHED` só é "executada" com `actualQty` > 0. O funding vem em j
 | Trocar de modo exige livro sem posição, sem ordem e sem histórico de outro modo; e a CONTA também vazia: sem posição e sem ordem aberta para entrar num modo real, sem posição e sem ordem do bot para voltar ao papel; e em One-way e Single-Asset LIDOS (não lido também recusa) | `execucao.trocar_modo` |
 | `corretora_dry_run` não liga com posição ou ordem aberta: em dry_run nada é enviado, nem fechamento, nem stop, nem pânico | `api._trocar_corretora` |
 | `binance` exige `perda_total_max` > 0 e canal de alerta | `api._trocar_corretora` |
-| Teto de perda TOTAL, sticky: só solta quando o dono SOBE o teto | `execucao.guarda_total` |
+| Em `binance`, HTTP (`/config`, `/auto`, `/perfil`) só APERTA os limites do dinheiro, e o envio de verdade (`corretora_dry_run=0`) não liga por HTTP: afrouxar e ligar é `python -m execucao config` no servidor. A senha do painel mora no navegador e é a das contas de papel | `api._so_aperta`, `api.LIMITES_DINHEIRO` |
+| Trocar de corretora exige `auto_trade=0` e roda sob o lock de abertura | `execucao.trocar_modo`, `api._gravar_config` |
+| POST de navegador (com `Origin`) só em JSON: formulário de outra página não alcança `/panico` | `api.auth_basica` |
+| Teto de perda TOTAL, sticky: só solta quando o dono SOBE o teto (no servidor) | `execucao.guarda_total` |
 | Limite de nocional por ordem, antes da rede | `corretora_nocional_max` |
 | `/reset` recusado em modo corretora e em banco com histórico de `binance` | `api.reset` |
 | `/panico` cancela e fecha LÁ, e varre a conta | `execucao.panico`, `deploy/panico.sh` |

@@ -1709,18 +1709,125 @@ def test_chave_recusada_na_leitura_avisa_o_dono_uma_vez_e_diz_o_porque(conta, mo
 
 def test_binance_exige_teto_de_perda_total_e_canal_de_alerta(papel):
     cli, _ = papel
-    r = cli.post("/config", json={"corretora": "binance"})
+    r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1})
     txt = str(r.json())
     assert r.status_code == 422 and "perda_total_max" in txt and "canal de alerta" in txt
-    r = cli.post("/config", json={"corretora": "binance", "perda_total_max": 60})
+    r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1, "perda_total_max": 60})
     assert r.status_code == 422 and "canal de alerta" in str(r.json())
-    r = cli.post("/config", json={"corretora": "binance", "perda_total_max": 60,
+    r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1, "perda_total_max": 60,
                                   "telegram_token": "t", "telegram_chat_id": "1"})
     assert r.status_code == 200 and db.get_config()["corretora"] == "binance"
     # e, já em binance, não dá para zerar o teto nem apagar o canal
     assert cli.post("/config", json={"perda_total_max": 0}).status_code == 422
     assert cli.post("/config", json={"telegram_token": ""}).status_code == 422
     assert db.get_config()["perda_total_max"] == "60.0"
+
+
+def _em_binance(cli):
+    r = cli.post("/config", json={"corretora": "binance", "corretora_dry_run": 1,
+                                  "perda_total_max": 60, "corretora_nocional_max": 300,
+                                  "telegram_token": "t", "telegram_chat_id": "1"})
+    assert r.status_code == 200, r.text
+
+
+def test_em_binance_a_senha_do_painel_so_aperta(papel):
+    """Revisão de 26/11 (segurança): a senha do painel mora no navegador e é a das contas de
+    papel. Em binance ela não sobe teto, banca nem alavancagem, nem solta a perda total."""
+    cli, _ = papel
+    _em_binance(cli)
+    for corpo in ({"corretora_nocional_max": 500}, {"perda_total_max": 80},
+                  {"risco_aberto_max": 0}, {"banca_alocada": 1000}, {"risco_por_trade": 0.05}):
+        r = cli.post("/config", json=corpo)
+        assert r.status_code == 422 and "só aperta" in str(r.json()), corpo
+    cfg = db.get_config()
+    alav = float(cfg.get("alavancagem_padrao") or 1)
+    assert cli.post("/auto", json={"alavancagem_padrao": alav + 5}).status_code == 422
+    assert cli.post("/config", json={"corretora_nocional_max": 100, "perda_total_max": 40}).status_code == 200
+    assert cli.post("/auto", json={"alavancagem_padrao": 1}).status_code == 200
+    cfg = db.get_config()
+    assert float(cfg["corretora_nocional_max"]) == 100 and float(cfg["perda_total_max"]) == 40
+
+
+def test_o_envio_de_verdade_so_liga_no_servidor(papel, capsys):
+    cli, _ = papel
+    _em_binance(cli)
+    r = cli.post("/config", json={"corretora_dry_run": 0})
+    assert r.status_code == 422 and db.get_config()["corretora_dry_run"] in ("1", "True", "true")
+    # no servidor, pela linha de comando: o mesmo catálogo, e afrouxar pode
+    assert execucao._cli(["config", "corretora_dry_run=0", "corretora_nocional_max=400"]) == 0
+    out = capsys.readouterr().out
+    assert "corretora_dry_run = " in out and "corretora_nocional_max = 400" in out
+    cfg = db.get_config()
+    assert cfg["corretora_dry_run"] not in ("1", "True", "true")
+    # já real: o painel ainda só aperta, e o catálogo vale também na linha de comando
+    assert cli.post("/config", json={"corretora_nocional_max": 450}).status_code == 422
+    assert execucao._cli(["config", "corretora_nocional_max=banana"]) == 1
+    assert execucao._cli(["config", "perda_total_max=0"]) == 1      # binance exige o teto
+
+
+def test_no_demo_e_no_papel_a_senha_segue_livre(cliente, conta):
+    assert cliente.post("/config", json={"corretora_nocional_max": 900}).status_code == 200
+
+
+def test_a_troca_de_modo_exige_o_auto_desligado(papel):
+    cli, _ = papel
+    db.set_config("auto_trade", "1", "teste")
+    r = cli.post("/config", json={"corretora": "demo"})
+    assert r.status_code == 422 and "auto_trade" in str(r.json())
+    assert db.get_config()["corretora"] == "papel"
+    db.set_config("auto_trade", "0", "teste")
+    assert cli.post("/config", json={"corretora": "demo"}).status_code == 200
+
+
+def test_post_de_navegador_sem_json_e_recusado(cliente, conta, monkeypatch):
+    """Um formulário de outra página é POST "simples": leva a credencial guardada sem preflight."""
+    import api
+    import base64
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(api, "DASH_PASS", "s3nha")
+    monkeypatch.setattr(api, "DASH_USER", "admin")
+    cli = TestClient(api.app, client=("127.0.0.1", 5555))
+    cred = {"Authorization": "Basic " + base64.b64encode(b"admin:s3nha").decode()}
+    fora = {**cred, "Origin": "https://pagina-qualquer.example"}
+    db.set_config("auto_trade", "1", "teste")
+    r = cli.post("/panico", headers={**fora, "Content-Type": "application/x-www-form-urlencoded"},
+                 content=b"x=1")
+    assert r.status_code == 403 and db.get_config()["auto_trade"] == "1"
+    assert cli.post("/panico", headers=fora).status_code == 403            # fetch no-cors, sem tipo
+    assert cli.post("/panico", headers=cred).status_code == 200            # curl / panico.sh
+    assert db.get_config()["auto_trade"] == "0"
+
+
+def test_status_do_papel_nao_carrega_a_saude_da_corretora(papel):
+    cli, _ = papel
+    execucao.usar(None)
+    assert "corretora" not in cli.get("/status").json()
+
+
+def test_so_o_panico_da_conta_real_espera_mais(monkeypatch):
+    import api
+    vistos = []
+
+    class Resp:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def abre(req, timeout):
+        vistos.append(timeout)
+        return Resp()
+    monkeypatch.setattr(api.urllib.request, "urlopen", abre)
+    for conta in ("B", "C", "R"):
+        api._repassar(conta, "POST", "panico", "", b"", None, None)
+    assert vistos == [30, 30, 170]
 
 
 def test_estado_das_travas_nao_e_editavel_pelo_config(papel):
