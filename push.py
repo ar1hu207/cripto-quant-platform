@@ -503,10 +503,16 @@ def montar_resumo(prefs, ini, agora):
 
 # ---------------------------------------------------------------- texto dos avisos
 
+# [LIVE-4] O simbolo do dinheiro nos avisos. A conta em corretora e em USDT, e um push dizendo
+# "Lucro: R$ 3,20" para US$ 3,20 erra o valor por um fator de cinco. Quem troca e a `api`, no
+# boot e na troca da config `corretora`; no papel fica o padrao.
+SIMBOLO = "R$"
+
+
 def brl(v):
-    """R$ no formato do painel: R$ 1.234,56 (sinal so quando pedido por `money`)."""
+    """Dinheiro no formato do painel: R$ 1.234,56 (sinal so quando pedido por `money`)."""
     s = f"{abs(float(v)):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return ("−" if float(v) < 0 else "") + "R$ " + s
+    return ("−" if float(v) < 0 else "") + SIMBOLO + " " + s
 
 
 def money(v):

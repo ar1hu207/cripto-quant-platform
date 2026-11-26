@@ -50,6 +50,8 @@ de propósito — não conserte esses imports (`legado/README.md`).
 | `mercado.py` | book, fluxo taker, funding, sentimento (1 request por lista, cache de 5s por ativo) |
 | `autotrader.py` | modo automático (config `auto_trade`, desligado por padrão) |
 | `simulador.executar` | **[EX-1] ponto único de entrada**: despacha por `exec_modo`. `abrir()` (mercado) segue intacto ao lado |
+| `corretora.py` | **[LIVE-1]** adapter da Binance USDⓈ-M (demo e real): ids nossos, teto por ordem, `dry_run`, recusa chave que saca |
+| `execucao.py` | **[LIVE-3]** a conta que opera em corretora: entrada com stop LÁ, reconciliação, pânico. No papel nenhuma linha roda |
 | `dca.py` | acumulação periódica, sem alavancagem, banca conceitualmente separada |
 | `alertas.py` | Telegram **opcional**: sem token na config é no-op |
 | `push.py` | notificação nativa no celular (Web Push, `[PUSH-1]`): sem `VAPID_*` no `.env` é no-op; envia em thread própria, nunca no caminho do dinheiro |
@@ -112,6 +114,32 @@ portões e **para** (§9.8 do plano). O que está em produção hoje:
   sempre `taxa_por_lado` (taker), porque stop e trailing são ordem a mercado por natureza
   (`[CX-4]`). Cobrar maker nos dois lados inventa lucro que não houve; cobrar a taxa de hoje
   sobre a entrada de ontem também.
+- **[LIVE] Conta em corretora — quatro regras, e o papel não muda.** A config `corretora`
+  nasce `papel`; `demo`/`binance` só na conta R (`CORRETORA_HABILITADA=1` no `ExecStart` dela, a
+  chave num arquivo que só a unit dela carrega; o usuário Linux é o mesmo das outras, então isso
+  separa o ambiente, não a permissão). Ligar isso é do dono, pela escada do `RUNBOOK-VM.md` §0.1. Fora do papel (`ARQUITETURA.md` §12):
+  1. **A corretora é a verdade, o banco é a cópia.** O ciclo começa por `execucao.reconciliar()`
+     e sem reconciliação recente a conta não abre. O livro nunca fecha posição de corretora por
+     preço: ele lança o negócio que a fechou.
+  2. **Nunca posição sem stop NA corretora.** Stop novo entra antes de o antigo sair; se não
+     entra, a posição é fechada. Não troque por "tenta de novo no próximo ciclo".
+  3. **Toda ordem tem id nosso, com o prefixo do banco.** Rede falhou = buscar pelo id, nunca
+     reenviar. Um id nunca é usado duas vezes. Só ordem com o nosso prefixo é cancelada como órfã.
+  4. **A intenção é gravada antes da rede**: toda entrada nasce `pendente` em `ordens`.
+
+  **Na conta R, em qualquer modo, a senha do painel só aperta.** Os limites do dinheiro
+  (`api.LIMITES_DINHEIRO`: teto por ordem, banca, perda total, risco, exposição, alavancagem)
+  não sobem por HTTP nem em papel ou demo (era o atalho: voltar a papel, subir, entrar de novo),
+  o canal de alerta não muda por HTTP, e o envio de verdade (`corretora_dry_run=0`) não liga por
+  HTTP: tudo isso é `deploy/r.sh config` no servidor, como `cripto`. Trocar de corretora exige `auto_trade=0`. Não abra exceção "só para o painel".
+
+  `abrir()` e `colocar_ordem()` recusam nessa conta. `trava_total_em` e `corretora_ns` são
+  estado, fora do catálogo de propósito. O `/reset` recusa nela. `corretora_dry_run` **não é
+  modo seguro com posição aberta**: nele nada é enviado, nem fechamento, nem pânico (o `POST
+  /config` recusa ligá-lo assim). Quantidade que sai de subtração passa por `execucao._lote`
+  antes de virar ordem ou de ir para o livro. O DCA é simulação e não roda nessa conta
+  (`dca._so_no_papel`). No painel, moeda, marca e moldura vermelha saem do `config.corretora`
+  do `/estado` (`APX.modo()`), nunca da aba: tela nova não escreve `R$` à mão, usa `fmt.moeda()`.
 - **Sem `DASH_PASS` o backend recusa acesso externo, e não há bandeira para desligar isso.**
   Existiu uma (`PERMITIR_SEM_SENHA`) e foi ela que deixou `/reset`, `/panico`, `/config` e
   `/auto` abertos na internet: a guarda só protege se não houver como desligá-la.
@@ -222,6 +250,7 @@ próprio alcance**. Uma sessão queimou seis tentativas nisso em 22/08; vá dire
 | `PLANO-EXECUCAO-2026-08-20.md` | **o plano vivo**: marcos, territórios, ondas, portões (§9) |
 | `ORQUESTRACAO-ORCA.md` | despachar sessões (Orca + fallback manual) e operar o Trello pela API |
 | `RUNBOOK-VM.md` | **operar a VM**: acesso, transferências, deploy, backup, diagnóstico (§5 completo) |
+| `deploy/cripto-bot-r.service` · `deploy/panico.sh` | **a conta R** (a que opera em corretora): instalação, a ordem de ligar, pânico sem painel |
 | `legado/README.md` · `pesquisa/__init__.py` | o que cada território é, e por que ele é assim |
 | `DESIGN.md` | direção visual do front: Apollux, direção Pulse, 12 paletas (o CMC night de antes vive em `web/classico.html`) |
 | `STATUS-SISTEMA-*.md`, `INVESTIGACAO-*.md`, `AUDITORIA-*.md`, `PLANO-SPRINTS.md`, `PLANO-DEV-*.md` | **histórico datado**: origem dos cards e a fase de construção. É aqui que mora o que não é regra |

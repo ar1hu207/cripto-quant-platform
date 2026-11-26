@@ -633,7 +633,137 @@ aqui é um card em aberto, não sujeira para limpar.
 
 ---
 
-## 12. O que este documento não cobre
+## 12. A conta em corretora (`corretora.py` + `execucao.py`)
+
+Tudo acima descreve o **papel**: o processo olha o preço a cada 15 s e decide o que aconteceu. A
+config `corretora` (`papel` | `demo` | `binance`, padrão `papel`) troca isso por ordens de verdade
+na Binance USDⓈ-M. Fora do papel o banco deixa de decidir e passa a **copiar**.
+
+```
+                  ┌────────────── simulador.py (o LIVRO) ──────────────┐
+ sinal ─► executar() ─┬─ papel ─► abrir() / colocar_ordem()   (decide pelo preço que viu)
+                      └─ corretora ─► execucao.executar()
+                                         │ 1. guardas do papel, sobre a qty JÁ arredondada
+                                         │ 2. claim do sinal + INSERT ordens(pendente)  ← intenção
+                                         │ 3. rede: entrada + stop NA corretora
+                                         ▼
+                                   corretora.py (adapter: ccxt, ids, teto por ordem, dry_run)
+                                         ▼
+                                   Binance (Demo ou real)
+
+ ciclo:  execucao.reconciliar() ─► processar_ordens() ─► atualizar() ─► ... (resto igual)
+         lê posições, ordens e      pergunta LÁ o que      marca; move o stop LÁ e só
+         saldo; conserta o LIVRO    houve com cada ordem   então grava; põe os alvos LÁ
+```
+
+**Quatro regras, e cada uma tem um teste com o nome dela em `tests/test_live_execucao.py`:**
+
+1. **A corretora é a verdade.** Cada ciclo começa por `execucao.reconciliar()`. Posição que sumiu
+   lá é lançada no livro com os **negócios reais** (preço, taxa), e o motivo sai de qual ordem
+   nossa disparou (`stop`, `trailing`, `tpN`) ou do id da ordem de fechamento (`liquidacao`,
+   `adl`, `externo`). Posição lá sem linha aqui é **adotada** com stop a `corretora_stop_adocao`.
+   Ordem lá sem dono aqui é cancelada, **só se tiver o prefixo deste banco**. Sem reconciliação
+   nos últimos 120 s a conta não abre (`_bloqueio_entrada`).
+2. **Nunca posição sem stop na corretora.** A entrada post-only sai com o stop junto
+   (`reduceOnly` com quantidade, aceito antes do fill); a que ficar descansando sem ele (envio
+   incerto, processo que caiu entre a entrada e o stop) ganha o stop no ciclo seguinte ou é
+   cancelada (`_stop_da_ordem`). A mercado, o stop vai **antes** da entrada, pelo mesmo caminho;
+   sem ele, a entrada não sai. Posição que perde o stop ganha outro na hora: se ele falhar duas
+   vezes na mesma chamada, ou se o preço já passou dele, a posição é fechada (`_garantir_stop`).
+   A marcação repõe, a cada ciclo, o stop de toda posição que está sem, sem depender de a
+   reconciliação ter passado. O trailing coloca o stop novo, cancela o antigo e só então grava o
+   número; se o cancelamento do antigo falhar, vale o novo e a reconciliação tira o antigo.
+3. **Toda ordem tem id nosso** (`_coid`: `ap<prefixo do banco><letra><id do livro>`). Falha de
+   rede vira busca pelo id, nunca reenvio; id repetido (`-4116` nas normais, `-20132` nas
+   condicionais) também. E um id nunca é usado duas vezes (`_seq`): a
+   tentativa seguinte sai com outro, e a ordem da anterior, se chegou, é órfã que a
+   reconciliação cancela. Ordem morta com o mesmo id não confirma envio nenhum
+   (`corretora._achar_viva`).
+4. **A intenção é gravada antes da rede.** Toda entrada, inclusive a mercado, nasce como linha
+   `pendente` em `ordens`: conta nos tetos (`_pendentes`), reivindica o sinal e leva o id. Os
+   invariantes do `[EX-1]` e do `[P1-6]` valem sem mudança, pelas mesmas funções.
+
+**O que o livro grava de diferente.** `posicoes` ganha `corretora`, `qty`, os ids do stop e
+`funding_pago`; `trades` ganha `corretora`, `qty` e três colunas `*_modelo`. O P&L, a taxa e o
+funding de um trade de corretora são os **lançados** (`fills` + `income` da Binance); o que o
+modelo do papel teria dito vai nas `*_modelo`, na mesma linha, e a diferença é a medição "o papel
+prevê a conta?". A tabela `fills` guarda cada negócio como veio e é a fonte do relatório fiscal.
+Unidade: nessa conta `valor_reais`, `pnl_reais` e a banca estão em **USDT**.
+
+Dois números que não são o que parecem. `posicoes.aberto_em` é a hora do **negócio da entrada**
+na corretora, não a hora em que o livro soube: a ordem que enche de madrugada só vira linha de
+manhã, e é a partir de `aberto_em` que a reconciliação procura os negócios da saída. E a banca é
+conferida contra a **carteira** da corretora (dinheiro realizado), nunca contra o equity: o
+resultado aberto de lá é de agora e o do livro é o da última marcação, e comparar os dois fazia
+uma queda do mercado parecer dinheiro sumido (`_conferir_saldo`). Essa conferência não ajusta
+nada no ciclo em que alguma posição ficou sem conferir (saída esperando o negócio aparecer,
+falha de leitura): a carteira já mostraria a perda que o livro ainda vai lançar, e ela entraria
+duas vezes. O funding das posições abertas é medido antes de concluir que saiu dinheiro.
+
+**Fechar é provar.** O fechamento só é lançado com quantidade executada: ordem que volta
+cancelada ou expirada sem executar é recusa, e a que volta sem número é incerta e fica para a
+reconciliação (`_fechar_qty`). Só o `-2022` quer dizer "não há o que reduzir". O pânico relê as
+posições da conta no fim e devolve como falha tudo o que ainda estiver aberto lá.
+
+**O que o ccxt chama de "rede" e não é.** O ccxt põe o `-2015` (chave, IP ou permissão) em
+`DDoSProtection` depois do primeiro acesso, e o 418/429 também, os dois como filhos de
+`NetworkError`. Sem tradução, um IP de saída que mudou de madrugada aparecia como envio incerto.
+Toda chamada ao ccxt passa por `corretora._Cliente`: `-2015` vira `ChaveRecusada` (e o dono é
+avisado do porquê, uma vez a cada 30 min), `-1021` ressincroniza o relógio e repete uma vez,
+e o limite de taxa vira `LimiteDeTaxa` com pausa pelo `Retry-After`: total no IP banido (418;
+insistir aumenta o ban), e só de leitura e entrada no 429, deixando sair stop, fechamento e
+cancelamento. O trailing vai com `activatePrice`, o nome do serviço Algo
+(o ccxt 4.5.56 manda o antigo), e a ativação gravada é conferida na volta: diferente, ele é
+cancelado. `FINISHED` só é "executada" com `actualQty` > 0. O funding vem em janelas de 7 dias.
+
+**Trancas em volta** (nenhuma tem bandeira para desligar):
+
+| Tranca | Onde |
+|---|---|
+| Só a instância com `CORRETORA_HABILITADA=1` sai do papel; banco em modo corretora não sobe nas outras | `execucao.habilitada`, `api._guarda_corretora` |
+| A chave da Binance mora num arquivo que só a unit da conta R carrega. Isso a tira do AMBIENTE das contas de papel; o usuário Linux é o mesmo, então não a tira do alcance delas (isolar = usuário próprio, `RUNBOOK-VM.md` §0.1) | `deploy/cripto-bot-r.service` |
+| Chave real que pode sacar, transferir, não tem IP fixo, tem habilitado o que o bot não usa (spot, margem, portfolio margin, opções) ou não deu para conferir NÃO ABRE nada. Fechar, stop e pânico seguem: recusar subir deixava a posição que existe sem ninguém para fechá-la. Reconfere a cada 10 min e avisa o dono. Exceção única, decisão do dono em 26/11 (IP de saída dinâmico): `BINANCE_CHAVE_SEM_IP=1` no `corretora.env` aceita a chave sem IP, e só isso; nenhuma rota nem a config a liga, e o `/status` mostra `chave_aviso` | `corretora.conferir_chave`, `execucao._reconferir_chave` |
+| Trocar de modo exige livro sem posição, sem ordem e sem histórico de outro modo; e a CONTA também vazia: sem posição e sem ordem aberta para entrar num modo real, sem posição e sem ordem do bot para voltar ao papel; e em One-way e Single-Asset LIDOS (não lido também recusa) | `execucao.trocar_modo` |
+| `corretora_dry_run` não liga com posição ou ordem aberta: em dry_run nada é enviado, nem fechamento, nem stop, nem pânico | `api._trocar_corretora` |
+| `binance` exige `perda_total_max` > 0 e canal de alerta | `api._trocar_corretora` |
+| Na conta R (`CORRETORA_HABILITADA`), em qualquer modo, HTTP (`/config`, `/auto`, `/perfil`) só APERTA os limites do dinheiro e não troca o canal de alerta, e o envio de verdade (`corretora_dry_run=0`) não liga por HTTP: afrouxar e ligar é `python -m execucao config` no servidor. A senha do painel mora no navegador e é a das contas de papel | `api._so_aperta`, `api.LIMITES_DINHEIRO` |
+| Trocar de corretora exige `auto_trade=0` e roda sob o lock de abertura (o lock é do processo: pela linha de comando, que é outro processo, quem protege é o `auto_trade=0`) | `execucao.trocar_modo`, `api._gravar_config` |
+| POST de navegador (com `Origin`) só em JSON: formulário de outra página não alcança `/panico` | `api.auth_basica` |
+| Teto de perda TOTAL, sticky: só solta quando o dono SOBE o teto (no servidor) | `execucao.guarda_total` |
+| Limite de nocional por ordem, antes da rede | `corretora_nocional_max` |
+| `/reset` recusado em modo corretora e em banco com histórico de `binance` | `api.reset` |
+| `/panico` cancela e fecha LÁ, e varre a conta. Sem o serviço: `deploy/panico.sh` para a unit e fala direto com a corretora, sempre como `cripto`, sem `source` de arquivo e sem senha na linha de comando | `execucao.panico`, `deploy/panico.sh` |
+| Mensagem de erro do ccxt sai sem a URL assinada e sem o IP de saída antes de ir a log, `/status` e HTTP | `corretora.limpo` (no `_Cliente`) |
+| O banco da R tem backup próprio, conferido com `integrity_check` | `deploy/backup_banco.py` |
+| O DCA (simulação: soma unidades, não compra nada) não cria plano nem aporta nessa conta | `dca._so_no_papel` |
+
+**Aproximações declaradas.** A alavancagem é truncada para inteiro. O trailing só reenvia o
+stop quando ele anda `corretora_trailing_passo_r` (0,1R). Com `noite_ativo`, entre `noite_inicio`
+e `noite_fim` a conta não abre e o trailing vira a ordem nativa da Binance, em % e não em R; de
+manhã o stop fixo sobe pelo pico da noite e o nativo é cancelado. Preenchimento parcial de
+post-only cancela o resto. Alvo menor que um lote fica sem ordem e essa parte segue no trailing.
+Os alvos são colocados no primeiro ciclo depois do fill, não junto com a entrada. Taxa cobrada
+em BNB entra no P&L estimada pela config (o original fica em `fills`). A conta opera em
+One-way, uma posição por ativo. O alvo que o preço já passou é realizado a mercado uma vez só:
+se esse envio fica incerto, a fatia segue no trailing em vez de ser tentada de novo. A taxa de
+liquidação não vem nos negócios: numa liquidação o livro subestima a perda, e quem acerta a
+banca é a conferência de carteira. Toda quantidade enviada passa por `corretora._lote`, que
+absorve o resíduo de ponto flutuante antes de truncar para o lote (`0.062 - 0.021` sairia
+`0.040`, um lote a menos no stop).
+
+**No painel.** A conta R é a quarta aba (`web/app/api.js`, `CONTAS.R`, rota `/testeR`). O que a
+tela mostra sobre ela não sai da aba, sai do `config.corretora` que o `/estado` devolve
+(`APX.modo()`): a mesma instância é papel no primeiro degrau da esteira, demo no segundo e
+dinheiro no último. Disso dependem três coisas. A **moeda**: `fmt.moeda()` dá `R$` no papel e
+`US$` em corretora, e nenhuma tela escreve o símbolo à mão. A **marca** ao lado da conexão:
+"demo da Binance", "Binance · dry-run" ou "dinheiro real". E a **moldura vermelha** na tela
+inteira (`body.modo-real`), só quando a ordem vai à Binance com dinheiro, isto é, `binance`
+sem `corretora_dry_run`: no demo e no dry-run a marca é âmbar, porque vermelho que aparece à
+toa deixa de avisar. O rodapé deixa de dizer "dinheiro fictício" fora do papel.
+
+---
+
+## 13. O que este documento não cobre
 
 | Pergunta | Onde |
 |---|---|

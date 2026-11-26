@@ -37,6 +37,7 @@
   '.v-carteira .ct-conta .s{font-family:var(--f-mono);font-size:11.5px;color:var(--txt2);line-height:1.6}' +
   '.v-carteira .esteira{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-family:var(--f-mono);font-size:11px;margin:8px 0}' +
   '.v-carteira .esteira span{border:1px solid var(--line2);border-radius:6px;padding:2px 7px;color:var(--txt2)}' +
+  '.v-carteira .esteira span.on{border-color:rgba(var(--accent-rgb),var(--glow));color:var(--accent)}' +
   '.v-carteira .aloc{display:flex;flex-wrap:wrap;gap:18px;align-items:center}.v-carteira .aloc .leg{flex:1 1 240px;min-width:0}' +
   '.v-carteira .donut{width:150px;height:150px;position:relative;flex:none}' +
   '.v-carteira .donut svg{width:100%;height:100%;transform:rotate(-90deg)}' +
@@ -152,7 +153,9 @@
   function lado(e) {
     var rg = e.risco || {}, pos = e.posicoes || [], aberto = pos.reduce(function (a, p) { return a + (p.pnl || 0); }, 0);
     var livre = Math.max(0, (e.banca ? e.banca.atual : 0) - (rg.margem_aberta || 0)), eq = e.equity_total || 0;
-    $('ct-side').innerHTML = '<div class="box"><div class="k">cripto · binance futures (paper)</div><div class="v">' + F.brl(eq) + '</div><div class="s">' + pos.length + (pos.length === 1 ? ' posição' : ' posições') + ' · ' + F.f0(eq ? livre / eq * 100 : 0) + '% livre · <span class="' + F.cls(aberto) + '">' + F.money(aberto) + '</span> em aberto' + ((e.dca || []).length ? '<br>' + e.dca.length + ' plano(s) de DCA à parte' : '') + '</div></div>' +
+    /* [LIVE-6] "(paper)" só onde é paper: o rótulo segue o modo que o backend diz */
+    var onde = A.modo() === 'papel' ? 'paper' : A.modo() === 'demo' ? 'demo' : String((e.config || {}).corretora_dry_run) === '1' ? 'dry-run' : 'dinheiro real';
+    $('ct-side').innerHTML = '<div class="box"><div class="k">cripto · binance futures (' + onde + ')</div><div class="v">' + F.brl(eq) + '</div><div class="s">' + pos.length + (pos.length === 1 ? ' posição' : ' posições') + ' · ' + F.f0(eq ? livre / eq * 100 : 0) + '% livre · <span class="' + F.cls(aberto) + '">' + F.money(aberto) + '</span> em aberto' + ((e.dca || []).length ? '<br>' + e.dca.length + ' plano(s) de DCA à parte' : '') + '</div></div>' +
       '<div class="box dash"><div class="k">ações BR · em construção (F8)</div><div class="s" style="margin-top:6px">Quando a B3 entrar, a carteira passa a ser multimercado e o teto de exposição vale para o total, não por mercado.</div></div>';
   }
 
@@ -161,15 +164,22 @@
     var eu = A.CONTA, h = e.equity_hist || [], ini = (e.banca || {}).inicial, cfg = e.config || {};
     var d0 = h.length ? A.ddmm(h[0].ts) : '—', ret = ini ? (e.equity_total / ini - 1) * 100 : 0;
     var desc = 'risco ' + F.f2((parseFloat(cfg.risco_por_trade) || 0) * 100) + '% · teto ' + F.f0((parseFloat(cfg.risco_aberto_max) || 0) * 100) + '% · TP ' + (String(cfg.tp_ativo) === '1' ? 'por estrutura' + (String(cfg.tp_resto_livre) === '1' ? ' (resto sem alvo)' : '') : 'off') + ' · trailing ' + (String(cfg.trailing_ativo) === '1' ? 'em ' + (cfg.trailing_unidade === 'R' ? 'R' : '%') : 'off') + (cfg.tendencia_filtro && cfg.tendencia_filtro !== 'off' ? ' · lado pelo diário' : '');
-    var minha = '<div class="card ct-conta is-on"><div class="card-head"><h2 class="h2">' + A.esc(A.NOME_CONTA) + '</h2><span class="count">esta</span></div><div class="v"><span class="cur">R$</span>' + F.f2(e.equity_total) + '</div>' +
+    var minha = '<div class="card ct-conta is-on"><div class="card-head"><h2 class="h2">' + A.esc(A.NOME_CONTA) + '</h2><span class="count">esta</span></div><div class="v"><span class="cur">' + F.moeda() + '</span>' + F.f2(e.equity_total) + '</div>' +
       '<div class="s"><span class="' + F.cls(ret) + '">' + F.money(e.equity_total - ini) + ' · ' + F.pct(ret) + '</span> sobre ' + F.brl(ini) + ' (curva desde ' + d0 + ')<br>' + A.esc(desc) + '</div></div>';
     /* [AB-2] as outras contas dividem UM cartão: com três contas, um cartão por conta empurraria a
        esteira do Real para fora da linha. Cada botão diz o nome e o papel da conta para onde leva. */
     var outra = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">Outras contas</h2><span class="count mute">paper</span></div><div class="s" style="margin:8px 0 12px">Outro backend, outro banco. Os números de cada uma só aparecem com ela selecionada.</div><div style="display:flex;gap:8px;flex-wrap:wrap">' +
-      Object.keys(A.CONTAS).filter(function (k) { return k !== eu; }).map(function (k) {
+      Object.keys(A.CONTAS).filter(function (k) { return k !== eu && k !== 'R'; }).map(function (k) {
         return '<button type="button" class="btn ghost sm" data-conta="' + k + '">' + A.esc(A.CONTAS[k].nome + ' · ' + A.CONTAS[k].papel) + '</button>';
       }).join('') + '</div></div>';
-    var real = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">Real · Binance</h2><span class="soon">esteira</span></div><div class="esteira"><span>testnet</span>→<span>dry-run</span>→<span>live</span></div><div class="s">Mede execução antes de encostar em dinheiro. Quando esta conta existir, a moldura inteira fica vermelha: dinheiro de verdade nunca parece paper.</div></div>';
+    /* [LIVE-6] A conta real existe (instância R) e sobe a esteira um degrau por vez, ligado pelo dono na
+       config dela. O degrau vem do backend (A.modo), então só se sabe com ela selecionada: de fora, o
+       cartão mostra a esteira e o botão. Ela não entra em "Outras contas", que diz "paper". */
+    var passo = eu !== 'R' ? -1 : A.modo() === 'papel' ? 0 : A.modo() === 'demo' ? 1 : String(cfg.corretora_dry_run) === '1' ? 2 : 3;
+    var real = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">Conta real · Binance</h2><span class="soon">' + (passo < 0 ? 'esteira' : 'degrau ' + (passo + 1) + ' de 4') + '</span></div>' +
+      '<div class="esteira">' + ['papel', 'demo', 'dry-run', 'real'].map(function (n, i) { return '<span' + (i === passo ? ' class="on"' : '') + '>' + n + '</span>'; }).join('→') + '</div>' +
+      '<div class="s">Mede execução antes de encostar em dinheiro. Com dinheiro de verdade a moldura inteira fica vermelha: a conta real nunca parece paper.</div>' +
+      (eu !== 'R' ? '<div style="margin-top:10px"><button type="button" class="btn ghost sm" data-conta="R">Abrir a ' + A.esc(A.CONTAS.R.nome) + '</button></div>' : '') + '</div>';
     $('ct-contas').innerHTML = minha + outra + real;
   }
 
@@ -249,13 +259,19 @@
   /* ---------- DCA ---------- */
   function dca(e) {
     var l = e.dca || [], el = $('ct-dca');
-    el.innerHTML = l.length ? '<div style="display:grid;gap:10px">' + l.map(function (d) {
+    /* [LIVE-6] O DCA é simulação (dca.py soma unidades e não compra nada). Na conta que opera em corretora
+       o backend recusa criar e aportar; a tela diz por quê em vez de oferecer um formulário que só colhe a
+       recusa. Plano criado no degrau de papel continua listado, para poder ser removido. */
+    var parado = A.modo() !== 'papel';
+    $('ct-dca-f').style.display = parado ? 'none' : '';
+    if (parado && !l.length) { el.innerHTML = '<div class="empty">O DCA daqui é simulação: não compra nada. Com a conta operando na Binance ele fica parado.</div>'; return; }
+    el.innerHTML = (parado ? '<div class="empty" style="margin-bottom:10px">O DCA daqui é simulação e está parado nesta conta: os planos abaixo não aportam.</div>' : '') + (l.length ? '<div style="display:grid;gap:10px">' + l.map(function (d) {
       var prox = d.ultimo_aporte ? (function () { var t = A.ts(d.ultimo_aporte); if (!t) return '—'; t = new Date(t.getTime() + d.freq_dias * 86400000); return ('0' + t.getDate()).slice(-2) + '/' + ('0' + (t.getMonth() + 1)).slice(-2); })() : 'no próximo ciclo';
       return '<div class="dca-it"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mono strong">' + A.esc(F.par(d.ativo)) + '</span><span class="chip neutro">' + F.brl(d.valor_aporte) + ' a cada ' + d.freq_dias + ' d</span><span class="mono ' + F.cls(d.pnl) + '" style="margin-left:auto">' + F.money(d.pnl) + ' · ' + F.pct(d.pnl_pct) + '</span></div>' +
         '<div class="dca-g"><div><div class="k">acumulado</div><div class="v">' + F.f2(d.unidades) + ' ' + A.esc(F.base(d.ativo)) + '</div></div><div><div class="k">investido → hoje</div><div class="v">' + F.brl(d.total_investido) + ' → ' + F.brl(d.valor_atual) + '</div></div><div><div class="k">preço médio</div><div class="v">' + F.px(d.preco_medio) + '</div></div>' +
         '<div><div class="k">aportes</div><div class="v">' + d.n_aportes + '</div></div><div><div class="k">último</div><div class="v">' + (d.ultimo_aporte ? A.ddmm(d.ultimo_aporte) : '—') + '</div></div><div><div class="k">próximo</div><div class="v">' + prox + '</div></div></div>' +
         '<div class="sg-act" style="display:flex;gap:8px"><button type="button" class="btn ghost sm" data-aportar="' + d.id + '">Aportar agora</button><button type="button" class="btn danger sm" data-remover="' + d.id + '">Remover plano</button></div></div>';
-    }).join('') + '</div>' : '<div class="empty">Nenhum plano de DCA. Crie um abaixo: compra spot periódica, sem alavancagem.</div>';
+    }).join('') + '</div>' : '<div class="empty">Nenhum plano de DCA. Crie um abaixo: compra spot periódica, sem alavancagem.</div>');
     var sel = $('ct-dca-a');
     if (!sel.options.length) pares(e).forEach(function (a) { var o = document.createElement('option'); o.value = a; o.textContent = F.par(a); sel.appendChild(o); });
   }
@@ -335,7 +351,7 @@
       ['Expectativa (R)', xr.txt + (xr.n ? ' <small class="mute">' + xr.n + ' tr.</small>' : ''), F.cls(xr.v), 'P&L ÷ risco até o stop gravado NA ABERTURA, média por trade. Só trades com esse risco gravado entram.'], ['SQN (R)', xr.n ? F.f2(xr.sqn) : '—', '', 'média ÷ desvio dos R-múltiplos × √min(n,100)'],
       ['Sharpe', tem ? F.f2(m.sharpe) : '—', '', 'retornos DIÁRIOS da curva de equity, anualizado (√365). Com poucos dias é ruído.'], ['Sortino', tem ? F.f2(m.sortino) : '—', '', 'por trade: média ÷ desvio só das perdas × √min(n,100)'],
       ['DD máx. fechado', dd ? F.money(-dd) + ' · ' + F.pct(-(m.max_drawdown_pct || 0), 1) : '—', dd ? 'neg' : '', 'maior queda da curva REALIZADA (banca inicial + P&L fechado), do pico'], ['DD máx. c/ aberto', m.max_dd_mtm_pct ? F.pct(-m.max_dd_mtm_pct, 1) : '—', m.max_dd_mtm_pct ? 'neg' : '', 'maior queda da curva de equity, com o P&L das posições abertas (marcado a mercado)'],
-      ['Lucro ÷ DD máx.', tem && dd ? F.f2(m.calmar) : '—', '', 'P&L total ÷ DD máximo fechado em R$ (fator de recuperação; não é o Calmar anualizado)'], ['Sem P&L gravado', m.n_sem_pnl || 0, '']];
+      ['Lucro ÷ DD máx.', tem && dd ? F.f2(m.calmar) : '—', '', 'P&L total ÷ DD máximo fechado em ' + F.moeda() + ' (fator de recuperação; não é o Calmar anualizado)'], ['Sem P&L gravado', m.n_sem_pnl || 0, '']];
     $('ct-mt').innerHTML = it.map(function (x) { return '<div' + (x[3] ? ' title="' + A.esc(x[3]) + '"' : '') + '><div class="k">' + x[0] + '</div><div class="v ' + x[2] + '">' + x[1] + '</div></div>'; }).join('');
     var pc = m.por_conviccao || [];
     $('ct-conv').innerHTML = pc.length ? '<div class="sub" style="margin-bottom:6px">Win rate por faixa de convicção</div><div class="tablewrap"><table class="tbl"><thead><tr><th>Faixa</th><th class="num">Trades</th><th class="num">Win rate</th><th class="num">P&amp;L</th><th>Barra</th></tr></thead><tbody>' +

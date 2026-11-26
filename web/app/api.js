@@ -4,8 +4,9 @@
    Contratos herdados do painel clássico (web/classico.html), mantidos IGUAIS de propósito para quem já
    tem o app instalado não ser deslogado nem trocar de banca sem perceber:
    - credencial em localStorage 'cbAuth' ("Basic ..."), header Authorization em toda requisição;
-   - conta em localStorage 'cbConta' ('A' | 'B' | 'C'); B e C são outras instâncias, expostas em
-     /testeB/... e /testeC/... [AB-1, AB-2], então trocar de conta é trocar o prefixo de TODAS as rotas;
+   - conta em localStorage 'cbConta' ('A' | 'B' | 'C' | 'R'); B, C e R são outras instâncias, expostas em
+     /testeB/..., /testeC/... e /testeR/... [AB-1, AB-2, LIVE-5], então trocar de conta é trocar o
+     prefixo de TODAS as rotas;
    - 401 nunca insiste com a mesma credencial (15 senhas erradas bloqueiam o IP): para o poll, descarta,
      abre o gate uma vez só (single-flight) e religa quando a credencial nova passa;
    - 429 para o poll, senão ele renova o próprio bloqueio.
@@ -30,10 +31,13 @@
   var CONTAS = {
     A: { nome: 'Paper A', papel: 'produção', rota: '' },
     B: { nome: 'Conta B', papel: 'teste A/B', rota: '/testeB' },
-    C: { nome: 'Conta C', papel: 'A sem TP2 e TP3', rota: '/testeC' }
+    C: { nome: 'Conta C', papel: 'A sem TP2 e TP3', rota: '/testeC' },
+    /* [LIVE-6] A instância que pode operar em corretora (deploy/cripto-bot-r.service). O nome é o da
+       conta; o que ela É agora (papel, demo ou dinheiro real) quem diz é o backend: ver modo(). */
+    R: { nome: 'Conta real', papel: 'Binance Futures', rota: '/testeR' }
   };
   var salva = store.get('cbConta');
-  var CONTA = (salva === 'B' || salva === 'C') ? salva : 'A';
+  var CONTA = (salva && Object.prototype.hasOwnProperty.call(CONTAS, salva)) ? salva : 'A';
   var BASE = String(window.API_BASE || '').replace(/\/+$/, '');
   var API = BASE + CONTAS[CONTA].rota;
   var cred = store.get('cbAuth') || '';
@@ -43,6 +47,13 @@
   var f0 = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
   var f1 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   var MENOS = '−';
+  /* [LIVE-6] Em que a conta opera, lido do que o backend respondeu (`config.corretora` do /estado:
+     papel, demo ou binance) e não da aba: a conta R no primeiro degrau da esteira ainda é papel.
+     Qualquer valor que não seja demo ou binance, e a falta da chave num backend mais antigo, é papel.
+     A moeda segue o modo: em corretora o saldo é USDT, e chamar de R$ o dinheiro que está na Binance
+     erra o valor por um fator de cinco. */
+  function modo() { var c = estado && estado.config && estado.config.corretora; return c === 'demo' || c === 'binance' ? c : 'papel'; }
+  function moeda() { return modo() === 'papel' ? 'R$' : 'US$'; }
   function n(v) { return typeof v === 'number' && isFinite(v) ? v : 0; }
   /* casas de um preço: ~5-6 algarismos significativos, que é o tick da Binance Futures nessas faixas */
   function pxCasas(v) { var a = Math.abs(n(v)); return a >= 10000 ? 1 : a >= 1000 ? 2 : a >= 10 ? 3 : a >= 1 ? 4 : a >= 0.01 ? 5 : 7; }
@@ -55,9 +66,11 @@
     /* múltiplo de R com sinal: +0,12R · −0,40R */
     r: function (v) { v = n(v); return (v > 0 ? '+' : v < 0 ? MENOS : '') + f2.format(Math.abs(v)) + 'R'; },
     /* R$ e o número nunca se separam na quebra de linha (\u00a0): no celular saía "+R$" numa linha e "138,51" na outra */
-    brl: function (v) { v = n(v); return (v < 0 ? MENOS : '') + 'R$\u00a0' + f2.format(Math.abs(v)); },
+    brl: function (v) { v = n(v); return (v < 0 ? MENOS : '') + moeda() + '\u00a0' + f2.format(Math.abs(v)); },
     /* dinheiro com sinal explícito: P&L */
-    money: function (v) { v = n(v); return (v > 0 ? '+' : v < 0 ? MENOS : '') + 'R$\u00a0' + f2.format(Math.abs(v)); },
+    money: function (v) { v = n(v); return (v > 0 ? '+' : v < 0 ? MENOS : '') + moeda() + '\u00a0' + f2.format(Math.abs(v)); },
+    /* o símbolo sozinho, para quem monta o número à mão (rótulo de campo, <span class="cur">) */
+    moeda: moeda,
     pct: function (v, d) { v = n(v); var f = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: d == null ? 2 : d, maximumFractionDigits: d == null ? 2 : d }); return (v > 0 ? '+' : v < 0 ? MENOS : '') + f.format(Math.abs(v)) + '%'; },
     /* preço: casas conforme a grandeza, as MESMAS do eixo do gráfico (pxCasas). Antes o texto tinha uma
        casa a menos que o gráfico: XRP a 1,0242 virava "1,024" no cabeçalho e "1.0242" no eixo, e o
@@ -283,7 +296,7 @@
     try { if ((await fetch(API + '/status')).ok) { carregar(); iniciar(); toast('Este backend não pede senha: não há sessão para encerrar'); return; } } catch (e) {}
     gateAbre();
   }
-  function trocaConta(c) { if (c === CONTA || (c !== 'A' && c !== 'B' && c !== 'C')) return; store.set('cbConta', c); location.reload(); }
+  function trocaConta(c) { if (c === CONTA || !Object.prototype.hasOwnProperty.call(CONTAS, c)) return; store.set('cbConta', c); location.reload(); }
 
   /* ---- libs vendoradas sob demanda (sempre de web/vendor, nunca de CDN) ---- */
   var libs = {};
@@ -330,7 +343,7 @@
   function rgba(nome, a) { return 'rgba(' + cor(nome + '-rgb') + ',' + a + ')'; }
 
   window.APX = {
-    STATIC: STATIC, RM: RM, CONTA: CONTA, CONTAS: CONTAS, NOME_CONTA: CONTAS[CONTA].nome, PAPEL_CONTA: CONTAS[CONTA].papel,
+    STATIC: STATIC, RM: RM, CONTA: CONTA, CONTAS: CONTAS, NOME_CONTA: CONTAS[CONTA].nome, PAPEL_CONTA: CONTAS[CONTA].papel, modo: modo,
     API: API, store: store, fmt: fmt, esc: esc,
     ts: ts, dia: dia, ddmm: ddmm, hhmm: hhmm, idade: idade, hoje: hoje,
     on: on, off: off, emit: emit, toast: toast,

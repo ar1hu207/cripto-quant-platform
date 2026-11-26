@@ -345,6 +345,23 @@ def _checar_tetos(con, g, valor_reais, risco_novo, exp_max, exige_auto=False):
                          f"passaria a banca inteira (R${banca_atual:.2f})")
 
 
+def _em_corretora(cfg):
+    """[LIVE-3] Esta conta executa numa corretora (config `corretora` diferente de `papel`)?
+    Lido da config que quem chama JÁ leu: os pontos de despacho não abrem o banco de novo."""
+    return str(cfg.get("corretora") or "papel").strip().lower() != "papel"
+
+
+def _so_papel(cfg, quem):
+    """[LIVE-3] `abrir()` e `colocar_ordem()` são o caminho do PAPEL: a posição nasce do preço
+    que este processo viu, sem ordem em lugar nenhum. Numa conta de corretora isso é uma linha
+    no livro para uma posição que não existe lá, contando em teto e em trava. A entrada dela é
+    `executar()`, que despacha para `execucao.executar`. Recusa aqui, e não na rota, pelo motivo
+    do [P1-12]: é o ponto por onde todo fluxo passa, e antes do claim, então não consome o sinal."""
+    if _em_corretora(cfg):
+        raise ValueError(f"conta em corretora — `{quem}()` é o caminho do papel; a entrada é "
+                         "por `executar()`")
+
+
 def abrir(sinal_id, valor_reais, alavancagem, exige_auto=False):
     _validar_entrada(valor_reais, alavancagem)
     g = guarda_risco()
@@ -385,6 +402,7 @@ def abrir(sinal_id, valor_reais, alavancagem, exige_auto=False):
                          f"inalcançável e a perda seria a margem inteira. Com este stop a "
                          f"alavancagem tem de ficar abaixo de {LIQ_BUFFER / sd:.1f}x.")
     cfg = db.get_config()
+    _so_papel(cfg, "abrir")
     exp_max = _cfg_float(cfg, "exposicao_max", 0.5)
     # [F-1] O risco-até-o-stop DESTA abertura, medido uma vez, aqui, sobre `preco` e `stop` —
     # os dois valores que a posição vai nascer tendo. O mesmo número serve ao teto agregado e
@@ -451,6 +469,7 @@ def colocar_ordem(sinal_id, valor_reais, alavancagem, exige_auto=False):
     if sig["status"] != "novo":
         raise ValueError("sinal ja %s - nao pode virar ordem de novo" % sig["status"])
     cfg = db.get_config()
+    _so_papel(cfg, "colocar_ordem")
     off = _cfg_float(cfg, "exec_maker_off", 0.0010)
     ttl = _cfg_float(cfg, "exec_ordem_ttl_s", 3600.0)
     preco = preco_ao_vivo(sig["ativo"])                        # rede FORA do lock
@@ -501,6 +520,12 @@ def processar_ordens():
         pend = [dict(r) for r in con.execute("SELECT * FROM ordens WHERE status='pendente'")]
     if not pend:
         return {"vistas": 0, "preenchidas": 0, "expiradas": 0, "falhas": 0}
+    # [LIVE-3] Ordem com `corretora` está descansando LÁ, e quem diz se ela encheu é a corretora.
+    # O laço abaixo a encheria pelo preço que este processo viu: posição no livro sem posição na
+    # conta. Decide pela LINHA, não pela config: é o que vale para a ordem que já existe.
+    if any(o.get("corretora") for o in pend):
+        import execucao
+        return execucao.processar_ordens()
     taxa_maker = _cfg_float(db.get_config(), "taxa_maker", 0.0002)
     agora = pd.Timestamp.now()
     res = {"vistas": len(pend), "preenchidas": 0, "expiradas": 0, "falhas": 0}
@@ -584,7 +609,11 @@ def executar(sinal_id, valor_reais, alavancagem, exige_auto=False):
     acontece se `auto_trade` ainda estiver ligado no instante do claim (ver `_checar_tetos`).
     O fluxo manual nao passa a bandeira: o dono confirma sinal com o bot desligado.
     """
-    if str(db.get_config().get("exec_modo", "mercado")) == "post_only":
+    cfg = db.get_config()
+    if _em_corretora(cfg):                      # [LIVE-3] a ordem vai para a corretora
+        import execucao
+        return execucao.executar(sinal_id, valor_reais, alavancagem, exige_auto)
+    if str(cfg.get("exec_modo", "mercado")) == "post_only":
         return "ordem", colocar_ordem(sinal_id, valor_reais, alavancagem, exige_auto)
     return "posicao", abrir(sinal_id, valor_reais, alavancagem, exige_auto)
 
@@ -608,22 +637,45 @@ def fechar(pos_id, motivo, preco_saida=None):
     raise ValueError("a posição mudou três vezes durante o fechamento; tente de novo")
 
 
-def _fechar_uma(pos_id, motivo, preco_saida):
+def _lancado(real, pnl, taxa, funding):
+    """[LIVE-3] Troca os três números do MODELO pelos que a corretora lançou, e devolve também
+    as cinco colunas que só o trade de corretora preenche (no papel, NULL).
+
+    O modelo não é jogado fora: vai para `pnl_modelo`, `taxa_modelo` e `funding_modelo`, na
+    mesma linha. A diferença entre as duas colunas é a medição "o papel prevê a conta?", trade
+    a trade, sem precisar de uma segunda instância rodando ao lado."""
+    if real is None:
+        return pnl, taxa, funding, (None, None, None, None, None)
+    extra = (real["corretora"], real["qty"], round(pnl, 6), round(taxa, 6),
+             round(funding, 4) if funding is not None else None)
+    return real["pnl"], real["taxa"], real["funding"], extra
+
+
+def _fechar_uma(pos_id, motivo, preco_saida, real=None):
     with db.conectar() as con:                                 # lê a posição (transação curta de leitura)
         row = con.execute("SELECT * FROM posicoes WHERE id=? AND status='aberta'", (pos_id,)).fetchone()
     if not row:
         return None
     pos = dict(row)
+    # [LIVE-3] Posição que está NA corretora não fecha por decisão do livro: fecha LÁ, e o livro
+    # copia o que executou. `real` é essa cópia chegando (`execucao._lancar_saida`), com o P&L,
+    # a taxa e o funding lançados. Sem ele, quem chamou QUER fechar (rota, pânico, auto-saída) e
+    # o pedido segue para a corretora. Gravar a saída aqui pelo preço que o processo viu seria
+    # o livro dizendo "fechei" com a posição aberta na conta.
+    if pos.get("corretora") and real is None:
+        import execucao
+        return execucao.fechar(pos, motivo)
     if preco_saida is None:
         preco_saida = preco_ao_vivo(pos["ativo"])              # rede FORA do lock de escrita
     pnl, taxa, move = _pnl(pos, preco_saida)                   # liquidação usa o preço de liq (coerente c/ LIQ_BUFFER)
-    fechado_em = str(_agora())
+    fechado_em = str(_agora()) if real is None else real["fechado_em"]
     nocional = pos["valor_reais"] * pos["alavancagem"]
     funding = _funding_custo(pos["ativo"], pos["aberto_em"], fechado_em, pos["direcao"], nocional)
     if funding is not None:
         pnl += funding                                         # funding entra no P&L realizado
         if pnl < -pos["valor_reais"]:                          # re-cap: nunca perde mais que a margem
             pnl = -pos["valor_reais"]
+    pnl, taxa, funding, extra = _lancado(real, pnl, taxa, funding)
     # funding None = NÃO MEDIDO. O P&L segue sem ele (não dá pra cobrar o que não se mediu),
     # mas a coluna grava NULL, não 0.0: o portão do M2 exige número medido ou AUSENTE
     # declarado. Zero seria a pesquisa lendo "este trade não pagou carry" — que é falso.
@@ -673,8 +725,9 @@ def _fechar_uma(pos_id, motivo, preco_saida):
         ret_liq = (pnl / pos["valor_reais"] * 100) if pos["valor_reais"] else None
         con.execute("INSERT INTO trades(ativo,direcao,entrada,saida,valor_reais,alavancagem,"
                     "ret_pct,ret_pct_liq,pnl_reais,taxa,motivo_saida,aberto_em,fechado_em,"
-                    "conviccao,sinal_id,stop,risco_inicial,funding,risco_abertura) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "conviccao,sinal_id,stop,risco_inicial,funding,risco_abertura,"
+                    "corretora,qty,pnl_modelo,taxa_modelo,funding_modelo) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pos["ativo"], pos["direcao"], pos["entrada"], preco_saida, pos["valor_reais"],
                      pos["alavancagem"], move * pos["alavancagem"] * 100,
                      round(ret_liq, 6) if ret_liq is not None else None,
@@ -682,13 +735,16 @@ def _fechar_uma(pos_id, motivo, preco_saida):
                      pos["aberto_em"], fechado_em, pos["conviccao"], pos["sinal_id"],
                      pos["stop"], round(risco_ini, 4),
                      round(funding, 4) if funding is not None else None,
-                     round(risco_ab, 4) if risco_ab is not None else None))
+                     round(risco_ab, 4) if risco_ab is not None else None, *extra))
         banca = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
         con.execute("UPDATE banca SET atual=? WHERE id=1", (banca + pnl,))
+        if real is not None:                                   # os negócios, na MESMA transação
+            real["apos"](con)
     emoji = "💥" if motivo == "liquidacao" else ("🔴" if pnl < 0 else "🟢")
     f_txt = f"{funding:+.2f}" if funding is not None else "n/d"    # n/d != 0.00, no log também
-    log(f"FECHOU #{pos_id} {pos['direcao']} {pos['ativo']} | {motivo} | P&L R$ {pnl:+.2f} (funding {f_txt})")
-    alertas.enviar(f"{emoji} Fechou {pos['direcao']} {pos['ativo']} ({motivo})\nP&L: R$ {pnl:+.2f}")
+    moeda = "R$" if real is None else "US$"                       # [LIVE-3] a conta em corretora é em USDT
+    log(f"FECHOU #{pos_id} {pos['direcao']} {pos['ativo']} | {motivo} | P&L {moeda} {pnl:+.2f} (funding {f_txt})")
+    alertas.enviar(f"{emoji} Fechou {pos['direcao']} {pos['ativo']} ({motivo})\nP&L: {moeda} {pnl:+.2f}")
     push.avisar(*push.msg_fechou(pos["direcao"], pos["ativo"], pnl, motivo),
                 "#diario", f"pos-{pos_id}", tipo="fechou")
     return pnl
@@ -701,6 +757,11 @@ def atualizar():
     cfg = db.get_config()
     trail = _trailing_cfg(cfg)
     tp = alvos.cfg_tp(cfg)                                  # [TP-1] mesma política p/ o ciclo todo
+    # [LIVE-3] Na conta de corretora o stop, o alvo e a liquidação são ordens LÁ: este laço não
+    # fecha nada por preço, e a recuperação da lacuna não se aplica (a corretora não desligou).
+    if _em_corretora(cfg):
+        import execucao
+        return execucao.atualizar(cfg, trail, tp)
     eventos = []
     # [NOITE-1] Antes do preço de agora, o que aconteceu enquanto ninguém olhava. Try próprio e
     # ANTES da leitura das abertas: a recuperação fecha posições, e uma falha nela não pode
@@ -1146,7 +1207,7 @@ def _stop_na_entrada_apos_tp1(pos, plano, tp):
         pos["stop"] = e
 
 
-def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
+def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None, real=None):
     """[TP-1] Fecha a fração `frac` (do que está ABERTO) da posição e grava um trade dela.
 
     O pedaço fechado vira uma linha em `trades` com o próprio `valor_reais` -- então P&L, taxa,
@@ -1169,13 +1230,14 @@ def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
     parte = dict(pos)
     parte["valor_reais"] = v_fecha
     pnl, taxa, move = _pnl(parte, preco_saida, cfg)
-    fechado_em = str(_agora())
+    fechado_em = str(_agora()) if real is None else real["fechado_em"]
     funding = _funding_custo(pos["ativo"], pos["aberto_em"], fechado_em, pos["direcao"],
                              v_fecha * pos["alavancagem"])
     if funding is not None:
         pnl += funding
         if pnl < -v_fecha:
             pnl = -v_fecha
+    pnl, taxa, funding, extra = _lancado(real, pnl, taxa, funding)    # [LIVE-3] ver `_fechar_uma`
     risco_ab = pos.get("risco_abertura")
     risco_ini = _risco_posicao(v_fecha, pos["alavancagem"], pos["entrada"], pos["stop"])
     ret_liq = (pnl / v_fecha * 100) if v_fecha else None
@@ -1189,20 +1251,24 @@ def fechar_parcial(pos, frac, motivo, preco_saida, plano, cfg=None):
             return None
         con.execute("INSERT INTO trades(ativo,direcao,entrada,saida,valor_reais,alavancagem,"
                     "ret_pct,ret_pct_liq,pnl_reais,taxa,motivo_saida,aberto_em,fechado_em,"
-                    "conviccao,sinal_id,stop,risco_inicial,funding,risco_abertura) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "conviccao,sinal_id,stop,risco_inicial,funding,risco_abertura,"
+                    "corretora,qty,pnl_modelo,taxa_modelo,funding_modelo) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (pos["ativo"], pos["direcao"], pos["entrada"], preco_saida, v_fecha,
                      pos["alavancagem"], move * pos["alavancagem"] * 100,
                      round(ret_liq, 6) if ret_liq is not None else None,
                      pnl, taxa, motivo, pos["aberto_em"], fechado_em, pos["conviccao"],
                      pos["sinal_id"], pos["stop"], round(risco_ini, 4),
                      round(funding, 4) if funding is not None else None,
-                     round(risco_ab * frac, 4) if risco_ab is not None else None))
+                     round(risco_ab * frac, 4) if risco_ab is not None else None, *extra))
         banca = con.execute("SELECT atual FROM banca WHERE id=1").fetchone()["atual"]
         con.execute("UPDATE banca SET atual=? WHERE id=1", (banca + pnl,))
+        if real is not None:
+            real["apos"](con)
     log(f"PARCIAL #{pos['id']} {pos['direcao']} {pos['ativo']} | {motivo} {frac:.0%} @ "
-        f"{preco_saida:.6g} | P&L R$ {pnl:+.2f}")
-    alertas.enviar(f"🎯 {motivo.upper()} {pos['direcao']} {pos['ativo']}\nP&L parcial: R$ {pnl:+.2f}")
+        f"{preco_saida:.6g} | P&L {'R$' if real is None else 'US$'} {pnl:+.2f}")
+    alertas.enviar(f"🎯 {motivo.upper()} {pos['direcao']} {pos['ativo']}\n"
+                   f"P&L parcial: {'R$' if real is None else 'US$'} {pnl:+.2f}")
     push.avisar(*push.msg_parcial(pos["direcao"], pos["ativo"], pnl, motivo, frac),
                 f"#pos/{pos['id']}", f"pos-{pos['id']}", tipo="parcial")
     return v_resto

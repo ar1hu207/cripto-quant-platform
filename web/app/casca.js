@@ -48,7 +48,7 @@
   document.addEventListener('click', fechaMenus);
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') fechaMenus(); });
 
-  /* ================= conta (A / B / C / Real em esteira) ================= */
+  /* ================= conta (A / B / C / Real) ================= */
   Array.prototype.forEach.call(document.querySelectorAll('.conta[data-conta]'), function (b) {
     b.setAttribute('aria-pressed', String(b.dataset.conta === A.CONTA));
     b.addEventListener('click', function () { A.trocaConta(b.dataset.conta); });
@@ -94,13 +94,13 @@
     if (!(await dialogo({ titulo: 'Pânico', corpo: corpo, ok: 'Confirmar pânico', perigo: true }))) return;
     try {
       var r = await A.api('/panico', {});
-      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
+      A.toast('Pânico: ' + r.fechadas + (r.fechadas === 1 ? ' posição fechada' : ' posições fechadas') + (r.ordens_canceladas ? ' · ' + r.ordens_canceladas + (r.ordens_canceladas === 1 ? ' ordem cancelada' : ' ordens canceladas') : '') + A.panicoVarridas(r) + ' · P&L ' + F.money(r.pnl) + ' · auto desligado', 'neg');
       A.carregar();
       /* O backend não para na posição que falha ao fechar, e a resposta agora diz QUAIS ficaram.
          Isso não pode ser um toast de 3 s: fica na tela até a pessoa ver. */
       var fl = r.falhas || [];
       if (fl.length) await dialogo({ titulo: 'Pânico incompleto', perigo: true, ok: 'Entendi',
-        corpo: '<p><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return A.esc(F.par(f.ativo)); }).join(', ') + '.</p><p>O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p><p class="mute">' + A.esc(fl[0].erro || '') + '</p>' });
+        corpo: A.modo() !== 'papel' ? A.panicoFalhas(fl) : '<p><b class="neg">' + fl.length + (fl.length === 1 ? ' posição NÃO fechou' : ' posições NÃO fecharam') + '</b>: ' + fl.map(function (f) { return A.esc(F.par(f.ativo)); }).join(', ') + '.</p><p>O Apollo está desligado e as ordens foram canceladas. Aperte o pânico de novo, ou feche essas posições uma a uma.</p><p class="mute">' + A.esc(fl[0].erro || '') + '</p>' });
     } catch (err) { A.toast('Pânico falhou: ' + A.erroTxt(err), 'neg'); }
   }
   A.panico = panico;
@@ -140,7 +140,7 @@
     var exec = cfg.exec_modo === 'post_only' ? 'post-only (a ordem descansa e expira sem devolver o sinal)' : 'a mercado';
     var corpo = '<div class="mono" style="font-size:12px;color:var(--txt2)">' + A.esc(F.par(s.ativo)) + ' · ' + A.esc(s.direcao) + ' · convicção ' + Math.round(s.conviccao) + ' · ' + A.esc(s.tf || '') + ' · entrada ~' + F.px(s.preco) + ' · execução ' + exec + '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">' +
-      '<label class="fld">Valor (R$)<input class="inp" id="tk-valor" type="number" min="1" step="1"></label>' +
+      '<label class="fld">Valor (' + F.moeda() + ')<input class="inp" id="tk-valor" type="number" min="1" step="1"></label>' +
       '<label class="fld">Alavancagem<input class="inp" id="tk-lev" type="number" min="1" max="125" step="1" value="' + lev0 + '"></label>' +
       '<label class="fld">Risco % banca<input class="inp" id="tk-risco" type="number" min="0.1" max="20" step="0.1" value="' + (+risco0.toFixed(2)) + '"></label></div>' +
       '<div class="prev" id="tk-prev"></div>';
@@ -180,7 +180,7 @@
     try {
       var r = await A.api('/confirmar', { sinal_id: s.id, valor_reais: valorFinal, alavancagem: levFinal });
       if (r && r.ok === false) { A.toast(r.erro, 'neg'); return r; }
-      A.toast(r.tipo === 'ordem' ? 'Ordem post-only colocada: ' + F.par(s.ativo) + ' ' + A.esc(s.direcao) + ' · R$ ' + valorFinal + ' @ ' + levFinal + 'x' : s.direcao + ' ' + F.par(s.ativo) + ' aberto · R$ ' + valorFinal + ' @ ' + levFinal + 'x');
+      A.toast(r.tipo === 'ordem' ? 'Ordem post-only colocada: ' + F.par(s.ativo) + ' ' + A.esc(s.direcao) + ' · ' + F.moeda() + ' ' + valorFinal + ' @ ' + levFinal + 'x' : s.direcao + ' ' + F.par(s.ativo) + ' aberto · ' + F.moeda() + ' ' + valorFinal + ' @ ' + levFinal + 'x');
       A.carregar(); return r;
     } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); return null; }
     finally { busy = false; }
@@ -298,6 +298,20 @@
       ct.textContent = (vivo ? 'ao vivo' : 'ciclo parado') + (health && health.j.ciclo_ha_s != null ? ' · ciclo há ' + Math.round(health.j.ciclo_ha_s) + ' s' : '');
     }
     if (!e) return;
+    /* [LIVE-6] Em que a conta opera, dito pelo backend (A.modo lê o /estado). O que o front prometia
+       na Carteira desde o primeiro dia: com dinheiro de verdade a moldura inteira fica vermelha, para
+       a conta real nunca parecer paper. Vermelho só quando a ordem VAI à Binance com dinheiro: no demo
+       e no dry-run a marca é âmbar, porque vermelho que aparece à toa deixa de avisar. */
+    var md = A.modo(), seco = String(cfg.corretora_dry_run) === '1', valendo = md === 'binance' && !seco;
+    var chip = $('modo-conta');
+    chip.hidden = md === 'papel';
+    chip.className = 'modo-conta' + (valendo ? ' real' : '');
+    chip.textContent = md === 'demo' ? 'demo da Binance' : seco ? 'Binance · dry-run' : 'dinheiro real';
+    document.body.classList.toggle('modo-real', valendo);
+    $('foot-modo').textContent = md === 'papel' ? 'paper trading: dinheiro fictício, preço real da Binance'
+      : md === 'demo' ? 'conta demo da Binance: ordens de verdade, dinheiro de teste'
+      : seco ? 'conta real em dry-run: lê a Binance e não envia ordem'
+      : 'conta real: ordens e dinheiro de verdade na Binance Futures';
     led.className = 'led' + (on ? '' : ' off');
     txt.textContent = 'Apollo ' + (on ? 'ligado' : 'desligado') + ' · ' + (cfg.exec_modo === 'post_only' ? 'post-only' : 'mercado');
     sub.textContent = (health ? 'v' + health.j.versao + (health.j.commit ? ' · ' + String(health.j.commit).slice(0, 7) : '') + ' · ' : '') + A.NOME_CONTA;
