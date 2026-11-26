@@ -2,44 +2,65 @@
 # instância que pode sair do papel: sobe com CORRETORA_HABILITADA=1, e as outras três recusam o
 # boot se o banco delas estiver em modo corretora (`api._guarda_corretora`). Mesmo código das
 # contas A, B e C, com banco, log e porta próprios. Escuta só em loopback: quem a expõe é a
-# conta A, na rota /testeR/... (api.conta_real), atrás da mesma senha do painel. Em `binance`
-# essa senha só APERTA limites; afrouxar e ligar o envio real é no servidor (`api._so_aperta`).
+# conta A, na rota /testeR/... (api.conta_real), atrás da mesma senha do painel. Em qualquer
+# modo essa senha só APERTA limites; afrouxar e ligar o envio real é no servidor (`api._so_aperta`).
 #
-# ONDE A CHAVE MORA, sem exagero (revisão de 26/11). A chave da Binance não vai no `.env`
-# compartilhado: fica em /home/cripto/cripto-bot-r/corretora.env, que só esta unit CARREGA. Isso
-# tira a chave do AMBIENTE das contas de papel, e só. As quatro units rodam como o mesmo usuário
-# `cripto`: um processo da A (exposto na internet) consegue ler esse arquivo e o
-# /proc/<pid>/environ da R. O que impede a A de operar a conta é `CORRETORA_HABILITADA`, não a
-# permissão do arquivo. Isolar de verdade = um usuário Linux só da R (RUNBOOK-VM.md §0.1, "Isolar
-# a chave"), decisão do dono porque mexe nas permissões do código das quatro.
+# [LIVE-14] A R RODA ISOLADA DAS OUTRAS TRÊS. A, B e C rodam como `cripto`, e a A está exposta
+# na internet. Quem tomar o processo da A tem o que o `cripto` tem, então a R não pode depender
+# de nada que o `cripto` escreva nem guardar nada que ele leia:
+#   usuário   `cripto-r`, de sistema, sem shell de login;
+#   código    /opt/cripto-r/app, checkout PRÓPRIO do repositório, de root. O `cripto` lê e não
+#             escreve. Rodando o código da A (o setfacl da versão anterior do RUNBOOK), quem
+#             tomasse a A editava um .py e a R rodava o código dele, com o usuário novo, no
+#             restart seguinte;
+#   python    /opt/cripto-r/venv e o interpretador em /opt/cripto-r/python, de root (o venv da A
+#             aponta para um Python que mora na home do `cripto`);
+#   estado    /var/lib/cripto-r (700 cripto-r): corretora.env (a chave), r.env (senha do painel
+#             e VAPID: a R não lê mais o .env da A), trading.db, plataforma.log e backup/. Fora de
+#             /home/cripto de propósito: o `cripto` é dono de /home/cripto e poderia RENOMEAR uma
+#             pasta da R que morasse lá e pôr outra no lugar (um env file com LD_PRELOAD, um banco
+#             com os limites afrouxados), sem precisar ler nada dela.
+# Pendência: o r.env nasce com a MESMA senha do painel da A, e quem tomar a A sabe a senha da R.
+# Pelo HTTP os limites só apertam, mas dá para ligar o auto_trade e o pânico (RUNBOOK-VM.md §0.1).
 #
-# Instalar (uma vez). Quem cria o arquivo da chave é o DONO, no servidor; ela não passa por
-# chat nem pelo repositório (ele é público):
-#   sudo install -d -o cripto -g cripto -m 700 /home/cripto/cripto-bot-r
-#   sudo -u cripto sh -c 'umask 077; cat > /home/cripto/cripto-bot-r/corretora.env'
-#       BINANCE_DEMO_KEY=...        (fase demo)
-#       BINANCE_DEMO_SECRET=...
-#       BINANCE_KEY=...             (só no go-live; leitura + futuros, sem saque, sem transferência)
-#       BINANCE_SECRET=...
-#       BINANCE_CHAVE_SEM_IP=1      (SÓ se a chave não for presa a IP; decisão do dono, 26/11:
-#                                    o IP de saída do dl380 é dinâmico. Tire quando houver IP fixo)
+# O endurecimento que o contêiner aceita está no [Service] abaixo, MENOS três diretivas que vivem
+# no drop-in deploy/cripto-bot-r.service.d/zzzz-depois-do-lxc.conf: o gerador `lxc` do contêiner
+# grava /run/systemd/system/service.d/zzz-lxc-service.conf, que vale para TODO serviço e põe
+# NoNewPrivileges=no, ProtectKernelTunables=no e ProtectControlGroups=no. Drop-in vence o arquivo
+# da unit e os drop-ins são aplicados pela ordem do nome: escritas aqui, as três aparecem na unit
+# e não valem (era o NoNewPrivileges=yes daqui, com NoNewPrivs 0 no processo). Confira sempre no
+# processo, nunca no arquivo: `grep NoNewPrivs /proc/$(systemctl show -p MainPID --value cripto-bot-r)/status`.
+#
+# Instalar (uma vez; o passo a passo com a migração está no RUNBOOK-VM.md §0.1):
+#   sudo useradd --system --user-group --home-dir /var/lib/cripto-r --no-create-home \
+#        --shell /usr/sbin/nologin cripto-r
+#   sudo install -d -o cripto-r -g cripto-r -m 700 /var/lib/cripto-r
+#   sudo git clone https://github.com/ar1hu207/cripto-quant-platform.git /opt/cripto-r/app
+#   (python e venv de root em /opt/cripto-r: RUNBOOK-VM.md §0.1)
+#   A chave quem grava é o DONO, no servidor; ela não passa por chat nem pelo repositório:
+#   sudo sh -c 'umask 077; cat > /var/lib/cripto-r/corretora.env' && sudo chown cripto-r: /var/lib/cripto-r/corretora.env
+#       BINANCE_DEMO_KEY=... / BINANCE_DEMO_SECRET=...    (fase demo)
+#       BINANCE_KEY=... / BINANCE_SECRET=...              (leitura + futuros; sem saque, sem transferência)
+#       BINANCE_CHAVE_SEM_IP=1    (SÓ se a chave não for presa a IP: [LIVE-11], decisão do dono)
 #     (termina com Ctrl-D numa linha vazia)
-#   sudo cp deploy/cripto-bot-r.service /etc/systemd/system/
+#   Unit e drop-in saem SEMPRE do checkout de root, nunca de /home/cripto: arquivo que o
+#   `cripto` escreve e root instala como unit é root fazendo o que o `cripto` mandou.
+#   sudo install -m 644 /opt/cripto-r/app/deploy/cripto-bot-r.service /etc/systemd/system/
+#   sudo install -D -m 644 /opt/cripto-r/app/deploy/cripto-bot-r.service.d/zzzz-depois-do-lxc.conf \
+#        /etc/systemd/system/cripto-bot-r.service.d/zzzz-depois-do-lxc.conf
 #   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-r
 #
-# A conta nasce em PAPEL, com a config padrão do código e `auto_trade=0`. A escada para ligar,
-# com os comandos exatos, está no RUNBOOK-VM.md §0.1. Resumo: (1) a estratégia da A copiada
-# por `python -m execucao config-de`, com banca e teto de perda desta conta; (2) demo; (3)
-# papel + reset, binance com dry_run=1; (4) envio real ligado NO SERVIDOR; (5) o dono liga o
-# auto_trade. Trocar de corretora exige auto_trade=0.
+# Deploy da R: o `git pull` da A NÃO troca mais o código da R. Root faz `git checkout <sha>` em
+# /opt/cripto-r/app, compila, reinstala unit e drop-in se mudaram e reinicia esta unit (comandos
+# no RUNBOOK-VM.md §0.1). /testeR/health (pela A) mostra o commit do checkout da R. Reiniciar
+# esta unit é seguro com posição aberta: stop e alvos estão na corretora, e o boot começa pela
+# reconciliação.
 #
-# Pânico sem painel: `sudo cripto-panico-r` (no servidor; a cópia de root de deploy/panico.sh,
-# instalação no cabeçalho dele) desliga o bot, cancela tudo e fecha tudo na corretora, mesmo com
-# este serviço travado (ele o PARA antes do caminho direto).
+# A conta nasce em PAPEL, com a config padrão do código e `auto_trade=0`. A escada para ligar
+# está no RUNBOOK-VM.md §0.1. Trocar de corretora exige auto_trade=0.
 #
-# O deploy da A (git pull no /home/cripto/cripto-bot) troca o código das quatro: depois dele,
-# reinicie os QUATRO serviços (/testeR/health mostra o commit). Reiniciar esta unit é seguro com
-# posição aberta: stop e alvos estão na corretora, e o boot começa pela reconciliação.
+# Pânico sem painel: `sudo cripto-panico-r` (no servidor; a cópia de root de deploy/panico.sh)
+# desliga o bot, cancela tudo e fecha tudo na corretora, mesmo com este serviço travado.
 [Unit]
 Description=Cripto Bot - conta R (opera em corretora)
 # time-sync: só ORDENA depois do alvo; não espera o NTP sincronizar (isso exige
@@ -50,27 +71,47 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=cripto
-WorkingDirectory=/home/cripto/cripto-bot
-EnvironmentFile=/home/cripto/cripto-bot/.env
-EnvironmentFile=/home/cripto/cripto-bot-r/corretora.env
+User=cripto-r
+Group=cripto-r
+WorkingDirectory=/opt/cripto-r/app
+EnvironmentFile=/var/lib/cripto-r/r.env
+EnvironmentFile=/var/lib/cripto-r/corretora.env
 Environment=TZ=America/Sao_Paulo
-# CONTA, DB_PATH e LOG_PATH vão pelo `env` do ExecStart, e NÃO por `Environment=`: o `.env` da
-# A define DB_PATH, e no systemd o EnvironmentFile VENCE o Environment= (o incidente de 10/11).
-# CORRETORA_HABILITADA vai junto pelo mesmo motivo: é a linha que separa esta conta das de papel,
-# e não pode depender de um arquivo que as outras também leem.
-ExecStart=/usr/bin/env CONTA=R CORRETORA_HABILITADA=1 DB_PATH=/home/cripto/cripto-bot-r/trading.db LOG_PATH=/home/cripto/cripto-bot-r/plataforma.log /home/cripto/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8003
+# O checkout é de root e o processo é cripto-r: sem isto o git recusa o repositório ("dubious
+# ownership") e o /health responde commit None. `safe.directory` só vale em configuração
+# protegida; GIT_CONFIG_* conta como linha de comando, que é protegida. Só este caminho.
+Environment=GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/opt/cripto-r/app
+# CONTA, DB_PATH, LOG_PATH e CORRETORA_HABILITADA vão pelo `env` do ExecStart: no systemd o
+# EnvironmentFile VENCE o Environment= (o incidente de 10/11), e a linha que separa esta conta
+# das de papel não pode depender de arquivo nenhum.
+ExecStart=/usr/bin/env CONTA=R CORRETORA_HABILITADA=1 DB_PATH=/var/lib/cripto-r/trading.db LOG_PATH=/var/lib/cripto-r/plataforma.log /opt/cripto-r/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8003
 Restart=always
 RestartSec=5
 WatchdogSec=300
 NotifyAccess=main
 MemoryHigh=620M
 MemoryMax=760M
-# Endurecimento que não precisa de namespace (funciona dentro do contêiner LXC). PrivateTmp,
-# ProtectSystem e ProtectHome precisam de namespace de montagem e podem impedir a unit de subir
-# num contêiner sem privilégio: só entram depois de testados lá (RUNBOOK-VM.md §0.1).
-NoNewPrivileges=yes
 UMask=0077
+# Endurecimento ([LIVE-14]). Testado no contêiner do dl380 (LXC sem privilégio, systemd 257)
+# uma diretiva por vez, com restart, ciclo completo, scan 72/72 e journal limpo a cada uma:
+# todas passaram. NoNewPrivileges, ProtectKernelTunables e ProtectControlGroups NÃO estão aqui:
+# o drop-in zzz-lxc-service.conf do contêiner as desliga por cima da unit (ver o cabeçalho);
+# elas vivem em cripto-bot-r.service.d/zzzz-depois-do-lxc.conf.
+# Escrita só no estado da R; o resto do disco é só leitura, /home não existe para ela.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cripto-r
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+# A R só fala TCP/UDP (Binance, push) e socket local (sd_notify do watchdog).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target

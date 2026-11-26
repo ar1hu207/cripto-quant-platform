@@ -327,8 +327,8 @@ def _guarda_corretora():
     posta para isso (`CORRETORA_HABILITADA=1` no `ExecStart` da unit dela).
 
     A chave da Binance não está no `.env` que as quatro leem (fica no `corretora.env`, que só a
-    unit da R carrega), mas as quatro rodam como o mesmo usuário Linux e o arquivo está ao
-    ALCANCE de todas. Sem esta recusa, restaurar o backup da conta real na pasta de uma conta de papel (ou apontar
+    unit da R carrega), e desde o [LIVE-14] nem ao alcance delas (a R roda como `cripto-r`,
+    com estado em /var/lib/cripto-r). A recusa não depende disso: sem ela, restaurar o backup da conta real na pasta de uma conta de papel (ou apontar
     o `DB_PATH` errado, o incidente de 10/11 do [AB-1]) faria um segundo processo mandar ordem
     na mesma conta da corretora. Recusa o boot, e não "cai para papel": cair para papel deixaria
     as posições reais do livro sendo marcadas e fechadas por preço, sem ordem nenhuma."""

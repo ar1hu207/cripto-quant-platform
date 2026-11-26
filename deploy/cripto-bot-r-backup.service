@@ -1,6 +1,10 @@
 # [LIVE-12] Backup do banco da conta R (dinheiro real). Disparado por cripto-bot-r-backup.timer.
-# Instalar junto com o timer:
-#   sudo cp deploy/cripto-bot-r-backup.service deploy/cripto-bot-r-backup.timer /etc/systemd/system/
+# [LIVE-14] Como `cripto-r`, com o python e o código de root em /opt/cripto-r, para a pasta de
+# backup dentro do estado da R (/var/lib/cripto-r, 700): nem o `cripto` lê as cópias, nem o
+# código que as faz é dele. A pasta backup/ é só deste banco (a rotação apaga `trading-*.db`).
+# Instalar junto com o timer, do checkout de root (nunca de /home/cripto):
+#   sudo install -m 644 /opt/cripto-r/app/deploy/cripto-bot-r-backup.service \
+#        /opt/cripto-r/app/deploy/cripto-bot-r-backup.timer /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-r-backup.timer
 # Conferir: systemctl list-timers cripto-bot-r-backup.timer ; journalctl -u cripto-bot-r-backup -n 5
 [Unit]
@@ -8,7 +12,8 @@ Description=Cripto Bot - backup do banco da conta R
 
 [Service]
 Type=oneshot
-User=cripto
+User=cripto-r
+Group=cripto-r
 UMask=0077
 Environment=TZ=America/Sao_Paulo
-ExecStart=/home/cripto/cripto-bot/venv/bin/python /home/cripto/cripto-bot/deploy/backup_banco.py /home/cripto/cripto-bot-r/trading.db /home/cripto/backup-r --manter 30
+ExecStart=/opt/cripto-r/venv/bin/python /opt/cripto-r/app/deploy/backup_banco.py /var/lib/cripto-r/trading.db /var/lib/cripto-r/backup --manter 30

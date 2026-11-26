@@ -2,11 +2,13 @@
 # [LIVE-5] Pânico da conta R sem painel e sem depender do serviço estar de pé.
 #
 # Roda NO SERVIDOR. Como root, pela CÓPIA de root ([LIVE-12]): `sudo cripto-panico-r`.
-#   Instalar (uma vez, e de novo só depois de ler o diff deste arquivo):
-#     sudo install -o root -g root -m 755 deploy/panico.sh /usr/local/sbin/cripto-panico-r
-#   `sudo bash deploy/panico.sh` faria root interpretar um arquivo que o usuário `cripto` (o
-#   processo da A, exposto na internet) pode alterar: invadir a A viraria root no próximo pânico.
-#   Como `cripto` (`bash deploy/panico.sh`) também funciona, mas sem conseguir parar a unit.
+#   Instalar (uma vez, e de novo só depois de ler o diff deste arquivo), do checkout de root:
+#     sudo install -o root -g root -m 755 /opt/cripto-r/app/deploy/panico.sh /usr/local/sbin/cripto-panico-r
+#     sudo cmp /opt/cripto-r/app/deploy/panico.sh /usr/local/sbin/cripto-panico-r && echo igual
+#   Nunca de /home/cripto: root instalaria um arquivo que o usuário `cripto` (o processo da A,
+#   exposto na internet) pode alterar, e invadir a A viraria root no próximo pânico.
+#   Como `cripto-r` (`sudo -u cripto-r bash /opt/cripto-r/app/deploy/panico.sh`) também
+#   funciona, mas sem conseguir parar a unit.
 #
 # Dois caminhos, nesta ordem:
 #   1. o serviço responde -> POST /panico nele (o mesmo botão do painel);
@@ -24,26 +26,30 @@
 #
 # Revisão de 26/11: os arquivos de ambiente NÃO são lidos com `source` (um valor com espaço ou
 # `$` era executado pelo bash); a senha do painel não vai na linha de comando do curl (ficava
-# visível em `ps` por até 170 s); e o Python roda sempre como `cripto` (como root ele criava
-# `-wal`/`-shm` e log com dono root, e o serviço não subia mais).
+# visível em `ps` por até 170 s); e o Python roda sempre como o usuário da R (como root ele
+# criava `-wal`/`-shm` e log com dono root, e o serviço não subia mais).
+#
+# [LIVE-14] A R roda como `cripto-r`, com código e venv de root em /opt/cripto-r e o estado em
+# /var/lib/cripto-r. A senha do painel vem do r.env da R, não mais do .env da A.
 set -u
 
-RAIZ="${RAIZ:-/home/cripto/cripto-bot}"
-PASTA_R="${PASTA_R:-/home/cripto/cripto-bot-r}"
+OPT_R="${OPT_R:-/opt/cripto-r}"
+RAIZ="$OPT_R/app"
+PASTA_R="${PASTA_R:-/var/lib/cripto-r}"
 PORTA="${PORTA:-8003}"
 UNIT="${UNIT:-cripto-bot-r}"
-USUARIO="${USUARIO:-cripto}"
+USUARIO="${USUARIO:-cripto-r}"
 
 cd "$RAIZ" || { echo "panico: pasta $RAIZ não existe"; exit 2; }
 
-# Uma chave do `.env`, como o systemd a lê, sem executar nada.
+# Uma chave do r.env, como o systemd a lê, sem executar nada.
 ler() {
-    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$RAIZ/.env" 2>/dev/null | tail -n 1 \
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$PASTA_R/r.env" 2>/dev/null | tail -n 1 \
         | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
 
-if [ ! -r "$RAIZ/.env" ]; then
-    echo "panico: não consigo ler $RAIZ/.env como $(id -un); rode como root ou como $USUARIO"
+if [ ! -r "$PASTA_R/r.env" ]; then
+    echo "panico: não consigo ler $PASTA_R/r.env como $(id -un); rode como root ou como $USUARIO"
 fi
 U="$(ler DASH_USER)"; U="${U:-admin}"
 P="$(ler DASH_PASS)"
@@ -94,8 +100,9 @@ esac
 
 CMD=(env CONTA=R CORRETORA_HABILITADA=1 TZ=America/Sao_Paulo
      DB_PATH="$PASTA_R/trading.db" LOG_PATH="$PASTA_R/plataforma.log"
-     ARQUIVOS_ENV="$RAIZ/.env:$PASTA_R/corretora.env"
-     "$RAIZ/venv/bin/python" -m execucao panico)
+     ARQUIVOS_ENV="$PASTA_R/r.env:$PASTA_R/corretora.env"
+     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$RAIZ"
+     "$OPT_R/venv/bin/python" -m execucao panico)
 if [ "$(id -un)" = "$USUARIO" ]; then
     "${CMD[@]}"
 elif [ "$(id -u)" = "0" ]; then
