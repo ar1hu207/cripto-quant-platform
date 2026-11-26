@@ -1576,6 +1576,60 @@ def test_o_prefixo_dos_ids_e_do_banco_e_nao_muda(conta):
 
 # ============================================================================ a conta R
 
+def test_a_conta_real_chega_pelo_repasse_da_A_e_so_por_ela(banco, monkeypatch):
+    """[LIVE-5] /testeR repassa para a quarta instância. Só a A repassa; health público só em GET."""
+    import base64
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from fastapi.testclient import TestClient
+    import api
+
+    vistos = []
+
+    class R(BaseHTTPRequestHandler):
+        def _ok(self):
+            d = b'{"conta": "R"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(d)))
+            self.end_headers()
+            self.wfile.write(d)
+
+        def do_GET(self):
+            vistos.append(("GET", self.path, self.headers.get("Authorization")))
+            self._ok()
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            vistos.append(("POST", self.path, self.headers.get("Authorization")))
+            self._ok()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), R)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        cred = "Basic " + base64.b64encode(b"admin:s3nha").decode()
+        monkeypatch.setattr(api, "REAL_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+        monkeypatch.setattr(api, "DASH_PASS", "s3nha")
+        monkeypatch.setattr(api, "DASH_USER", "admin")
+        monkeypatch.setattr(api, "CONTA", "A")
+        cli = TestClient(api.app, client=("127.0.0.1", 5555))
+        assert cli.get("/testeR/health").json() == {"conta": "R"}          # a vigia lê sem senha
+        assert cli.post("/testeR/panico").status_code == 401               # o resto exige a senha
+        assert cli.post("/testeR/panico", headers={"Authorization": cred}).status_code == 200
+        assert vistos[-1] == ("POST", "/panico", cred)                     # e a R confere de novo
+        monkeypatch.setattr(api, "REAL_URL", "http://127.0.0.1:9")
+        r = cli.get("/testeR/estado", headers={"Authorization": cred})
+        assert r.status_code == 502 and "Conta real fora do ar" in r.text
+        for outra in ("B", "C", "R"):                                      # só a A repassa
+            monkeypatch.setattr(api, "CONTA", outra)
+            assert cli.get("/testeR/estado", headers={"Authorization": cred}).status_code == 404
+    finally:
+        srv.shutdown()
+
+
 def test_panico_pela_linha_de_comando_desliga_cancela_e_fecha(conta, capsys):
     """O caminho do `deploy/panico.sh` quando o serviço não responde."""
     db.set_config("auto_trade", "1", "teste")

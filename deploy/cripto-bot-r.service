@@ -1,0 +1,61 @@
+# [LIVE-5] Conta R, no dl380: a conta que opera em CORRETORA (Binance Demo ou real). É a única
+# instância que pode sair do papel: sobe com CORRETORA_HABILITADA=1, e as outras três recusam o
+# boot se o banco delas estiver em modo corretora (`api._guarda_corretora`). Mesmo código das
+# contas A, B e C, com banco, log e porta próprios. Escuta só em loopback: quem a expõe é a
+# conta A, na rota /testeR/... (api.conta_real), atrás da mesma senha do painel.
+#
+# A CHAVE DA BINANCE NÃO VAI NO .env COMPARTILHADO. O `.env` da conta A é lido pelas quatro
+# units; a chave fica em /home/cripto/cripto-bot-r/corretora.env, que só esta unit carrega.
+# Assim os processos das contas de papel nunca têm a chave no ambiente.
+#
+# Instalar (uma vez). Quem cria o arquivo da chave é o DONO, no servidor; ela não passa por
+# chat nem pelo repositório (ele é público):
+#   sudo install -d -o cripto -g cripto -m 700 /home/cripto/cripto-bot-r
+#   sudo -u cripto sh -c 'umask 077; cat > /home/cripto/cripto-bot-r/corretora.env'
+#       BINANCE_DEMO_KEY=...        (fase demo)
+#       BINANCE_DEMO_SECRET=...
+#       BINANCE_KEY=...             (só no go-live; leitura + futuros, sem saque, com IP fixo)
+#       BINANCE_SECRET=...
+#   sudo cp deploy/cripto-bot-r.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cripto-bot-r
+#
+# A conta nasce em PAPEL, com a config padrão do código e `auto_trade=0`. A ordem para ligar:
+#   1. POST /testeR/config com a config da conta A (o mesmo corpo do GET /config dela, sem
+#      `corretora`), mais `banca_alocada`, `perda_total_max`, `noite_*`.
+#   2. POST /testeR/config {"corretora": "demo"}   -> ensaio com dinheiro de mentira.
+#   3. Para o real: fechar tudo, {"corretora": "papel"}, POST /testeR/reset, e então
+#      {"corretora": "binance", "corretora_dry_run": 1} (monta e não envia); conferido o log,
+#      {"corretora_dry_run": 0}. Quem liga o auto_trade é o dono.
+#
+# Pânico sem painel: `bash deploy/panico.sh` (no servidor) desliga o bot, cancela tudo e fecha
+# tudo na corretora, mesmo com este serviço parado.
+#
+# O deploy da A (git pull no /home/cripto/cripto-bot) troca o código das quatro: depois dele,
+# reinicie os QUATRO serviços (/testeR/health mostra o commit). Reiniciar esta unit é seguro com
+# posição aberta: stop e alvos estão na corretora, e o boot começa pela reconciliação.
+[Unit]
+Description=Cripto Bot - conta R (opera em corretora)
+After=network-online.target cripto-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cripto
+WorkingDirectory=/home/cripto/cripto-bot
+EnvironmentFile=/home/cripto/cripto-bot/.env
+EnvironmentFile=/home/cripto/cripto-bot-r/corretora.env
+Environment=TZ=America/Sao_Paulo
+# CONTA, DB_PATH e LOG_PATH vão pelo `env` do ExecStart, e NÃO por `Environment=`: o `.env` da
+# A define DB_PATH, e no systemd o EnvironmentFile VENCE o Environment= (o incidente de 10/11).
+# CORRETORA_HABILITADA vai junto pelo mesmo motivo: é a linha que separa esta conta das de papel,
+# e não pode depender de um arquivo que as outras também leem.
+ExecStart=/usr/bin/env CONTA=R CORRETORA_HABILITADA=1 DB_PATH=/home/cripto/cripto-bot-r/trading.db LOG_PATH=/home/cripto/cripto-bot-r/plataforma.log /home/cripto/cripto-bot/venv/bin/uvicorn api:app --host 127.0.0.1 --port 8003
+Restart=always
+RestartSec=5
+WatchdogSec=300
+NotifyAccess=main
+MemoryHigh=620M
+MemoryMax=760M
+
+[Install]
+WantedBy=multi-user.target

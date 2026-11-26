@@ -250,7 +250,13 @@ LOOPBACK = {"127.0.0.1", "::1"}
 CONTA = (os.environ.get("CONTA") or "A").strip().upper()
 TESTEB_URL = (os.environ.get("TESTEB_URL") or "http://127.0.0.1:8001").rstrip("/")
 TESTEC_URL = (os.environ.get("TESTEC_URL") or "http://127.0.0.1:8002").rstrip("/")
-CONTAS_TESTE = ("B", "C")
+# [LIVE-5] A conta R é a quarta instância, e a única que pode operar em corretora: sobe com
+# `CORRETORA_HABILITADA=1` e com a chave da Binance num arquivo que só a unit dela lê
+# (`deploy/cripto-bot-r.service`). Chega ao painel pelo mesmo repasse das contas de teste, em
+# `/testeR/...` -- o nome da rota é o do mecanismo, não o da conta: ela não é teste.
+REAL_URL = (os.environ.get("REAL_URL") or "http://127.0.0.1:8003").rstrip("/")
+CONTAS_TESTE = ("B", "C", "R")
+ROTULO_CONTA = {"R": "Conta real"}
 HEALTH_PUBLICOS = ("/health",) + tuple(f"/teste{c}/health" for c in CONTAS_TESTE)
 MARCA_CONTA = ".conta"          # arquivo na pasta do banco: diz de qual conta a pasta é
 
@@ -258,7 +264,7 @@ MARCA_CONTA = ".conta"          # arquivo na pasta do banco: diz de qual conta a
 def _url_teste(conta):
     """Endereço da instância de teste. Lido na chamada, não no import: é o que deixa o teste
     apontar a conta para um servidor falso sem reimportar o módulo."""
-    return {"B": TESTEB_URL, "C": TESTEC_URL}[conta]
+    return {"B": TESTEB_URL, "C": TESTEC_URL, "R": REAL_URL}[conta]
 
 
 def _dona_da_pasta(pasta):
@@ -1179,6 +1185,10 @@ def _repassar_c(metodo, caminho, query, corpo, auth, ctype):
     return _repassar("C", metodo, caminho, query, corpo, auth, ctype)
 
 
+def _repassar_r(metodo, caminho, query, corpo, auth, ctype):
+    return _repassar("R", metodo, caminho, query, corpo, auth, ctype)
+
+
 async def _rota_teste(conta, repassar, caminho, request):
     # Só a A repassa. Na própria B a rota não existe, senão uma config errada de TESTEB_URL
     # faria a B chamar a si mesma em laço. [AB-2] Nem B repassa para C, nem C para B: uma conta
@@ -1191,7 +1201,8 @@ async def _rota_teste(conta, repassar, caminho, request):
             repassar, request.method, caminho, request.url.query, corpo,
             request.headers.get("Authorization"), request.headers.get("Content-Type"))
     except (urllib.error.URLError, OSError) as e:
-        return PlainTextResponse(f"Teste {conta} fora do ar: {e}", status_code=502)
+        return PlainTextResponse(f"{ROTULO_CONTA.get(conta, 'Teste ' + conta)} fora do ar: {e}",
+                                 status_code=502)
     return Response(content=dados, status_code=st, media_type=ctype)
 
 
@@ -1203,6 +1214,11 @@ async def teste_b(caminho: str, request: Request):
 @app.api_route("/testeC/{caminho:path}", methods=["GET", "POST"])
 async def teste_c(caminho: str, request: Request):
     return await _rota_teste("C", _repassar_c, caminho, request)
+
+
+@app.api_route("/testeR/{caminho:path}", methods=["GET", "POST"])
+async def conta_real(caminho: str, request: Request):
+    return await _rota_teste("R", _repassar_r, caminho, request)
 
 
 @app.get("/health")
