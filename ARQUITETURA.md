@@ -667,10 +667,12 @@ na Binance USDⓈ-M. Fora do papel o banco deixa de decidir e passa a **copiar**
 2. **Nunca posição sem stop na corretora.** A entrada post-only sai com o stop junto
    (`reduceOnly` com quantidade, aceito antes do fill); a que ficar descansando sem ele (envio
    incerto, processo que caiu entre a entrada e o stop) ganha o stop no ciclo seguinte ou é
-   cancelada (`_stop_da_ordem`). A mercado, o stop vai logo depois; se falhar duas vezes, ou se
-   o preço já passou dele, a posição é fechada (`_garantir_stop`). A marcação repõe, a cada
-   ciclo, o stop de toda posição que está sem, sem depender de a reconciliação ter passado. O
-   trailing coloca o stop novo, cancela o antigo e só então grava o número.
+   cancelada (`_stop_da_ordem`). A mercado, o stop vai **antes** da entrada, pelo mesmo caminho;
+   sem ele, a entrada não sai. Posição que perde o stop ganha outro na hora: se ele falhar duas
+   vezes na mesma chamada, ou se o preço já passou dele, a posição é fechada (`_garantir_stop`).
+   A marcação repõe, a cada ciclo, o stop de toda posição que está sem, sem depender de a
+   reconciliação ter passado. O trailing coloca o stop novo, cancela o antigo e só então grava o
+   número; se o cancelamento do antigo falhar, vale o novo e a reconciliação tira o antigo.
 3. **Toda ordem tem id nosso** (`_coid`: `ap<prefixo do banco><letra><id do livro>`). Falha de
    rede vira busca pelo id, nunca reenvio. E um id nunca é usado duas vezes (`_seq`): a
    tentativa seguinte sai com outro, e a ordem da anterior, se chegou, é órfã que a
@@ -692,7 +694,15 @@ na corretora, não a hora em que o livro soube: a ordem que enche de madrugada s
 manhã, e é a partir de `aberto_em` que a reconciliação procura os negócios da saída. E a banca é
 conferida contra a **carteira** da corretora (dinheiro realizado), nunca contra o equity: o
 resultado aberto de lá é de agora e o do livro é o da última marcação, e comparar os dois fazia
-uma queda do mercado parecer dinheiro sumido (`_conferir_saldo`).
+uma queda do mercado parecer dinheiro sumido (`_conferir_saldo`). Essa conferência não ajusta
+nada no ciclo em que alguma posição ficou sem conferir (saída esperando o negócio aparecer,
+falha de leitura): a carteira já mostraria a perda que o livro ainda vai lançar, e ela entraria
+duas vezes. O funding das posições abertas é medido antes de concluir que saiu dinheiro.
+
+**Fechar é provar.** O fechamento só é lançado com quantidade executada: ordem que volta
+cancelada ou expirada sem executar é recusa, e a que volta sem número é incerta e fica para a
+reconciliação (`_fechar_qty`). Só o `-2022` quer dizer "não há o que reduzir". O pânico relê as
+posições da conta no fim e devolve como falha tudo o que ainda estiver aberto lá.
 
 **Trancas em volta** (nenhuma tem bandeira para desligar):
 

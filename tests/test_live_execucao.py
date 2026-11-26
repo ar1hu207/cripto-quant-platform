@@ -206,8 +206,9 @@ class Falsa:
             raise C.AbaixoDoMinimo(f"{simbolo}: nocional abaixo de 5")
         return q, p
 
-    def abrir_mercado(self, simbolo, direcao, qty, client_oid):
+    def abrir_mercado(self, simbolo, direcao, qty, client_oid, ref_preco=None):
         self._passa("abrir_mercado")
+        self.ref_preco = ref_preco
         o = self._nova(simbolo, C._ABRE[direcao], "MARKET", qty, client_oid)
         if o["status"] == "dry_run":
             return o
@@ -219,7 +220,9 @@ class Falsa:
 
     def fechar_mercado(self, simbolo, direcao, qty, client_oid):
         self._passa("fechar_mercado")
-        if simbolo not in self.pos:
+        # Reduce-only do lado que não fecha a posição é recusado como na Binance: fechar um LONG
+        # mandando "SHORT" não pode "funcionar" aqui (revisão de testes de 26/11, mutação M24).
+        if simbolo not in self.pos or self.pos[simbolo]["direcao"] != direcao:
             raise C.OrdemRecusada("binance -2022 ReduceOnly Order is rejected.")
         o = self._nova(simbolo, C._FECHA[direcao], "MARKET", qty, client_oid, reduce_only=True)
         if o["status"] == "dry_run":
@@ -389,19 +392,26 @@ def test_regra_2_a_posicao_nasce_com_stop_na_corretora(conta):
     assert stops[0]["qty"] == pytest.approx(1.0) and stops[0]["reduce_only"]
 
 
-def test_se_o_stop_falha_a_posicao_e_desfeita_na_hora(conta):
-    """Regra 2 pelo avesso: entrada a mercado encheu e o stop não entrou. Não fica posição nua
-    esperando o próximo ciclo: a segunda tentativa falha e ela é fechada a mercado."""
+def test_sem_stop_a_entrada_a_mercado_nem_sai(conta):
+    """Regra 2: o stop vai ANTES da entrada a mercado. Se a corretora não o aceita, a entrada
+    não é enviada, e nenhuma posição nasce sem proteção (revisão de 26/11)."""
     conta.falhar["colocar_stop"] = C.OrdemRecusada("recusado")
-    sid = semear_sinal()
-    simulador.executar(sid, 50.0, 2)
-    pid = _pos()[0]["id"]
-    assert _pos(pid)["status"] == "aberta"            # 1ª falha: uma segunda chance
-    simulador.atualizar()
-    execucao.reconciliar()                            # sem stop aberto lá: tenta repor, falha de novo
-    assert "BTC/USDT" not in conta.pos
-    assert _pos(pid)["status"] == "fechada"
+    with pytest.raises(ValueError, match="não aceitou o stop"):
+        simulador.executar(semear_sinal(), 50.0, 2)
+    assert not conta.pos and "abrir_mercado" not in conta.chamadas
+    assert _ordens()[0]["status"] == "rejeitada" and not _pos()
+
+
+def test_stop_que_some_e_nao_volta_fecha_na_mesma_reconciliacao(conta):
+    """Regra 2 pelo avesso: a posição perdeu o stop e ele não entra de novo. A segunda tentativa
+    é na hora, e não no ciclo seguinte: entre dois ciclos o processo pode cair (revisão de 26/11)."""
+    pid, _ = _abrir(conta)
+    conta.cancelar("BTC/USDT", _pos(pid)["stop_ext_id"], True)
+    conta.falhar["colocar_stop"] = C.OrdemRecusada("recusado")
+    execucao.reconciliar()
+    assert "BTC/USDT" not in conta.pos and _pos(pid)["status"] == "fechada"
     assert _trades()[0]["motivo_saida"] == "sem-stop"
+    assert conta.chamadas.count("colocar_stop") >= 3            # a da entrada e as duas de agora
 
 
 def test_a_alavancagem_e_truncada_e_a_margem_e_a_que_vai_ser_usada(conta):
@@ -479,8 +489,8 @@ def test_envio_incerto_a_ordem_fica_pendente_e_o_ciclo_a_acha_pelo_id(conta):
     """Regras 3 e 4: a intenção estava gravada antes da rede; o ciclo procura, não reenvia."""
     real = conta.abrir_mercado
 
-    def chega_e_a_resposta_se_perde(*a):
-        real(*a)
+    def chega_e_a_resposta_se_perde(*a, **k):
+        real(*a, **k)
         raise C.EnvioIncerto("timeout")
     conta.abrir_mercado = chega_e_a_resposta_se_perde
     sid = semear_sinal()
@@ -495,7 +505,7 @@ def test_envio_incerto_a_ordem_fica_pendente_e_o_ciclo_a_acha_pelo_id(conta):
 
 
 def test_dry_run_monta_registra_e_nao_abre(conta):
-    def dry(simbolo, direcao, qty, coid):
+    def dry(simbolo, direcao, qty, coid, ref_preco=None):
         return {"id": f"dry-{coid}", "client_oid": coid, "status": "dry_run", "preenchido": 0.0}
     conta.abrir_mercado = dry
     sid = semear_sinal()
@@ -1151,9 +1161,10 @@ def test_alvo_ja_passado_com_envio_incerto_nao_realiza_duas_vezes(conta):
 
 
 def test_posicao_sem_stop_e_reposta_pela_marcacao_sem_depender_da_reconciliacao(conta):
-    conta.falhar_uma["colocar_stop"] = C.EnvioIncerto("timeout")
-    simulador.executar(semear_sinal(), 50.0, 2)
-    pid = _pos()[0]["id"]
+    pid, _ = _abrir(conta)
+    conta.cancelar("BTC/USDT", _pos(pid)["stop_ext_id"], True)
+    with db.conectar() as c:                                      # o livro sabe que está sem
+        c.execute("UPDATE posicoes SET stop_ext_id=NULL WHERE id=?", (pid,))
     assert not conta.abertas("STOP_MARKET") and not _pos(pid)["stop_ext_id"]
     conta.falhar["posicoes"] = C.ErroCorretora("leitura fora do ar")
     with pytest.raises(C.ErroCorretora):
@@ -1174,7 +1185,8 @@ def test_cada_tentativa_de_stop_sai_com_id_novo(conta):
     execucao._garantir_stop(conta, _pos(pid), 96.0)
     p = _pos(pid)
     assert p["stop"] == 96.0 and p["stop_coid"] != antes
-    assert p["stop_seq"] == 3                                     # 1 a entrada, 2 a perdida, 3 esta
+    # o stop da entrada usa o id da ORDEM (`p<oid>`, pré-colocado): 1 a perdida, 2 esta
+    assert p["stop_seq"] == 2
 
 
 def test_fechamento_que_executa_so_parte_nao_tira_o_stop(conta):
@@ -1263,10 +1275,15 @@ def test_de_noite_o_trailing_ja_armado_vai_sem_preco_de_ativacao(conta, monkeypa
 # ============================================================================ a noite
 
 def _hora(monkeypatch, hhmm):
+    """Fixa a hora que a janela da noite enxerga. SEMPRE `fixo`, também quando quem chama passa
+    o próprio `agora` (`processar_ordens` passa o relógio de verdade): respeitar esse `agora`
+    fazia o teste do cancelamento noturno passar à noite e falhar de dia (revisão de 26/11)."""
     real = pd.Timestamp.now
     fixo = pd.Timestamp(f"{real().date()} {hhmm}")
-    monkeypatch.setattr(execucao, "noite",
-                        lambda cfg, agora=None, _n=execucao.noite: _n(cfg, fixo if agora is None else agora))
+    monkeypatch.setattr(execucao, "noite", lambda cfg, agora=None: _NOITE(cfg, fixo))
+
+
+_NOITE = execucao.noite              # a original: `_hora` chamada duas vezes não embrulha a si mesma
 
 
 def test_a_janela_da_noite_atravessa_a_meia_noite():
@@ -1323,6 +1340,207 @@ def test_de_manha_o_trailing_nativo_sai_e_o_stop_sobe_pelo_pico_da_noite(conta, 
     assert p["noite"] is None and not conta.abertas("TRAILING_STOP_MARKET")
     assert p["stop"] == pytest.approx(103.0)                      # 118 - 3R
     assert conta.abertas("STOP_MARKET")[0]["gatilho"] == pytest.approx(103.0)
+
+
+# ============================================================================ revisão de 26/11
+# Seis revisores independentes, cada um com um papel (dinheiro, falhas e tempo, regras da casa,
+# segurança, contrato com a Binance, testes). Um teste por defeito confirmado no motor.
+
+def _fechamento_que_nao_executa(conta, status):
+    """A Binance aceita a ordem de fechar e ela volta sem executar nada (proteção de preço num
+    mercado rápido, ou o ACK sem o preenchimento)."""
+    def fecha(simbolo, direcao, qty, coid):
+        o = conta._nova(simbolo, C._FECHA[direcao], "MARKET", qty, coid, reduce_only=True)
+        conta.ordens[o["id"]]["status"] = status
+        return dict(conta.ordens[o["id"]])
+    conta.fechar_mercado = fecha
+
+
+def test_fechamento_que_volta_sem_executar_nao_e_lancado_e_o_stop_fica(conta):
+    pid, _ = _abrir(conta)
+    _fechamento_que_nao_executa(conta, "expirada")
+    with pytest.raises(ValueError, match="SEGUE aberta"):
+        simulador.fechar(pid, "manual")
+    assert _pos(pid)["status"] == "aberta" and not _trades()
+    assert conta.pos["BTC/USDT"]["qty"] == 1.0
+    assert conta.ordens[_pos(pid)["stop_ext_id"]]["status"] == "aberta"
+
+
+def test_fechamento_aceito_sem_execucao_conhecida_fica_incerto(conta):
+    pid, _ = _abrir(conta)
+    _fechamento_que_nao_executa(conta, "aberta")
+    with pytest.raises(ValueError, match="não deu para confirmar"):
+        simulador.fechar(pid, "manual")
+    assert _pos(pid)["status"] == "aberta" and not _trades()
+    assert conta.ordens[_pos(pid)["stop_ext_id"]]["status"] == "aberta"
+
+
+def test_fechamento_que_executou_e_nao_teve_o_negocio_lido_e_lancado(conta):
+    pid, _ = _abrir(conta)
+    conta.preco["BTC/USDT"] = 110.0
+    real = conta.fechar_mercado
+
+    def fecha_e_a_leitura_cai(*a):
+        r = real(*a)
+        conta.falhar["fills"] = ConnectionError("fora")
+        return r
+    conta.fechar_mercado = fecha_e_a_leitura_cai
+    pnl = simulador.fechar(pid, "manual")
+    assert pnl is not None and _pos(pid)["status"] == "fechada"
+    assert _trades()[0]["saida"] == 110.0 and not conta.abertas()
+
+
+def test_panico_com_recusa_que_nao_e_a_do_reduce_only_e_falha(conta):
+    conta._abre("ETH/USDT", "LONG", 1.0, 100.0, conta._id(), Falsa.TAKER)    # fora do livro
+    real = conta.fechar_mercado
+
+    def protege_o_preco(simbolo, direcao, qty, coid):
+        if simbolo == "ETH/USDT":
+            raise C.OrdemRecusada("binance -4131 The counterparty's best price does not meet the "
+                                  "PERCENT_PRICE filter limit.")
+        return real(simbolo, direcao, qty, coid)
+    conta.fechar_mercado = protege_o_preco
+    r = execucao.panico()
+    assert "ETH/USDT" in conta.pos
+    assert [f["ativo"] for f in r["falhas"]] == ["ETH/USDT"] and not r["varridas"]
+
+
+def test_panico_confere_a_conta_no_fim_e_acusa_o_que_ficou(conta):
+    """Uma resposta que diz "preenchida" não prova nada: a prova é a conta, relida no fim."""
+    pid, _ = _abrir(conta)
+
+    def mente(simbolo, direcao, qty, coid):
+        o = conta._nova(simbolo, C._FECHA[direcao], "MARKET", qty, coid, reduce_only=True)
+        conta.ordens[o["id"]].update(status="preenchida", preenchido=qty, preco_medio=100.0)
+        return dict(conta.ordens[o["id"]])
+    conta.fechar_mercado = mente
+    r = execucao.panico()
+    assert "BTC/USDT" in conta.pos
+    assert any("segue ABERTA" in f["erro"] for f in r["falhas"])
+
+
+def test_saida_que_espera_o_negocio_nao_desce_a_banca_duas_vezes(conta):
+    pid, _ = _abrir(conta)
+    conta.disparar(_pos(pid)["stop_ext_id"], 70.0)                # gap: −30 lá
+    ler = conta.fills
+    conta.fills = lambda simbolo, desde_ms=None: []               # o negócio ainda não aparece
+    execucao.reconciliar()
+    assert _pos(pid)["status"] == "aberta"
+    assert _banca() == pytest.approx(1000.0)                      # a banca NÃO desce por ela
+    conta.fills = ler
+    execucao.reconciliar()
+    assert _pos(pid)["status"] == "fechada"
+    assert _banca() == pytest.approx(conta.carteira)              # e a perda entrou uma vez só
+
+
+def test_funding_das_abertas_nao_desce_a_banca_nem_entra_duas_vezes(conta):
+    pid, _ = _abrir(conta)
+    conta.carteira -= 30.0                                        # o funding saiu da carteira
+    conta.renda.append({"tipo": "FUNDING_FEE", "valor": -30.0, "moeda": "USDT",
+                        "simbolo": "BTC/USDT", "ts": pd.Timestamp.now()})
+    execucao.reconciliar()
+    assert _banca() == pytest.approx(1000.0)
+    simulador.fechar(pid, "manual")
+    assert _trades()[0]["funding"] == pytest.approx(-30.0)
+    assert _banca() == pytest.approx(conta.carteira)
+
+
+def test_alvos_pulados_seguem_no_trailing_e_nao_vao_para_o_ultimo(conta):
+    pid, _ = _abrir(conta, valor=5.0, lev=1, preco=100.0)         # qty 0,05
+    _com_plano(pid, [(110.0, 2.0, 0.004), (115.0, 3.0, 0.004), (120.0, 4.0, 0.992)])
+    simulador.atualizar()
+    tps = conta.abertas("TAKE_PROFIT_MARKET")
+    assert [(o["gatilho"], o["qty"]) for o in tps] == [(120.0, 0.049)]
+    plano = json.loads(_pos(pid)["tps"])
+    assert plano["niveis"][0]["pulado"] and plano["niveis"][1]["pulado"]
+
+
+def test_zero_a_zero_arma_pelo_preco_quando_o_tp1_foi_pulado(conta):
+    db.set_config("tp_stop_entrada", "1", "teste")
+    pid, _ = _abrir(conta, valor=5.0, lev=1, preco=100.0)         # qty 0,05
+    _com_plano(pid, [(110.0, 2.0, 0.004), (120.0, 4.0, 0.5)], resto_livre=True)
+    simulador.atualizar()
+    assert json.loads(_pos(pid)["tps"])["niveis"][0]["pulado"]
+    assert _pos(pid)["stop"] == 95.0                              # o preço ainda não chegou ao TP1
+    conta.preco["BTC/USDT"] = 111.0
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(100.0)
+    assert conta.abertas("STOP_MARKET")[0]["gatilho"] == pytest.approx(100.0)
+
+
+def test_o_teto_por_ordem_e_medido_no_preco_do_claim_e_a_recusa_devolve_o_sinal(conta):
+    sid = semear_sinal()
+    conta.falhar_uma["abrir_mercado"] = C.AcimaDoTeto("nocional 300.2 > teto 300")
+    with pytest.raises(ValueError, match="recusada"):
+        simulador.executar(sid, 50.0, 2)
+    assert _sinal(sid) == "novo"                                  # nada foi enviado: o sinal volta
+    assert _ordens()[0]["status"] == "rejeitada" and not conta.abertas()    # e o stop saiu junto
+    simulador.executar(sid, 50.0, 2)
+    assert conta.ref_preco == pytest.approx(100.0)                # o preço que as guardas mediram
+
+
+def test_o_stop_nunca_recua_quando_o_preco_volta(conta):
+    pid, _ = _abrir(conta)
+    conta.preco["BTC/USDT"] = 117.0
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(102.0)
+    for preco in (116.2, 110.0, 103.0):
+        conta.preco["BTC/USDT"] = preco
+        simulador.atualizar()
+        assert _pos(pid)["stop"] == pytest.approx(102.0)
+        st = conta.abertas("STOP_MARKET")
+        assert len(st) == 1 and st[0]["gatilho"] == pytest.approx(102.0)
+
+
+def test_pico_da_noite_abaixo_do_stop_nao_o_baixa_de_manha(conta, monkeypatch):
+    db.set_config("noite_ativo", "1", "teste")
+    _hora(monkeypatch, "12:00")
+    pid, _ = _abrir(conta)
+    conta.preco["BTC/USDT"] = 117.0
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(102.0)
+    _hora(monkeypatch, "22:00")
+    simulador.atualizar()
+    monkeypatch.setattr(simulador, "_velas_1m",
+                        lambda ativo, a, b: [[0, 110, 116, 108, 110, 1]])   # pico 116: stop 101 < 102
+    conta.preco["BTC/USDT"] = 110.0
+    _hora(monkeypatch, "08:00")
+    simulador.atualizar()
+    assert _pos(pid)["stop"] == pytest.approx(102.0)
+    assert conta.abertas("STOP_MARKET")[0]["gatilho"] == pytest.approx(102.0)
+
+
+def test_teto_de_perda_total_conta_o_resultado_aberto(conta):
+    pid, _ = _abrir(conta)
+    db.set_config("perda_total_max", "20", "teste")
+    with db.conectar() as c:
+        c.execute("UPDATE posicoes SET pnl=-25 WHERE id=?", (pid,))
+    assert _banca() == pytest.approx(1000.0)
+    assert execucao.guarda_total()["travada"]
+
+
+def test_panico_desliga_o_auto_trade_antes_de_tocar_na_corretora(cliente, conta, monkeypatch):
+    """[P1-7]: a ORDEM importa, não só o estado final. Desligar depois deixaria o bot reabrir
+    entre o fechamento e o desligamento."""
+    db.set_config("auto_trade", "1", "teste")
+    _abrir(conta)
+    visto = {}
+    real = execucao.panico
+
+    def espia(*a, **k):
+        visto["auto"] = db.get_config()["auto_trade"]
+        return real(*a, **k)
+    monkeypatch.setattr(execucao, "panico", espia)
+    cliente.post("/panico")
+    assert visto["auto"] == "0"
+
+
+def test_panico_bate_o_watchdog_a_cada_item(conta):
+    _abrir(conta)
+    _abrir(conta, ativo="ETH/USDT")
+    batidas = []
+    execucao.panico(batida=lambda: batidas.append(1))
+    assert len(batidas) >= 2 and not conta.pos
 
 
 # ============================================================================ a API

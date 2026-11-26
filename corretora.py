@@ -603,9 +603,11 @@ class BinanceUSDM:
             return None
         return achada
 
-    def abrir_mercado(self, simbolo, direcao, qty, client_oid):
+    def abrir_mercado(self, simbolo, direcao, qty, client_oid, ref_preco=None):
+        """`ref_preco` é o preço em que quem chama já mediu o teto: sem ele, o teto é medido no
+        mark de agora, e um tique de diferença recusa depois de o sinal estar consumido."""
         d = _direcao(direcao)
-        o = self._enviar(simbolo, "market", _ABRE[d], qty, None, {}, client_oid)
+        o = self._enviar(simbolo, "market", _ABRE[d], qty, None, {}, client_oid, ref_preco=ref_preco)
         return self._com_preco_medio(simbolo, o)
 
     def fechar_mercado(self, simbolo, direcao, qty, client_oid):
@@ -704,8 +706,18 @@ class BinanceUSDM:
             # o antigo só sai quando o novo está de pé
             raise ErroCorretora(f"mover_stop {simbolo}: o stop novo voltou {novo.get('status')}; "
                                 "o antigo fica")
-        if not self.cancelar(simbolo, ordem["id"], condicional=True):
-            log(f"corretora: stop antigo {ordem.get('client_oid')} já não existia ao mover", "warning")
+        # O novo JÁ está na corretora: daqui para baixo nada pode levantar. Se o cancelamento do
+        # antigo falhar (rede, ou o -20124 de condicional que já terminou), quem chama precisa
+        # receber o NOVO para gravá-lo. Levantar aqui fazia o livro ficar com o id do antigo, e a
+        # reconciliação seguinte cancelava o novo como órfão: a catraca do trailing andava para
+        # trás (revisão de 26/11). O antigo que sobrar é nosso e sem dono: a reconciliação o tira.
+        try:
+            if not self.cancelar(simbolo, ordem["id"], condicional=True):
+                log(f"corretora: stop antigo {ordem.get('client_oid')} já não existia ao mover",
+                    "warning")
+        except Exception as e:
+            log(f"corretora: stop antigo {ordem.get('client_oid')} não cancelou ao mover "
+                f"({type(e).__name__}: {e}); o novo vale, e a reconciliação tira o antigo", "warning")
         return novo
 
     def cancelar(self, simbolo, ordem_id, condicional=False):
@@ -720,6 +732,12 @@ class BinanceUSDM:
             return True
         except ccxt.OrderNotFound:
             return False
+        except ccxt.BadRequest as e:
+            # Condicional (Algo) que já disparou ou já foi cancelada volta -20124 ("Invalid algo
+            # id or it has been completed"), que o ccxt põe em BadRequest e não em OrderNotFound.
+            if "-20124" in str(e) or "-2011" in str(e):
+                return False
+            raise
 
     def cancelar_tudo(self, simbolo):
         """Normais e condicionais do símbolo. Devolve quantas havia."""

@@ -14,9 +14,10 @@ de despacho do `simulador` seguem pelo caminho de sempre).
 2. **Nunca existe posição sem stop na corretora.** A entrada que descansa (post-only) sai com
    o stop junto, `reduceOnly` com quantidade, que a Binance aceita antes do preenchimento; a
    que ficar descansando sem ele ganha o stop no ciclo seguinte, ou é cancelada. A entrada a
-   mercado coloca o stop logo depois de encher; se ele não entrar em duas tentativas (a
-   segunda no ciclo seguinte, com o dono já avisado), a posição é desfeita a mercado
-   (`_garantir_stop`). O trailing move o stop NA corretora e só então grava o número no banco.
+   mercado também leva o stop ANTES de sair, e sem ele não sai. Posição que perde o stop ganha
+   outro na hora; se ele não entrar em duas tentativas, as duas na mesma chamada, a posição é
+   desfeita a mercado (`_garantir_stop`). O trailing move o stop NA corretora e só então grava
+   o número no banco.
 3. **Toda ordem tem um id nosso, derivado do id do livro** (`_coid`), com um prefixo próprio
    deste banco. Falha de rede no envio vira uma busca pelo id, nunca um reenvio, e um id
    nunca é usado duas vezes (`_seq`).
@@ -414,13 +415,37 @@ def _enviar_entrada(c, o):
     except Exception as e:                          # nada foi enviado ainda
         _resolver_ordem(oid, "rejeitada", f"preparo: {type(e).__name__}: {str(e)[:120]}")
         raise ValueError(f"ordem recusada pela corretora no preparo — {str(e)[:120]}")
+    if o["tipo"] == "mercado":
+        # O stop vai ANTES da entrada a mercado, como já ia junto da post-only: reduce-only com
+        # quantidade, aceito sem posição. Colocá-lo só depois do preenchimento deixava uma janela
+        # sem stop, e se o processo caísse nela (deploy, watchdog, o servidor desligando) a
+        # posição passava a noite nua (revisão de 26/11). Sem o stop, a entrada não sai.
+        try:
+            _stop_da_ordem(c, o, cancela_se_falhar=False)
+        except Exception as e:
+            if _resolver_ordem(oid, "rejeitada", f"stop antes da entrada: {type(e).__name__}: "
+                                                 f"{str(e)[:100]}"):
+                _cancelar_stop_da_ordem(c, _ordem(oid))
+            raise ValueError("ordem não enviada — a corretora não aceitou o stop que vai antes "
+                             f"dela ({str(e)[:100]})")
+        o = _ordem(oid)
     try:
         if o["tipo"] == "limite":
             ext = c.colocar_limite_post_only(ativo, direcao, o["qty"], o["preco_limite"], o["client_oid"])
         else:
-            ext = c.abrir_mercado(ativo, direcao, o["qty"], o["client_oid"])
+            # `ref_preco`: o teto por ordem é medido no MESMO preço que as guardas mediram antes
+            # do claim. Medido num mark mais novo, um tique de alta virava recusa depois de o
+            # sinal já estar consumido (revisão de 26/11).
+            ext = c.abrir_mercado(ativo, direcao, o["qty"], o["client_oid"], ref_preco=o["preco_ref"])
     except (C.OrdemRecusada, C.AcimaDoTeto, C.AbaixoDoMinimo) as e:
         _resolver_ordem(oid, "rejeitada", f"{type(e).__name__}: {str(e)[:120]}")
+        _cancelar_stop_da_ordem(c, _ordem(oid))
+        if isinstance(e, (C.AcimaDoTeto, C.AbaixoDoMinimo)):
+            # Recusa por teto ou mínimo acontece ANTES da rede: nada foi enviado, e o sinal
+            # volta para a fila ([P1-6]: recusa por teto não consome sinal).
+            with db.conectar() as con:
+                con.execute("UPDATE sinais SET status='novo' WHERE id=? AND status='confirmado'",
+                            (o["sinal_id"],))
         raise ValueError(f"ordem recusada pela corretora — {str(e)[:120]}")
     except Exception as e:                          # `EnvioIncerto` e o inesperado: pode ter chegado
         log(f"ORDEM #{oid} {ativo}: envio incerto ({type(e).__name__}: {e}); o ciclo procura "
@@ -601,7 +626,9 @@ def _materializar(c, o, ext):
     if nocional_fs > 0:
         taxa_rate = _taxa_usdt(fs, taxa_rate) / nocional_fs
     stop = o["stop"]
-    if o["tipo"] == "mercado" and o.get("stop_rel"):       # o stop acompanha o preço que encheu
+    if o["tipo"] == "mercado" and o.get("stop_rel") and not o.get("stop_ext_id"):
+        # sem stop pré-colocado, o stop acompanha o preço que encheu; com ele, o livro fica com
+        # o número que JÁ está protegendo na corretora
         stop = c.preco_valido(ativo, entrada * (1 - d * float(o["stop_rel"])))
     valor = qty * entrada / lev
     risco_ab = simulador._risco_posicao(valor, lev, entrada, stop)
@@ -664,22 +691,32 @@ def _garantir_stop(c, pos, gatilho, motivo_falha="sem-stop", forcar=False):
                "lado": C._FECHA[direcao], "qty": None} if pos.get("stop_ext_id") else None)
     if antigo and not forcar and pos.get("stop") and abs(gatilho - float(pos["stop"])) < 1e-12:
         return True                                 # arredondado, é o stop que já está lá
-    seq = _seq(pos)                                 # id novo a cada tentativa, gravado antes da rede
-    coid = _coid("s", pos["id"], seq)
-    _marcar_escrita(ativo)
-    try:
-        if antigo:
-            novo = c.mover_stop(ativo, antigo, gatilho, coid, qty=pos["qty"])
-        else:
-            novo = c.colocar_stop(ativo, direcao, gatilho, coid, qty=pos["qty"])
-    except C.OrdemRecusada as e:
-        if "-2021" in str(e):                       # o preço já passou do gatilho
-            log(f"#{pos['id']} {ativo}: stop {gatilho} já atravessado; fechando a mercado", "error")
-            fechar(pos, "stop")
-            return False
-        return _stop_falhou(c, pos, e, motivo_falha)
-    except Exception as e:
-        return _stop_falhou(c, pos, e, motivo_falha)
+    for tentativa in (1, 2):
+        seq = _seq(pos)                             # id novo a cada tentativa, gravado antes da rede
+        coid = _coid("s", pos["id"], seq)
+        _marcar_escrita(ativo)
+        try:
+            if antigo:
+                novo = c.mover_stop(ativo, antigo, gatilho, coid, qty=pos["qty"])
+            else:
+                novo = c.colocar_stop(ativo, direcao, gatilho, coid, qty=pos["qty"])
+            break
+        except C.OrdemRecusada as e:
+            if "-2021" in str(e):                   # o preço já passou do gatilho
+                log(f"#{pos['id']} {ativo}: stop {gatilho} já atravessado; fechando a mercado", "error")
+                fechar(pos, "stop")
+                return False
+            erro = e
+        except Exception as e:
+            erro = e
+        # Com um stop anterior de pé, a posição segue protegida: não há pressa. Sem ele, a
+        # segunda tentativa é AGORA, e não no ciclo seguinte (CLAUDE.md [LIVE] regra 2): entre um
+        # ciclo e outro o processo pode cair, e o servidor desliga à noite.
+        if antigo or tentativa == 2:
+            return _stop_falhou(c, pos, erro, motivo_falha)
+        log(f"#{pos['id']} {ativo}: stop não entrou ({type(erro).__name__}: {erro}); "
+            "tentando de novo agora", "error")
+        time.sleep(0.5)
     if novo.get("status") == "dry_run":
         # Nada foi enviado. Gravar o id e o preço deste stop faria o livro mostrar uma proteção
         # que não existe na corretora.
@@ -697,21 +734,15 @@ def _garantir_stop(c, pos, gatilho, motivo_falha="sem-stop", forcar=False):
 
 
 def _stop_falhou(c, pos, erro, motivo):
-    n = _sem_stop.get(pos["id"], 0) + 1
-    _sem_stop[pos["id"]] = n
+    """O stop não entrou. Com um stop anterior de pé, nada muda (ele continua protegendo).
+    Sem ele, as duas tentativas já foram feitas na mesma chamada: a posição é fechada."""
     tem_stop = bool(pos.get("stop_ext_id"))
     log(f"#{pos['id']} {pos['ativo']}: stop não colocado ({type(erro).__name__}: {erro}) "
-        f"[tentativa {n}, {'há um stop anterior' if tem_stop else 'SEM stop na corretora'}]", "error")
+        f"[{'há um stop anterior' if tem_stop else 'SEM stop na corretora'}]", "error")
     if tem_stop:                                    # o stop anterior continua protegendo
         return True
-    if n < 2:                                       # uma segunda chance, no ciclo seguinte
-        # Quem tenta de novo é o `atualizar`, que repõe o stop de toda posição que está sem. E o
-        # dono fica sabendo já: posição sem stop não é assunto só de log.
-        _avisar(f"⚠️ #{pos['id']} {pos['ativo']}: SEM stop na corretora (o envio falhou: "
-                f"{type(erro).__name__}). Tentando de novo; se falhar outra vez, fecha a mercado.")
-        return True
-    _avisar(f"🛑 #{pos['id']} {pos['ativo']}: sem stop na corretora depois de {n} tentativas. "
-            "Fechando a mercado.")
+    _avisar(f"🛑 #{pos['id']} {pos['ativo']}: sem stop na corretora depois de 2 tentativas "
+            f"({type(erro).__name__}). Fechando a mercado.")
     fechar(pos, motivo)
     return False
 
@@ -733,7 +764,12 @@ def _stop_desejado(pos, preco, trail, tp, plano, passo_r):
         melhor = novo
     if tp and tp.get("stop_entrada") and plano:
         n0 = (plano.get("niveis") or [None])[0]
-        if n0 and n0.get("feito") and not n0.get("pulado"):
+        # TP1 pulado (menor que um lote) não executa nada, e por isso não pode ser o gatilho do
+        # zero a zero; quem arma é o PREÇO chegar ao alvo, como no papel. Sem isto a regra nunca
+        # armava nas posições pequenas, justamente as da conta de US$200.
+        atingido = n0 and n0.get("feito") and (
+            not n0.get("pulado") or (n0.get("preco") and (preco - float(n0["preco"])) * d >= 0))
+        if atingido:
             e = float(pos["entrada"])
             base = melhor if melhor is not None else atual
             if not base or (e - base) * d > 0:
@@ -759,7 +795,15 @@ def _colocar_tps(c, pos, plano):
                 continue
             ultimo = i == len(niveis) - 1
             livre = max(float(pos["qty"]) - comprometido, 0.0)
-            alvo_q = livre if (ultimo and not plano.get("resto_livre")) else min(t["frac"] * q0, livre)
+            if ultimo and not plano.get("resto_livre"):
+                # O último leva o que sobrar, MENOS a fração dos alvos pulados: essa parte segue
+                # no trailing, como diz o log do pulo. Sem o desconto, com BTC em US$200 (0,002) o
+                # TP1 e o TP2 eram pulados e o TP3, o mais longe, fechava a posição INTEIRA
+                # (revisão de 26/11).
+                pulada = sum(float(x.get("frac") or 0) * q0 for x in niveis if x.get("pulado"))
+                alvo_q = max(livre - pulada, 0.0)
+            else:
+                alvo_q = min(t["frac"] * q0, livre)
             try:
                 q, _ = c.arredondar(pos["ativo"], alvo_q, reduz=True)
             except C.AbaixoDoMinimo:
@@ -922,12 +966,32 @@ def _fechar_qty(c, pos, qty, motivo, plano=None):
                          "o dry_run, ou feche no aplicativo da corretora.")
     fs = []
     for _ in range(3):                              # o negócio pode levar um instante para aparecer
-        fs = [f for f in _fills_novos(c, pos["ativo"], pos["aberto_em"], C._FECHA[pos["direcao"]])
-              if str(f.get("ordem_id")) == str(ext.get("id"))]
+        try:
+            fs = [f for f in _fills_novos(c, pos["ativo"], pos["aberto_em"], C._FECHA[pos["direcao"]])
+                  if str(f.get("ordem_id")) == str(ext.get("id"))]
+        except Exception as e:
+            # A ordem JÁ executou; o que falhou foi ler o negócio. Subir a exceção aqui diria
+            # "não deu para confirmar o fechamento" de uma posição que fechou (revisão de 26/11).
+            log(f"#{pos['id']} {pos['ativo']}: negócio do fechamento não lido ({type(e).__name__}: "
+                f"{e}); segue pelo que a ordem devolveu", "warning")
+            fs = []
+            break
         if fs:
             break
         time.sleep(0.4)
-    feito = float(ext.get("preenchido") or 0) or sum(f.get("qty") or 0 for f in fs) or float(qty)
+    feito = float(ext.get("preenchido") or 0) or sum(f.get("qty") or 0 for f in fs)
+    if feito <= 0:
+        # Nada executado, ou nada que se saiba. Lançar a quantidade PEDIDA como fechada (o que
+        # este código fazia) gravava um resultado que não houve e, logo depois, o `fechar`
+        # cancelava stop e alvos de uma posição que continuava aberta lá (revisão de 26/11).
+        st = ext.get("status")
+        if st in ("cancelada", "expirada", "rejeitada"):
+            raise C.OrdemRecusada(f"o fechamento voltou {st} sem executar nada "
+                                  f"(ordem {ext.get('id')})")
+        if st != "preenchida":
+            raise C.EnvioIncerto(f"o fechamento voltou '{st}' sem quantidade executada "
+                                 f"(ordem {ext.get('id')}); a reconciliação confere")
+        feito = float(qty)                          # FILLED sem o número: a ordem inteira executou
     if not fs:                                      # sem negócio lido: usa o preço médio da ordem
         # `taxa_moeda="estimada"` faz a taxa entrar pela fração da config (`_taxa_usdt`): a saída
         # a mercado pagou taxa de taker, e lançar zero inflaria o resultado.
@@ -939,6 +1003,13 @@ def _fechar_qty(c, pos, qty, motivo, plano=None):
         log(f"#{pos['id']} {pos['ativo']}: negócio do fechamento não lido; preço médio da ordem "
             "e taxa estimada pela config", "warning")
     return _lancar_saida(c, pos, fs, motivo, plano, qty_fechada=feito)
+
+
+def _nada_a_reduzir(e):
+    """A recusa é a de "não há posição para reduzir" (`-2022`, ReduceOnly rejected)? É a ÚNICA
+    recusa que diz que a posição já fechou. O adapter põe em `OrdemRecusada` todo erro da
+    corretora, inclusive proteção de preço (`-4131`) e ordem que expirou sem executar."""
+    return "-2022" in str(e)
 
 
 def fechar(pos, motivo):
@@ -954,18 +1025,23 @@ def fechar(pos, motivo):
         try:
             pnl = _fechar_qty(c, pos, float(pos["qty"]), motivo)
         except C.OrdemRecusada as e:
-            # reduce-only recusado: não há mais o que reduzir. A posição já fechou lá (stop,
-            # alvo, liquidação) e a reconciliação lança a saída com o negócio certo.
             log(f"#{pos['id']} {pos['ativo']}: fechamento recusado ({e}); a reconciliação confere",
                 "warning")
-            raise ValueError("a corretora recusou o fechamento: a posição pode já ter fechado lá. "
-                             "A reconciliação confere no próximo ciclo.")
+            if _nada_a_reduzir(e):
+                # reduce-only recusado por não haver o que reduzir: a posição já fechou lá
+                # (stop, alvo, liquidação) e a reconciliação lança a saída com o negócio certo.
+                raise ValueError("a corretora recusou o fechamento: a posição pode já ter fechado "
+                                 "lá. A reconciliação confere no próximo ciclo.")
+            # Qualquer outra recusa (proteção de preço, ordem expirada sem executar) quer dizer
+            # que a posição SEGUE aberta. Dizer "pode já ter fechado" seria mentir para quem clicou.
+            raise ValueError(f"a corretora recusou o fechamento ({str(e)[:120]}). A posição SEGUE "
+                             "aberta lá, com o stop; tente de novo ou feche no aplicativo.")
         except C.ErroCorretora as e:
             # envio incerto: pode ter fechado ou não. O stop continua lá, e a reconciliação
             # lança a saída se fechou. Recusa de domínio, não 500: quem clicou precisa do motivo.
             log(f"#{pos['id']} {pos['ativo']}: fechamento incerto ({type(e).__name__}: {e})", "error")
-            raise ValueError("não deu para confirmar o fechamento na corretora (rede). O stop "
-                             "segue lá; a reconciliação confere no próximo ciclo.")
+            raise ValueError(f"não deu para confirmar o fechamento na corretora ({str(e)[:100]}). "
+                             "O stop segue lá; a reconciliação confere no próximo ciclo.")
         except ValueError:
             raise
         except Exception as e:                      # o que o adapter não traduziu: mesma resposta
@@ -1409,14 +1485,20 @@ def reconciliar(cfg=None):
                 "SELECT * FROM posicoes WHERE status='aberta' AND corretora IS NOT NULL")]
             pend = [dict(r) for r in con.execute("SELECT * FROM ordens WHERE status='pendente'")]
         ativos_pend = {o["ativo"] for o in pend}
+        # Alguma posição ficou sem conferir NESTE ciclo (pulada pela folga de leitura, saída que
+        # espera o negócio aparecer, falha)? Então a carteira pode já mostrar um resultado que o
+        # livro ainda vai lançar, e ajustar a banca por ela contaria a mesma perda duas vezes.
+        incompleto = False
         for pos in livro:
             if _escrita_recente(pos["ativo"]):
+                incompleto = True
                 continue
             try:
                 px = por_ativo.get((pos["ativo"], pos["direcao"]))
                 qty_ex = float(px["qty"]) if px else 0.0
                 if qty_ex < float(pos["qty"]) * (1 - 1e-9):
-                    _reduziu(c, pos, qty_ex)
+                    if not _reduziu(c, pos, qty_ex):
+                        incompleto = True
                     continue
                 if qty_ex > float(pos["qty"]) * (1 + 1e-9):
                     _aumentou(c, pos, px)
@@ -1428,6 +1510,7 @@ def reconciliar(cfg=None):
                     pos["stop_ext_id"] = None       # o anterior não existe mais: coloca, não move
                     _garantir_stop(c, pos, pos["stop"])
             except Exception as e:
+                incompleto = True
                 saude["falhas"] += 1
                 saude["ultimo_erro"] = (f"{pd.Timestamp.now()} #{pos['id']} {pos['ativo']}: "
                                         f"{type(e).__name__}: {str(e)[:140]}")
@@ -1455,7 +1538,7 @@ def reconciliar(cfg=None):
         # ordem NOSSA aberta lá sem dono aqui: cancela. Ordem de outro (sem o nosso prefixo)
         # não se toca: só se avisa.
         _orfas(c, abertas_ex, cfg)
-        _conferir_saldo(saldo, cfg)
+        _conferir_saldo(c, saldo, cfg, ajustar=not incompleto)
     guarda_total(cfg)
     _reconciliado["mono"] = time.monotonic()
     saude["reconciliado_em"] = str(pd.Timestamp.now())
@@ -1523,7 +1606,7 @@ def _orfas(c, abertas_ex, cfg):
             log(f"órfã {o.get('client_oid')} não cancelou: {e}", "error")
 
 
-def _conferir_saldo(saldo, cfg):
+def _conferir_saldo(c, saldo, cfg, ajustar=True):
     """O livro não pode achar que tem mais dinheiro do que a conta tem. Se a CARTEIRA da
     corretora ficar abaixo da banca do livro por mais que a folga, saiu dinheiro por fora
     (saque, transferência, taxa que o livro não lançou): a banca desce até as duas baterem.
@@ -1536,7 +1619,14 @@ def _conferir_saldo(saldo, cfg):
     logo depois a marcação descontava a mesma queda de novo.
 
     A carteira já pagou a taxa de entrada das posições abertas, que o livro só lança no
-    fechamento: ela entra na conta. O funding das abertas não entra, e cabe na folga."""
+    fechamento: ela entra na conta. O funding das abertas também já saiu da carteira e só entra
+    no livro no fechamento: quando a diferença passa da folga, ele é medido e descontado antes de
+    concluir que saiu dinheiro (senão o fechamento o lançaria de novo, sobre a banca já baixada).
+
+    `ajustar=False` quando alguma posição não fechou a conferência neste ciclo: a carteira pode
+    já refletir uma saída que o livro ainda vai lançar. Lançada a saída, a banca desceria DUAS
+    vezes pela mesma perda, e como a regra só desce, o erro ficaria para sempre e empurraria a
+    conta para o teto de perda total (revisão de 26/11)."""
     cart = saldo.get("carteira")
     if cart is None:
         return
@@ -1550,8 +1640,19 @@ def _conferir_saldo(saldo, cfg):
     saude["saldo"] = {"carteira": round(cart, 2), "equity_corretora": saldo.get("equity"),
                       "banca_livro": round(banca, 2)}
     folga = max(1.0, 0.02 * banca)
-    if cart < esperada - folga:
-        nova = cart + taxas
+    if not ajustar or cart >= esperada - folga:
+        return
+    with db.conectar() as con:
+        abertas = [dict(r) for r in con.execute(
+            "SELECT * FROM posicoes WHERE status='aberta' AND corretora IS NOT NULL")]
+    funding = 0.0
+    for p in abertas:
+        f = _funding_real(c, p)
+        if f is None:                               # sem medir o funding, não se conclui nada
+            return
+        funding += f
+    if cart < esperada + funding - folga:
+        nova = cart + taxas - funding
         with db.conectar() as con:
             con.execute("UPDATE banca SET atual=? WHERE id=1", (nova,))
         _divergencia(f"carteira na corretora ({cart:.2f}) abaixo da banca do livro "
@@ -1560,17 +1661,24 @@ def _conferir_saldo(saldo, cfg):
 
 # ------------------------------------------------------------------------------ pânico e troca
 
-def panico():
+def panico(batida=None):
     """A metade do `/panico` que mora na corretora. O `auto_trade` já foi desligado por quem
     chama ([P1-7]). Cancela as entradas pendentes LÁ, fecha a mercado tudo o que o livro tem,
     e por fim varre a conta: qualquer posição que sobrar é fechada, qualquer ordem nossa é
-    cancelada. Devolve o resumo; `falhas` nomeia o que ficou."""
+    cancelada. Devolve o resumo; `falhas` nomeia o que ficou, inclusive posição que a releitura
+    final ainda acha aberta.
+
+    `batida` é chamada a cada item: o worker fica parado no `_lock` enquanto o pânico corre, e
+    é ele quem alimenta o watchdog do systemd. Sem a batida, um pânico longo com a rede ruim
+    passava dos 300 s e o systemd matava o processo no meio dele (revisão de 26/11)."""
+    bate = batida or (lambda: None)
     c = obter()
     res = {"fechadas": 0, "pnl": 0.0, "ordens_canceladas": 0, "falhas": [], "varridas": []}
     with _lock:
         with db.conectar() as con:
             pend = [dict(r) for r in con.execute("SELECT * FROM ordens WHERE status='pendente'")]
         for o in pend:
+            bate()
             try:
                 _cancelar_entrada(c, o, "panico")
                 res["ordens_canceladas"] += 1
@@ -1581,6 +1689,7 @@ def panico():
             abertas = [dict(r) for r in con.execute(
                 "SELECT * FROM posicoes WHERE status='aberta' AND corretora IS NOT NULL")]
         for p in abertas:
+            bate()
             try:
                 pnl = fechar(p, "panico")
                 if pnl is not None:
@@ -1591,11 +1700,15 @@ def panico():
                                       "erro": f"{type(e).__name__}: {str(e)[:120]}"})
         try:                                        # a varredura: o que o livro não conhecia
             for px in c.posicoes():
+                bate()
                 try:
                     ext = c.fechar_mercado(px["simbolo"], px["direcao"], px["qty"],
                                            _coid("x", f"p{int(time.time() * 1000) % 10 ** 9}"))
                     if ext.get("status") == "dry_run":      # nada saiu: não é "varrida"
                         raise ValueError("corretora_dry_run ligado: o fechamento NÃO foi enviado")
+                    if not float(ext.get("preenchido") or 0) and ext.get("status") != "preenchida":
+                        # aceita não é executada: só conta como varrida o que encheu
+                        raise C.EnvioIncerto(f"fechamento voltou '{ext.get('status')}' sem executar")
                     c.cancelar_tudo(px["simbolo"])
                     # fechada, mas fora do livro: a reconciliação lança a saída se a linha existir
                     res["varridas"].append({"ativo": px["simbolo"], "direcao": px["direcao"],
@@ -1603,12 +1716,24 @@ def panico():
                     log(f"PÂNICO: {px['direcao']} {px['simbolo']} qty {px['qty']} fechada na "
                         "varredura da conta", "error")
                 except C.OrdemRecusada as e:
+                    if not _nada_a_reduzir(e):
+                        res["falhas"].append({"ativo": px["simbolo"],
+                                              "erro": f"varredura: recusado: {str(e)[:120]}"})
+                        continue
                     # reduce-only recusado = não há o que reduzir: a leitura de posições estava
                     # um instante atrasada e esta acabou de ser fechada acima. Não é falha.
                     log(f"PÂNICO: varredura de {px['simbolo']} sem o que fechar ({e})", "warning")
                 except Exception as e:
                     res["falhas"].append({"ativo": px["simbolo"],
                                           "erro": f"varredura: {type(e).__name__}: {str(e)[:120]}"})
+            # A prova do pânico é a conta, não as respostas: o que ainda estiver aberto lá depois
+            # de tudo isso é falha, mesmo que nenhuma chamada tenha levantado (revisão de 26/11).
+            ja = {f.get("ativo") for f in res["falhas"]}
+            for px in c.posicoes():
+                if px["simbolo"] not in ja:
+                    res["falhas"].append({"ativo": px["simbolo"],
+                                          "erro": f"segue ABERTA na corretora depois do pânico "
+                                                  f"({px['direcao']} qty {px['qty']:g})"})
             for o in c.ordens_abertas():
                 if _nosso(o.get("client_oid")):
                     try:

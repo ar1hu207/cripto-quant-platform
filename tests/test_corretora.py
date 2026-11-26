@@ -40,11 +40,15 @@ class _ExFake:
         return {"id": s.split("/")[0] + "USDT", "limits": {"amount": {"min": 0.01}, "cost": {"min": 5.0}}}
 
     def amount_to_precision(self, s, q):
-        n = int(float(q) * 100)                         # trunca, como o ccxt (TRUNCATE)
+        # Trunca pelo TEXTO do número, como o `decimal_to_precision` do ccxt: `0.3 - 0.1` é
+        # 0.19999999999999998 e vira 0,19. `int(q * 100)` dava 20 em float e escondia o lote
+        # perdido que a folga do `_lote` existe para evitar (revisão de testes de 26/11, M05).
+        from decimal import Decimal, ROUND_DOWN
+        n = Decimal(repr(float(q))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         if n <= 0:                                      # ccxt 4.5: levanta, não devolve "0"
             raise ccxt.InvalidOrder(f"binanceusdm amount of {s} must be greater than minimum "
                                     "amount precision of 0.01")
-        return str(n / 100)
+        return str(n)
 
     def price_to_precision(self, s, p):
         return f"{float(p):.2f}"
@@ -135,11 +139,16 @@ class _ExFake:
     def cancel_order(self, oid, s, params=None):
         self.chamadas.append(("cancel_order", oid, s, dict(params or {})))
         o = self.ordens.get(oid)
-        if not o:
+        trig = bool((params or {}).get("trigger"))
+        if o is not None and ("algoId" in o["info"]) != trig:
+            o = None                                    # o serviço errado não conhece a ordem
+        if not o or o["info"]["algoStatus" if "algoId" in o["info"] else "status"] != "NEW":
+            if trig:
+                # condicional (Algo) já terminada ou desconhecida: o ccxt põe em BadRequest
+                raise ccxt.BadRequest('binanceusdm {"code":-20124,"msg":"Invalid algo id or it '
+                                      'has been completed."}')
             raise ccxt.OrderNotFound('{"code":-2011,"msg":"Unknown order sent."}')
         chave = "algoStatus" if "algoId" in o["info"] else "status"
-        if o["info"][chave] != "NEW":
-            raise ccxt.OrderNotFound('{"code":-2011,"msg":"Unknown order sent."}')
         o["info"][chave] = "CANCELED"
         return o
 
@@ -554,6 +563,62 @@ def test_mover_stop_que_falha_no_envio_mantem_o_antigo():
     with pytest.raises(C.EnvioIncerto):
         b.mover_stop("SOL/USDT", velho, 97.0, "mv5")
     assert ex.ordens[velho["id"]]["info"]["algoStatus"] == "NEW"   # o antigo segue protegendo
+
+
+def test_mover_stop_que_nao_cancela_o_antigo_devolve_o_novo():
+    """O novo já está lá: se o cancelamento do antigo falha, quem chama tem de receber o NOVO.
+    Levantar fazia o livro ficar com o antigo e a reconciliação cancelar o novo (revisão 26/11)."""
+    ex = _ExFake()
+    b = _bin(ex)
+    velho = b.colocar_stop("SOL/USDT", "LONG", 95.0, "mv6", qty=0.1)
+    real = ex.cancel_order
+
+    def cai(*a, **k):
+        raise ccxt.RequestTimeout("timeout")
+    ex.cancel_order = cai
+    novo = b.mover_stop("SOL/USDT", velho, 97.0, "mv7")
+    ex.cancel_order = real
+    assert novo["gatilho"] == 97.0 and novo["client_oid"] == "mv7"
+    assert ex.ordens[novo["id"]]["info"]["algoStatus"] == "NEW"
+
+
+def test_cancelar_condicional_ja_terminada_devolve_false_e_nao_levanta():
+    ex = _ExFake()
+    b = _bin(ex)
+    s = b.colocar_stop("SOL/USDT", "LONG", 95.0, "k2", qty=0.1)
+    ex.ordens[s["id"]]["info"]["algoStatus"] = "FINISHED"      # disparou
+    assert b.cancelar("SOL/USDT", s["id"], condicional=True) is False
+    novo = b.mover_stop("SOL/USDT", s, 97.0, "k3")             # e o mover não quebra por isso
+    assert novo["gatilho"] == 97.0
+
+
+def test_cancelar_condicional_vai_ao_servico_de_algo():
+    ex = _ExFake()
+    b = _bin(ex)
+    s = b.colocar_stop("SOL/USDT", "LONG", 95.0, "k4", qty=0.1)
+    assert b.cancelar("SOL/USDT", s["id"]) is False             # sem `trigger`: não acha
+    assert ex.ordens[s["id"]]["info"]["algoStatus"] == "NEW"
+    assert b.cancelar("SOL/USDT", s["id"], condicional=True) is True
+
+
+def test_fechar_mercado_vai_reduce_only_do_lado_que_fecha():
+    ex = _ExFake()
+    ex.posicao = 0.2
+    b = _bin(ex)
+    b.fechar_mercado("SOL/USDT", "LONG", 0.2, "x9")
+    b.fechar_mercado("SOL/USDT", "SHORT", 0.2, "x10")
+    c1, c2 = _creates(ex)
+    assert c1[2] == "market" and c1[3] == "sell" and c1[6].get("reduceOnly") is True
+    assert c2[3] == "buy" and c2[6].get("reduceOnly") is True
+
+
+def test_abrir_mercado_mede_o_teto_no_preco_de_referencia():
+    ex = _ExFake(mark=100.5)                    # o mark andou depois das guardas
+    b = _bin(ex, teto=300.0)
+    o = b.abrir_mercado("SOL/USDT", "LONG", 2.99, "e9", ref_preco=100.0)   # 299 no preço medido
+    assert o["client_oid"] == "e9"
+    with pytest.raises(C.AcimaDoTeto):
+        b.abrir_mercado("SOL/USDT", "LONG", 2.99, "e10")                    # 300,5 no mark: passa
 
 
 def test_cancelar_tudo_pega_normais_e_condicionais():

@@ -1754,7 +1754,8 @@ def panico(pular_pendentes: bool = False):
         canceladas = 0 if em_corretora else _cancelar_ordens("panico")
     log("PÂNICO: auto-trader desligado", "error")
     if em_corretora:
-        r = execucao.panico()
+        # o worker está parado no lock enquanto o pânico corre: a batida do watchdog vem daqui
+        r = execucao.panico(batida=lambda: _sd_notify(b"WATCHDOG=1"))
         pulados = 0
         if pular_pendentes:
             with db.conectar() as c:
