@@ -107,6 +107,9 @@
   $('btn-panico').addEventListener('click', panico);
 
   /* ================= menu da conta ================= */
+  /* "App do celular": grava a escolha antes de o link navegar (app/desvio.js a lê). Era um onclick= no
+     HTML; a CSP sem 'unsafe-inline' bloqueia handler em atributo. */
+  $('mi-celular').addEventListener('click', function () { A.store.set('apx.ui', 'mobile'); });
   $('menu-pop').addEventListener('click', async function (ev) {
     var b = ev.target.closest('[data-acao]'); if (!b) return;
     var acao = b.dataset.acao;

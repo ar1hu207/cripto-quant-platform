@@ -506,7 +506,11 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*
 # vercel.json (o mesmo HTML roda sob ele no Vercel, prova de que não quebra o painel); servido
 # daqui, `connect-src 'self'` é a própria origem, e o host do dl380 segue listado para o caso de
 # a página ser aberta direto no Funnel. Só acrescenta cabeçalho: não afrouxa guarda nenhuma.
-_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+# `script-src 'self'`, SEM 'unsafe-inline': HTML injetado numa tela não executa, e é script
+# executando na página que lê a credencial do localStorage. O index.html não tem script embutido
+# nem handler em atributo por isso (tests/test_front_cabecalhos.py confere os dois lados). O
+# vercel.json guarda uma exceção só para o classico.html, que este processo não serve.
+_CSP = ("default-src 'self'; script-src 'self'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src https://fonts.gstatic.com; img-src 'self' data:; "
         "connect-src 'self' https://arthur-dl380.taild8de53.ts.net; "

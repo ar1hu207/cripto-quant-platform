@@ -8,17 +8,10 @@
      login, widget global do Apollo e o diálogo de confirmação. As views moram em app/views/<id>.js, no
      contrato window.PULSE_VIEWS (ver app/casca.js). O painel antigo continua em classico.html até o dono
      assinar a paridade. -->
-<script>
-/* Celular abre o app do celular (m.html), que é outra tela sobre o MESMO backend, a mesma credencial e as
-   mesmas regras (app/api.js e app/comum.js). Roda antes de qualquer pintura para não piscar o desktop.
-   Escolha explícita vence a largura: "Versão completa" no app grava apx.ui=desktop, e "App do celular" no
-   menu da conta grava apx.ui=mobile. O hash vai junto (#operar abre o Operar de lá). */
-(function () {
-  var pref = null; try { pref = localStorage.getItem('apx.ui'); } catch (e) {}
-  var cel = window.matchMedia && (matchMedia('(max-width: 760px)').matches || matchMedia('(max-height: 500px) and (pointer: coarse)').matches);
-  if (pref === 'mobile' || (pref !== 'desktop' && cel)) location.replace('m.html' + location.search + location.hash);
-})();
-</script>
+<!-- Nenhum <script> embutido e nenhum handler em atributo (onclick=, onload=) neste arquivo: a CSP é
+     `script-src 'self'`, sem 'unsafe-inline', e o navegador os bloquearia em silêncio. Código novo vai em
+     arquivo de app/. Celular é mandado para o m.html por app/desvio.js, antes de qualquer pintura. -->
+<script src="app/desvio.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0B0B0C">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -31,10 +24,11 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- Syne (display), DM Sans (UI), Fira Code (números). A folha do Google Fonts é a única exceção à regra
      "nada de terceiro" (CLAUDE.md §2): não executa JS, então não lê a credencial do localStorage. Entra
-     como preload e vira stylesheet no onload (P2-37): mesma folha, sem bloquear a primeira pintura. -->
-<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&family=Fira+Code:wght@400;500;600&display=swap" onload="this.rel='stylesheet'">
+     como preload e app/cabeca.js a liga como stylesheet (P2-37): mesma folha, sem bloquear a primeira
+     pintura. cabeca.js também abre a conexão com o backend, e por isso vem depois do config.js. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&family=Fira+Code:wght@400;500;600&display=swap">
 <script src="config.js"></script>
-<script>if(window.API_BASE){var _pc=document.createElement('link');_pc.rel='preconnect';_pc.href=window.API_BASE;_pc.crossOrigin='';document.head.appendChild(_pc);}</script>
+<script src="app/cabeca.js"></script>
 <style>
 /* Tokens: valores padrão = paleta Osso (DESIGN.md v2). O seletor de paleta reescreve todos no :root
    a partir de app/paletas.js; nada nas views usa cor literal. */
@@ -486,7 +480,7 @@ select.inp{font-family:var(--f-ui)}
             <div class="menu-lbl" id="menu-conta">conta</div>
             <button type="button" class="mi" data-acao="scan">Escanear agora<small>POST /scan · varre o mercado fora do ciclo</small></button>
             <a class="mi" href="classico.html">Painel clássico<small>a versão anterior, até a paridade ser assinada</small></a>
-            <a class="mi" href="m.html" onclick="try{localStorage.setItem('apx.ui','mobile')}catch(e){}">App do celular<small>a versão feita para o celular, sobre o mesmo backend</small></a>
+            <a class="mi" href="m.html" id="mi-celular">App do celular<small>a versão feita para o celular, sobre o mesmo backend</small></a>
             <button type="button" class="mi" data-acao="sair">Sair<small>encerra a sessão neste navegador</small></button>
             <hr>
             <button type="button" class="mi danger" data-acao="reset">Resetar simulação…<small>apaga posições, trades e curva; pede confirmação digitada</small></button>
