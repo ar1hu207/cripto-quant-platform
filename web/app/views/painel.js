@@ -428,7 +428,7 @@
       '<span class="guard' + (rg.teto_aberto ? ' hot' : '') + '">teto de risco aberto ' + p1(rg.risco_aberto_pct) + '%</span>' +
       '<span class="guard' + (rg.trava_dia ? ' hot' : '') + '">trava diária ' + p1(rg.limite_pct) + '%</span>' +
       '<span class="guard">margem máx. ' + p1((parseFloat(cfg.exposicao_max) || 0) * 100) + '%</span>' +
-      '<span class="guard' + (String(cfg.trailing_ativo) === '1' ? '' : ' off') + '">trailing ' + (String(cfg.trailing_ativo) === '1' ? (cfg.trailing_unidade === 'R' ? cfg.trailing_arma_r + 'R/' + cfg.trailing_dist_r + 'R' : '%') : 'desligado') + '</span>';
+      '<span class="guard' + (String(cfg.trailing_ativo) === '1' ? '' : ' off') + '">trailing ' + (String(cfg.trailing_ativo) === '1' ? (cfg.trailing_unidade === 'R' ? A.esc(cfg.trailing_arma_r) + 'R/' + A.esc(cfg.trailing_dist_r) + 'R' : '%') : 'desligado') + '</span>';
     var b = $('pn-auto'); b.textContent = on ? 'Pausar' : 'Ligar'; b.className = 'btn ' + (on ? 'ghost' : 'primary');
   }
   async function toggleAuto() {

@@ -86,18 +86,26 @@ def test_nenhum_dialogo_nativo_no_celular():
 
 def test_index_manda_o_celular_para_o_app_e_respeita_a_escolha():
     """Largura decide; escolha explicita (apx.ui) vence. Sem o `pref !== 'desktop'`, quem toca
-    em "Versao completa" no celular volta para o app num loop."""
+    em "Versao completa" no celular volta para o app num loop.
+
+    O desvio mora em app/desvio.js, nao mais num <script> embutido: a CSP e `script-src 'self'`
+    e script embutido nao executa (tests/test_front_cabecalhos.py)."""
     html = _ler(WEB, "index.html")
-    m = re.search(r"<script>((?:(?!</script>).)*?location\.replace(?:(?!</script>).)*)</script>", html, re.S)
-    assert m, "redirecionamento do index nao encontrado"
-    js = m.group(1)
+    js = _ler(WEB, "app", "desvio.js")
     assert "localStorage.getItem('apx.ui')" in js
     assert "pref === 'mobile'" in js and "pref !== 'desktop'" in js
     assert "location.replace('m.html' + location.search + location.hash)" in js
-    # e roda antes de qualquer script da casca: senao o desktop pinta antes de sair
-    assert html.index("apx.ui") < html.index('src="app/api.js"')
-    # o app grava a mesma chave com o mesmo valor que o index le
+    # e roda antes de qualquer script da casca: senao o desktop pinta antes de sair. Primeiro
+    # script da pagina, e SEM defer/async, que o deixariam para depois da primeira pintura.
+    tag = re.search(r"<script[^>]*\ssrc=\"app/desvio\.js\"[^>]*>", html)
+    assert tag, "index.html nao carrega app/desvio.js"
+    assert "defer" not in tag.group(0) and "async" not in tag.group(0)
+    assert _srcs(html)[0] == "app/desvio.js"
+    # o app e o menu da conta gravam a mesma chave, com os valores que o desvio le
     assert "A.store.set('apx.ui', 'desktop')" in _ler(WEB, "app", "m", "app.js")
+    assert 'id="mi-celular"' in html
+    assert "$('mi-celular').addEventListener('click', function () { A.store.set('apx.ui', 'mobile'); })" \
+        in _ler(WEB, "app", "casca.js")
 
 
 def test_o_app_usa_o_mesmo_gate_de_login():

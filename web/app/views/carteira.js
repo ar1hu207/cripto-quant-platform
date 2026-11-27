@@ -187,7 +187,7 @@
   function alocacao(e) {
     var pos = e.posicoes || [], rg = e.risco || {}, eq = e.equity_total || 0;
     var livre = Math.max(0, (e.banca ? e.banca.atual : 0) - (rg.margem_aberta || 0));
-    var l = pos.map(function (p, i) { return { n: F.par(p.ativo), v: p.valor_reais || 0, c: CORES[i % CORES.length], d: p.direcao + ' ' + A.esc(p.alavancagem) + 'x' }; });
+    var l = pos.map(function (p, i) { return { n: F.par(p.ativo), v: p.valor_reais || 0, c: CORES[i % CORES.length], d: A.esc(p.direcao) + ' ' + A.esc(p.alavancagem) + 'x' }; });
     var tot = l.reduce(function (a, x) { return a + x.v; }, 0) + livre || 1;
     $('ct-al-n').textContent = pos.length + (pos.length === 1 ? ' posição' : ' posições') + ' · ' + F.f0((tot - livre) / tot * 100) + '% em margem';
     var C = 2 * Math.PI * 58, acc = 0, segs = l.map(function (x) { var f = x.v / tot, s = '<circle cx="75" cy="75" r="58" fill="none" stroke="var(--' + x.c + ')" stroke-width="16" stroke-dasharray="' + (f * C).toFixed(2) + ' ' + C.toFixed(2) + '" stroke-dashoffset="' + (-acc * C).toFixed(2) + '"/>'; acc += f; return s; }).join('');
@@ -267,9 +267,9 @@
     if (parado && !l.length) { el.innerHTML = '<div class="empty">O DCA daqui é simulação: não compra nada. Com a conta operando na Binance ele fica parado.</div>'; return; }
     el.innerHTML = (parado ? '<div class="empty" style="margin-bottom:10px">O DCA daqui é simulação e está parado nesta conta: os planos abaixo não aportam.</div>' : '') + (l.length ? '<div style="display:grid;gap:10px">' + l.map(function (d) {
       var prox = d.ultimo_aporte ? (function () { var t = A.ts(d.ultimo_aporte); if (!t) return '—'; t = new Date(t.getTime() + d.freq_dias * 86400000); return ('0' + t.getDate()).slice(-2) + '/' + ('0' + (t.getMonth() + 1)).slice(-2); })() : 'no próximo ciclo';
-      return '<div class="dca-it"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mono strong">' + A.esc(F.par(d.ativo)) + '</span><span class="chip neutro">' + F.brl(d.valor_aporte) + ' a cada ' + d.freq_dias + ' d</span><span class="mono ' + F.cls(d.pnl) + '" style="margin-left:auto">' + F.money(d.pnl) + ' · ' + F.pct(d.pnl_pct) + '</span></div>' +
+      return '<div class="dca-it"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mono strong">' + A.esc(F.par(d.ativo)) + '</span><span class="chip neutro">' + F.brl(d.valor_aporte) + ' a cada ' + A.esc(d.freq_dias) + ' d</span><span class="mono ' + F.cls(d.pnl) + '" style="margin-left:auto">' + F.money(d.pnl) + ' · ' + F.pct(d.pnl_pct) + '</span></div>' +
         '<div class="dca-g"><div><div class="k">acumulado</div><div class="v">' + F.f2(d.unidades) + ' ' + A.esc(F.base(d.ativo)) + '</div></div><div><div class="k">investido → hoje</div><div class="v">' + F.brl(d.total_investido) + ' → ' + F.brl(d.valor_atual) + '</div></div><div><div class="k">preço médio</div><div class="v">' + F.px(d.preco_medio) + '</div></div>' +
-        '<div><div class="k">aportes</div><div class="v">' + d.n_aportes + '</div></div><div><div class="k">último</div><div class="v">' + (d.ultimo_aporte ? A.ddmm(d.ultimo_aporte) : '—') + '</div></div><div><div class="k">próximo</div><div class="v">' + prox + '</div></div></div>' +
+        '<div><div class="k">aportes</div><div class="v">' + A.esc(d.n_aportes) + '</div></div><div><div class="k">último</div><div class="v">' + (d.ultimo_aporte ? A.ddmm(d.ultimo_aporte) : '—') + '</div></div><div><div class="k">próximo</div><div class="v">' + prox + '</div></div></div>' +
         '<div class="sg-act" style="display:flex;gap:8px"><button type="button" class="btn ghost sm" data-aportar="' + d.id + '">Aportar agora</button><button type="button" class="btn danger sm" data-remover="' + d.id + '">Remover plano</button></div></div>';
     }).join('') + '</div>' : '<div class="empty">Nenhum plano de DCA. Crie um abaixo: compra spot periódica, sem alavancagem.</div>');
     var sel = $('ct-dca-a');
@@ -297,7 +297,7 @@
     finally { aportando = false; }
   }
   async function remover(d) {
-    var ok = await A.dialogo({ titulo: 'Remover plano de DCA', ok: 'Remover', perigo: true, corpo: '<p>Remove o plano de <b>' + A.esc(F.par(d.ativo)) + '</b> (' + d.n_aportes + ' aportes, ' + F.brl(d.total_investido) + ' investidos, hoje ' + F.brl(d.valor_atual) + ').</p>' });
+    var ok = await A.dialogo({ titulo: 'Remover plano de DCA', ok: 'Remover', perigo: true, corpo: '<p>Remove o plano de <b>' + A.esc(F.par(d.ativo)) + '</b> (' + A.esc(d.n_aportes) + ' aportes, ' + F.brl(d.total_investido) + ' investidos, hoje ' + F.brl(d.valor_atual) + ').</p>' });
     if (!ok) return;
     try { var r = await A.api('/dca/remover', { id: d.id }); A.toast(r && r.ok === false ? (r.erro || 'O plano não foi removido') : 'Plano removido', r && r.ok === false ? 'warn' : ''); A.carregar(); } catch (err) { A.toast('Erro: ' + A.erroTxt(err), 'neg'); }
   }
@@ -330,12 +330,12 @@
   function mensal(tr) {
     if (!tr.length) { $('ct-mes').innerHTML = '<div class="empty">Nenhum trade fechado ainda.</div>'; $('ct-mes-t').textContent = '—'; return; }
     var m = {}, ord = [], teto = tr.length >= 500, menor = tr.reduce(function (a, t) { return t.fechado_em < a ? t.fechado_em : a; }, tr[0].fechado_em).slice(0, 7);
-    tr.forEach(function (t) { var k = t.fechado_em.slice(0, 7); if (!m[k]) { m[k] = { p: 0, n: 0, g: 0 }; ord.push(k); } m[k].p += t.pnl_reais || 0; m[k].n++; if (t.pnl_reais > 0) m[k].g++; });
+    tr.forEach(function (t) { var k = String(t.fechado_em || '').slice(0, 7); if (!m[k]) { m[k] = { p: 0, n: 0, g: 0 }; ord.push(k); } m[k].p += t.pnl_reais || 0; m[k].n++; if (t.pnl_reais > 0) m[k].g++; });
     ord.sort();
     var MN = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'], ini = (S.estado.banca || {}).inicial || 0;
     $('ct-mes-t').textContent = MN[+ord[0].slice(5) - 1] + ' → ' + MN[+ord[ord.length - 1].slice(5) - 1] + ' ' + ord[ord.length - 1].slice(0, 4);
     $('ct-mes').innerHTML = '<div class="tablewrap"><table class="tbl"><thead><tr><th>Mês</th><th class="num">P&amp;L</th><th class="num">% da banca inicial</th><th class="num">Trades</th><th class="num">Win rate</th></tr></thead><tbody>' +
-      ord.slice().reverse().map(function (k) { var x = m[k], parc = teto && k === menor; return '<tr><td class="mono">' + MN[+k.slice(5) - 1] + '/' + k.slice(2, 4) + (parc ? ' <span class="mute">(parcial)</span>' : '') + '</td><td class="mono num ' + F.cls(x.p) + '">' + F.money(x.p) + '</td><td class="mono num ' + F.cls(x.p) + '">' + (ini ? F.pct(x.p / ini * 100) : '—') + '</td><td class="mono num">' + x.n + '</td><td class="mono num">' + F.f0(x.g / x.n * 100) + '%</td></tr>'; }).join('') +
+      ord.slice().reverse().map(function (k) { var x = m[k], parc = teto && k === menor; return '<tr><td class="mono">' + MN[+k.slice(5) - 1] + '/' + A.esc(k.slice(2, 4)) + (parc ? ' <span class="mute">(parcial)</span>' : '') + '</td><td class="mono num ' + F.cls(x.p) + '">' + F.money(x.p) + '</td><td class="mono num ' + F.cls(x.p) + '">' + (ini ? F.pct(x.p / ini * 100) : '—') + '</td><td class="mono num">' + x.n + '</td><td class="mono num">' + F.f0(x.g / x.n * 100) + '%</td></tr>'; }).join('') +
       '</tbody></table></div><div class="mute" style="font-size:11px;margin-top:8px;font-family:var(--f-mono)">P&amp;L fechado por mês, dos ' + tr.length + ' trades mais recentes' + (teto ? ' (o mês mais antigo pode estar incompleto)' : '') + ' · o reset zera o histórico</div>';
   }
   function metricas(e) {

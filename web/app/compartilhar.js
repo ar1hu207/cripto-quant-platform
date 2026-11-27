@@ -248,7 +248,7 @@
   function q(s) { return ov && ov.querySelector(s); }
 
   function pintaOpcoes() {
-    q('#shr-meses').innerHTML = D.meses.map(function (m) { return '<button type="button" class="shr-op" data-mk="' + m + '" aria-pressed="' + (m === S.mk) + '">' + curtoMes(m) + '</button>'; }).join('');
+    q('#shr-meses').innerHTML = D.meses.map(function (m) { return '<button type="button" class="shr-op" data-mk="' + esc(m) + '" aria-pressed="' + (m === S.mk) + '">' + esc(curtoMes(m)) + '</button>'; }).join('');
     q('#shr-fmt').innerHTML = [['feed', 'Feed 4:5'], ['story', 'Stories 9:16']].map(function (o) { return '<button type="button" class="shr-op" data-fmt="' + o[0] + '" aria-pressed="' + (o[0] === S.formato) + '">' + o[1] + '</button>'; }).join('');
   }
 

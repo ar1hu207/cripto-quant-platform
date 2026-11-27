@@ -189,10 +189,10 @@
   }
   function evento(ev) {
     var t = '';
-    if (ev.tipo === 'posicao_aberta') t = 'Abri <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + ev.p.direcao + ' ' + ev.p.alavancagem + 'x · margem ' + F.brl(ev.p.valor_reais) + ' · entrada ' + F.px(ev.p.entrada) + ' · stop ' + F.px(ev.p.stop);
-    else if (ev.tipo === 'posicao_fechada') t = 'Fechou <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + ev.p.direcao + ' · último P&amp;L marcado <span class="' + F.cls(ev.p.pnl) + '">' + F.money(ev.p.pnl) + '</span>';
-    else if (ev.tipo === 'sinal_novo') t = 'Sinal novo: <b>' + A.esc(F.par(ev.s.ativo)) + '</b> ' + ev.s.direcao + ' · convicção ' + Math.round(ev.s.conviccao) + ' · ' + A.esc(ev.s.tf);
-    else if (ev.tipo === 'ordem_nova') t = 'Ordem post-only descansando: <b>' + A.esc(F.par(ev.o.ativo)) + '</b> ' + ev.o.direcao + ' @ ' + F.px(ev.o.preco_limite);
+    if (ev.tipo === 'posicao_aberta') t = 'Abri <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + A.esc(ev.p.direcao) + ' ' + A.esc(ev.p.alavancagem) + 'x · margem ' + F.brl(ev.p.valor_reais) + ' · entrada ' + F.px(ev.p.entrada) + ' · stop ' + F.px(ev.p.stop);
+    else if (ev.tipo === 'posicao_fechada') t = 'Fechou <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + A.esc(ev.p.direcao) + ' · último P&amp;L marcado <span class="' + F.cls(ev.p.pnl) + '">' + F.money(ev.p.pnl) + '</span>';
+    else if (ev.tipo === 'sinal_novo') t = 'Sinal novo: <b>' + A.esc(F.par(ev.s.ativo)) + '</b> ' + A.esc(ev.s.direcao) + ' · convicção ' + Math.round(ev.s.conviccao) + ' · ' + A.esc(ev.s.tf);
+    else if (ev.tipo === 'ordem_nova') t = 'Ordem post-only descansando: <b>' + A.esc(F.par(ev.o.ativo)) + '</b> ' + A.esc(ev.o.direcao) + ' @ ' + F.px(ev.o.preco_limite);
     else if (ev.tipo === 'trava') t = '<b class="neg">Trava diária disparou</b> · perda do dia ' + F.money(ev.r.pnl_dia) + '. Sem trade novo até a virada.';
     if (!t) return;
     addTl(t); if (S.mesh) { try { S.mesh.pulse(); } catch (x) {} }
@@ -229,14 +229,14 @@
 
   /* ---------- editor de config ---------- */
   function campo(k, spec, v) {
-    var id = 'cf-' + k, val = k in S.mudancas ? S.mudancas[k] : v;
-    if (spec.tipo === 'bool') { var ck = String(val) === '1' || String(val).toLowerCase() === 'true'; return '<label class="sw"><input type="checkbox" id="' + id + '" data-k="' + k + '"' + (ck ? ' checked' : '') + ' aria-label="' + A.esc(nome(k)) + '"><i></i></label>'; }
-    if (spec.tipo === 'enum') return '<select id="' + id + '" data-k="' + k + '" aria-label="' + A.esc(nome(k)) + '">' + spec.opcoes.map(function (o) { return '<option' + (String(o) === String(val) ? ' selected' : '') + '>' + A.esc(o) + '</option>'; }).join('') + '</select>';
+    var ek = A.esc(k), id = 'cf-' + ek, val = k in S.mudancas ? S.mudancas[k] : v;
+    if (spec.tipo === 'bool') { var ck = String(val) === '1' || String(val).toLowerCase() === 'true'; return '<label class="sw"><input type="checkbox" id="' + id + '" data-k="' + ek + '"' + (ck ? ' checked' : '') + ' aria-label="' + A.esc(nome(k)) + '"><i></i></label>'; }
+    if (spec.tipo === 'enum') return '<select id="' + id + '" data-k="' + ek + '" aria-label="' + A.esc(nome(k)) + '">' + spec.opcoes.map(function (o) { return '<option' + (String(o) === String(val) ? ' selected' : '') + '>' + A.esc(o) + '</option>'; }).join('') + '</select>';
     if (spec.tipo === 'float' || spec.tipo === 'int') {
       var mn = PCT[k] ? spec.min * 100 : spec.min, mx = PCT[k] ? spec.max * 100 : spec.max;
-      return '<input class="inp" type="number" id="' + id + '" data-k="' + k + '" inputmode="decimal" step="any" min="' + mn + '" max="' + mx + '" value="' + A.esc(paraTela(k, val)) + '" aria-label="' + A.esc(nome(k)) + (PCT[k] ? ' em %' : '') + '">';
+      return '<input class="inp" type="number" id="' + id + '" data-k="' + ek + '" inputmode="decimal" step="any" min="' + A.esc(mn) + '" max="' + A.esc(mx) + '" value="' + A.esc(paraTela(k, val)) + '" aria-label="' + A.esc(nome(k)) + (PCT[k] ? ' em %' : '') + '">';
     }
-    return '<input class="inp" type="text" id="' + id + '" data-k="' + k + '" value="' + A.esc(val == null ? '' : val) + '"' + (spec.max_chars ? ' maxlength="' + spec.max_chars + '"' : '') + ' aria-label="' + A.esc(nome(k)) + '">';
+    return '<input class="inp" type="text" id="' + id + '" data-k="' + ek + '" value="' + A.esc(val == null ? '' : val) + '"' + (spec.max_chars ? ' maxlength="' + A.esc(spec.max_chars) + '"' : '') + ' aria-label="' + A.esc(nome(k)) + '">';
   }
   function editor() {
     var e = S.estado, cat = S.cat; if (!e || !cat) return;
@@ -253,8 +253,8 @@
       return '<details class="cfg-g" data-g="' + A.esc(g[0]) + '"' + (S.abertos[g[0]] ? ' open' : '') + '><summary><span class="cfg-gt">' + A.esc(g[0]) + '</span><span class="cfg-gs">' + A.esc(res) + '</span><span class="cfg-gn" data-gn="' + A.esc(g[0]) + '">' + g[1].length + '</span></summary><div class="cfg-gb">' + g[1].map(function (k) {
         var spec = P[k], v = cfg[k], ro = k === 'ativos';
         var faixa = spec.tipo === 'float' || spec.tipo === 'int' ? (PCT[k] ? F.f2(spec.min * 100) + '–' + F.f2(spec.max * 100) + '%' : spec.min + '–' + spec.max) : spec.tipo === 'enum' ? spec.opcoes.join(' · ') : spec.tipo === 'lista_num' ? 'até ' + spec.max_itens + ' números, cada um acima de ' + spec.min + ' e até ' + spec.max + ', separados por vírgula' : spec.tipo;
-        return '<div class="cfg-r' + (k in S.mudancas ? ' mudou' : '') + '" data-row="' + k + '"><div class="cfg-k"><b>' + A.esc(nome(k)) + (RISCO[k] ? '<span class="tag-r" title="mudar isto mexe em risco: decisão do dono">toca-risco</span>' : '') + '</b>' +
-          '<span class="ch">' + k + ' · ' + A.esc(faixa) + ' · padrão ' + A.esc(mostra(k, spec.padrao, spec)) + '</span>' +
+        return '<div class="cfg-r' + (k in S.mudancas ? ' mudou' : '') + '" data-row="' + A.esc(k) + '"><div class="cfg-k"><b>' + A.esc(nome(k)) + (RISCO[k] ? '<span class="tag-r" title="mudar isto mexe em risco: decisão do dono">toca-risco</span>' : '') + '</b>' +
+          '<span class="ch">' + A.esc(k) + ' · ' + A.esc(faixa) + ' · padrão ' + A.esc(mostra(k, spec.padrao, spec)) + '</span>' +
           (spec.racional ? '<details><summary>por que este valor</summary><p>' + A.esc(spec.racional) + '</p></details>' : '') + '</div>' +
           '<div class="cfg-v">' + (ro ? '<span class="ro">' + A.esc(String(v || '').split(',').map(F.par).join(' · ')) + '</span><span class="cur">só leitura nesta tela (' + String(v || '').split(',').filter(Boolean).length + ' pares)</span>' : campo(k, spec, v) + '<span class="cur">atual: ' + A.esc(mostra(k, v, spec)) + '</span>') + '</div></div>';
       }).join('') + '</div></details>';

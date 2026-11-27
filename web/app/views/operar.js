@@ -124,7 +124,7 @@
     $('op-wl').innerHTML = f.map(function (a) {
       var px = S.precos[a], ser = S.serie[a];
       return '<li><button type="button" data-par="' + A.esc(a) + '" class="' + (a === S.ativo ? 'is-on' : '') + '" aria-pressed="' + (a === S.ativo) + '">' +
-        '<span class="p">' + A.esc(F.par(a)) + '</span><span class="tags">' + (pos[a] ? '<span class="chip info" title="posição aberta">pos</span>' : '') + (sig[a] ? '<span class="chip ' + (sig[a] === 'LONG' ? 'long' : 'short') + '" title="sinal na fila">' + sig[a] + '</span>' : '') + '</span>' +
+        '<span class="p">' + A.esc(F.par(a)) + '</span><span class="tags">' + (pos[a] ? '<span class="chip info" title="posição aberta">pos</span>' : '') + (sig[a] ? '<span class="chip ' + (sig[a] === 'LONG' ? 'long' : 'short') + '" title="sinal na fila">' + A.esc(sig[a]) + '</span>' : '') + '</span>' +
         '<span class="px">' + (px ? F.px(px) : '—') + '</span><span>' + A.spark(ser) + '</span></button></li>';
     }).join('') || '<li class="mute" style="font-size:12px;padding:8px">Nenhum par com “' + A.esc(q) + '”.</li>';
   }
@@ -346,6 +346,10 @@
     if (primeira) {
       var l = pares(e), guard = A.store.get('pulse.operar.par'), hashPar = (location.hash.match(/[?&]par=([^&]+)/) || [])[1];
       try { hashPar = hashPar && decodeURIComponent(hashPar); } catch (err) { hashPar = null; }
+      /* O par do link só vale se o painel já o conhece (lista da config, sinal, posição ou ordem). O hash é
+         o único dado desta tela que QUEM MANDA O LINK controla: sem isto, um #operar?par=QUALQUER/COISA
+         virava consulta à API com a credencial do dono e ficava gravado como o par preferido. */
+      if (l.concat((e.pendentes || []).concat(e.posicoes || [], e.ordens || []).map(function (x) { return x.ativo; })).indexOf(hashPar) < 0) hashPar = null;
       var ini = hashPar || ((e.pendentes || [])[0] || {}).ativo || ((e.posicoes || [])[0] || {}).ativo || (l.indexOf(guard) >= 0 ? guard : l[0]);
       lista(); precos(); trocaPar(ini || 'BTC/USDT');
       return;
