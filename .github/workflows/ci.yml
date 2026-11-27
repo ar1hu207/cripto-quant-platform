@@ -62,3 +62,30 @@ jobs:
 
       - name: Suite completa
         run: python -m pytest
+
+  # Dependencia com vulnerabilidade conhecida reprova a PR. O `requirements.txt` fixa versao
+  # exata, o que e bom para reproduzir e ruim para envelhecer: ninguem relia a lista, e uma falha
+  # publicada no FastAPI, no uvicorn ou no ccxt so apareceria por acaso. O pip-audit resolve as
+  # dependencias (as transitivas tambem) num ambiente isolado e consulta a base da PyPA.
+  #
+  # Job SEPARADO da suite de proposito: sao perguntas diferentes ("o codigo funciona?" e "o que
+  # ele importa esta furado?"), e falha de uma nao pode esconder o resultado da outra. So o
+  # requirements.txt: e o que a producao instala. Em 27/11/2026 a lista saiu limpa.
+  # Quando reprovar: subir a versao no requirements.txt e rodar a suite; nao calar o aviso com
+  # `--ignore-vuln` sem registrar no commit por que a falha nao alcanca este sistema.
+  dependencias:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: pip-audit — nenhuma dependencia de producao com falha conhecida
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt
