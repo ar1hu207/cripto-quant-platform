@@ -129,3 +129,74 @@ def test_o_backend_manda_a_mesma_csp_do_vercel():
     valor = next(n.value for n in ast.walk(arvore) if isinstance(n, ast.Assign)
                  and any(getattr(a, "id", "") == "_CSP" for a in n.targets))
     assert ast.literal_eval(valor) == _csp_texto("vercel.json")
+
+
+# ------------------------------------------------------------- classico.html: o escape
+# `${x.campo}` impresso como veio, com os enfeites que nao limpam nada: `||''`, `??'—'`,
+# `.replace('/USDT','')`, `(x.ts||'').slice(11,16)`, `String(x.ts).slice(11,19)`.
+_CAMPO_CRU = re.compile(
+    r"""\$\{\s*(?:String\()?\(?\s*
+        (?P<campo>[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+)
+        \s*(?:(?:\|\||\?\?)\s*(?:'[^']*'|"[^"]*"|\d+)\s*)?\)?
+        (?:\.(?:replace|slice|trim|toString|toUpperCase|toLowerCase)\([^()]*\))*
+        \s*\}""", re.X)
+
+# Destinos que NAO sao HTML: ali o navegador escreve texto como texto, e escapar estragaria.
+_SO_TEXTO = (".textContent=", "toast(", "confirm(", "alert(", "createPriceLine(",
+             "txt('",           # o escritor de textContent dos tiles
+             "const qual=")     # vira o texto do confirm() de fechar posicao
+
+# `st` e o retorno de statusEntrada(): duas strings fixas do proprio arquivo, nada do backend.
+_LOCAIS = {"st.cls", "st.txt"}
+
+
+def _app_do_classico():
+    """O app do classico e um <script> embutido so (o outro e o preconnect, de duas linhas)."""
+    return max(re.findall(r"<script>(.*?)</script>", _ler("web", "classico.html"), flags=re.S),
+               key=len)
+
+
+def test_no_classico_nenhum_campo_do_backend_entra_cru_no_html():
+    """O classico.html fica com 'unsafe-inline' (teste acima), entao nele HTML injetado EXECUTA:
+    um `<img onerror>` num campo de texto rodava na pagina e lia a credencial do localStorage.
+    Sem a CSP por baixo, o escape e a guarda inteira -- e ele tem de valer para todo campo, nao
+    para os que alguem lembrou. Quem acrescentar `${t.campo}` num template deste arquivo cai
+    aqui: ou passa por escH(), ou o destino e texto e entra em _SO_TEXTO dizendo por que."""
+    js = _app_do_classico()
+    crus = []
+    for m in _CAMPO_CRU.finditer(js):
+        campo = m.group("campo")
+        # `id` e INTEGER PRIMARY KEY: o SQLite recusa o que nao for inteiro. `.length` e do JS.
+        if campo.endswith((".id", ".length")) or campo in _LOCAIS:
+            continue
+        # a instrucao em que o placeholder mora, do fim da anterior ate ele
+        ini = max(js.rfind(fim, 0, m.start()) for fim in (";\n", "{\n", "}\n"))
+        if any(alvo in js[ini:m.start()] for alvo in _SO_TEXTO):
+            continue
+        crus.append(f"linha {js.count(chr(10), 0, m.start()) + 1} do script: {m.group(0)}")
+    assert crus == [], "\n".join(crus)
+
+    # O que a regra de cima nao enxerga: concatenacao, callback de .map() e argumento de funcao.
+    for limpo in ("txt+=escH(a.motivo)", "${escH(m)}</span>", "escH(m.n_trades||0)",
+                  "${escH(gordos.map("):
+        assert limpo in js, limpo
+
+    # num() e brl() escapam na fonte. `"<img>".toLocaleString()` devolve a propria string: sem
+    # isto, uma coluna REAL com texto dentro (o SQLite aceita) saia crua por um "formatador".
+    assert "const num=v=>escH(" in js and "const brl=v=>'R$ '+escH(" in js
+    for entidade in ("'&amp;'", "'&lt;'", "'&gt;'", "'&quot;'", "'&#39;'"):
+        assert entidade in js, entidade      # aspas inclusive: escH() tambem vai em atributo
+
+
+def test_no_classico_handler_em_atributo_so_recebe_id_ou_json_escapado():
+    """Dentro de `onclick=` o texto e JavaScript, e escape de HTML nao segura JavaScript. Ali so
+    entra `id` (inteiro garantido pelo banco) ou o JSON do sinal -- e este passa por escH(),
+    porque JSON.stringify() nao escapa aspas simples e o atributo e `onclick='...'`: um apostrofo
+    num campo do sinal fechava o atributo e o resto virava marcacao."""
+    js = _app_do_classico()
+    handlers = re.findall(r"""\son[a-z]+=(?:"[^"\n]*"|'[^'\n]*')""", js)
+    assert len(handlers) >= 10                       # a regex continua achando os handlers
+    for h in handlers:
+        for expr in re.findall(r"\$\{([^}]*)\}", h):
+            assert re.fullmatch(r"[\w$]+\.id|json|escH\(JSON\.stringify\(s\)\)", expr), h
+    assert "const json=escH(JSON.stringify(s));" in js

@@ -856,9 +856,12 @@
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script>
-const brl=v=>'R$ '+(v??0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+// brl() e num() NAO limpam nada sozinhos: "<img>".toLocaleString() devolve a propria string, e
+// coluna REAL do SQLite aceita texto. O escH() mora aqui, na fonte; em numero de verdade ele nao
+// muda um caractere. pct() nao precisa: .toFixed() em string estoura em vez de imprimir.
+const brl=v=>'R$ '+escH((v??0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}));
 const pct=v=>(v>=0?'+':'')+(v??0).toFixed(2)+'%';
-const num=v=>(v??0).toLocaleString('pt-BR',{maximumFractionDigits:(v!=null&&Math.abs(v)<10)?5:2});
+const num=v=>escH((v??0).toLocaleString('pt-BR',{maximumFractionDigits:(v!=null&&Math.abs(v)<10)?5:2}));
 let chart, _sig=null, _est=null, _saidas={}, _saidasVistas={}, _precos={}, _busy=false, _modalTrigger=null;
 
 // ---- vendor sob demanda -----------------------------------------------------
@@ -1150,7 +1153,10 @@ function linhaSinal(s,i){
   // statusEntrada() e logica e nao se toca: o texto curto e so recorte para caber na celula,
   // e o inteiro fica no title e na sub-linha.
   const stCurto=st.txt.split(' — ')[0];
-  const json=JSON.stringify(s);
+  // escH() porque o destino e o atributo onclick='...': JSON.stringify() nao escapa aspas simples,
+  // e um apostrofo num campo do sinal fechava o atributo. O navegador desfaz as entidades antes de
+  // rodar o handler, entao o abrirModal() recebe o mesmo objeto de sempre.
+  const json=escH(JSON.stringify(s));
   // a serie da linha comeca no preco do PROPRIO sinal e segue pelo que o painel observou:
   // e a leitura util aqui ("de onde saiu, pra onde foi"), e ja tem dois pontos no primeiro
   // /precos em vez de esperar dois polls para aparecer
@@ -1158,9 +1164,9 @@ function linhaSinal(s,i){
   const linha=`<tr class="sig-row${aberto?' on':''}${st.cls==='st-no'?' sig-dim':''}" data-sid="${s.id}"
       tabindex="0" aria-expanded="${aberto}" onclick="toggleSinal(event,${s.id})">
     <td class="mono mut col-2">${i+1}</td>
-    <td class="sig-ativo"><span class="sig-exp" aria-hidden="true">▶</span> ${s.ativo.replace('/USDT','')} <span class="tf-badge">${s.tf||''}</span></td>
-    <td><span class="tag ${cls}">${s.direcao}</span></td>
-    <td class="col-2"><span class="conv">${s.conviccao}<span class="convbar"><i style="width:${s.conviccao}%"></i></span></span></td>
+    <td class="sig-ativo"><span class="sig-exp" aria-hidden="true">▶</span> ${escH(s.ativo.replace('/USDT',''))} <span class="tf-badge">${escH(s.tf||'')}</span></td>
+    <td><span class="tag ${cls}">${escH(s.direcao)}</span></td>
+    <td class="col-2"><span class="conv">${escH(s.conviccao)}<span class="convbar"><i style="width:${escH(s.conviccao)}%"></i></span></span></td>
     <td class="mono num col-2">${num(s.preco)}</td>
     <td class="mono num col-3">${pa?num(pa):'—'}</td>
     <td class="mono num col-4 ${dlt==null?'mut':(fav?'pos':'neg')}" title="${dlt==null?'sem preço ao vivo':(fav?'a favor do sinal':'contra o sinal')}">${dlt==null?'—':(dlt>=0?'+':'')+dlt.toFixed(2)+'% '+(fav?'✓':'✗')}</td>
@@ -1169,12 +1175,12 @@ function linhaSinal(s,i){
     <td class="acts-cell flex"><button class="btn-op" data-foco="op-${s.id}" onclick='abrirModal(${json})'>⚡ Operar</button><button class="btn-skip" onclick="pular(${s.id})">Pular</button></td>
   </tr>`;
   if(!aberto)return linha;
-  const chips=(s.motivos||'').split(', ').filter(Boolean).map(m=>`<span class="why-chip">${m}</span>`).join('')
+  const chips=(s.motivos||'').split(', ').filter(Boolean).map(m=>`<span class="why-chip">${escH(m)}</span>`).join('')
     ||'<span class="why-chip">sinal fraco</span>';
   return linha+`<tr class="sig-det" data-sid="${s.id}"><td colspan="10">
     <div class="det-why"><span class="why-lbl">Por quê</span>${chips}</div>
-    <div class="cmp"><span class="tipo-badge tipo-${s.tipo||'tendencia'}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span>
-      <span class="mut">🕐 ${(s.ts||'').slice(11,16)}</span>
+    <div class="cmp"><span class="tipo-badge tipo-${escH(s.tipo||'tendencia')}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span>
+      <span class="mut">🕐 ${escH((s.ts||'').slice(11,16))}</span>
       <span class="mut">sinal <b>${num(s.preco)}</b></span>
       ${pa?`<span class="mut">→ agora <b>${num(pa)}</b></span><span class="${fav?'pos':'neg'}" style="font-weight:600">${dlt>=0?'+':''}${dlt.toFixed(2)}% ${fav?'✓ a favor':'✗ contra'}</span>`:'<span class="mut">→ agora …</span>'}
       <span class="mut">· stop sugerido <b class="neg">${num(s.stop_sugerido)}</b></span></div>
@@ -1303,12 +1309,12 @@ async function carregar(){
       // minutos ate expirar, do relogio do NAVEGADOR contra o carimbo do backend. Os dois sao
       // hora de Sao Paulo sem fuso (CLAUDE.md §1), entao a subtracao fecha.
       const falta=o.expira_em?Math.max(0,Math.round((new Date(o.expira_em.replace(' ','T'))-new Date())/60000)):null;
-      return `<tr><td style="font-weight:600">${o.ativo.replace('/USDT','')}</td>
-      <td><span class="tag ${o.direcao==='LONG'?'long':'short'}">${o.direcao}</span></td>
+      return `<tr><td style="font-weight:600">${escH(o.ativo.replace('/USDT',''))}</td>
+      <td><span class="tag ${o.direcao==='LONG'?'long':'short'}">${escH(o.direcao)}</span></td>
       <td class="mono num" style="font-weight:600">${num(o.preco_limite)}</td>
       <td class="mono mut num col-2">${num(o.preco_ref)}</td>
       <td class="mono mut num col-2">${dist.toFixed(2)}%</td>
-      <td class="mono mut col-2">R$${o.valor_reais}·${o.alavancagem}x</td>
+      <td class="mono mut col-2">R$${escH(o.valor_reais)}·${escH(o.alavancagem)}x</td>
       <td class="mono mut num col-3">${falta===null?'—':falta+' min'}</td></tr>`}).join('')+'</tbody></table>';
   }
 
@@ -1319,15 +1325,15 @@ async function carregar(){
     '<th class="num col-3">Liq.</th><th class="col-3">Evolução</th><th class="flex"></th></tr></thead><tbody>'+
     e.posicoes.map(p=>{const pl=p.pnl||0, roe=p.valor_reais?pl/p.valor_reais*100:0, d=p.direcao==='LONG'?1:-1, liq=p.entrada*(1-d*0.9/p.alavancagem), sd=_saidas[p.id];
       const spark=sparkSVG(_pnlHist[p.id],{area:false,id:'pos'+p.id});
-      return `<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
-      <td><span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span></td>
+      return `<tr><td style="font-weight:600">${escH(p.ativo.replace('/USDT',''))}</td>
+      <td><span class="tag ${p.direcao==='LONG'?'long':'short'}">${escH(p.direcao)}</span></td>
       <td class="mono mut num col-2">${num(p.entrada)}</td>
       <td class="mono num">${num(p.preco_atual)}</td>
-      <td class="mono mut col-2">R$${p.valor_reais}·${p.alavancagem}x</td>
+      <td class="mono mut col-2">R$${escH(p.valor_reais)}·${escH(p.alavancagem)}x</td>
       <td class="mono num ${pl>=0?'pos':'neg'}" style="font-weight:600">${brl(pl)} <span class="met-nota ${pl>=0?'pos':'neg'}">${pct(roe)}</span></td>
       <td class="mono neg num col-3">${num(liq)}</td>
       <td class="col-3">${spark?`<span class="row-spark">${spark}</span>`:'<span class="row-spark vazio">—</span>'}</td>
-      <td class="acts-cell flex"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${sd.nivel}"><td colspan="9">${sd.acao}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</tbody></table>';
+      <td class="acts-cell flex"><button class="btn-close" onclick="fechar(${p.id})">Fechar</button></td></tr>${(sd&&sd.acao)?`<tr class="saida saida-${escH(sd.nivel)}"><td colspan="9">${escH(sd.acao)}${(sd.nivel==='forte'||sd.nivel==='lucro')?` <button class="btn-vender" onclick="fechar(${p.id})">Vender agora</button>`:''}</td></tr>`:''}`}).join('')+'</tbody></table>';
   } else po.innerHTML='<div class="empty">Nenhuma posição aberta</div>';
 
   // trades
@@ -1335,10 +1341,10 @@ async function carregar(){
   if(ts.length){
     tr.innerHTML='<table><thead><tr><th>Hora</th><th>Ativo</th><th>Lado</th><th class="num col-2">Entrada→Saída</th>'+
     '<th class="col-2">Tam.</th><th class="col-3 flex wrap">Motivo</th><th class="num">Resultado (ROE)</th></tr></thead><tbody>'+
-    ts.map(t=>`<tr><td class="mono mut">${(t.fechado_em||'').slice(11,16)}</td><td style="font-weight:600">${t.ativo.replace('/USDT','')}</td>
-      <td><span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span></td>
+    ts.map(t=>`<tr><td class="mono mut">${escH((t.fechado_em||'').slice(11,16))}</td><td style="font-weight:600">${escH(t.ativo.replace('/USDT',''))}</td>
+      <td><span class="tag ${t.direcao==='LONG'?'long':'short'}">${escH(t.direcao)}</span></td>
       <td class="mono mut num col-2">${num(t.entrada)}→${num(t.saida)}</td>
-      <td class="mono mut col-2">R$${t.valor_reais}·${t.alavancagem}x</td><td class="mut col-3 flex wrap">${t.motivo_saida}</td>
+      <td class="mono mut col-2">R$${escH(t.valor_reais)}·${escH(t.alavancagem)}x</td><td class="mut col-3 flex wrap">${escH(t.motivo_saida)}</td>
       <td class="mono num ${t.pnl_reais>=0?'pos':'neg'}" style="font-weight:600">${brl(t.pnl_reais)} <span class="met-nota ${t.pnl_reais>=0?'pos':'neg'}">${pct(t.valor_reais?t.pnl_reais/t.valor_reais*100:0)}</span></td></tr>`).join('')+'</tbody></table>';
   } else tr.innerHTML='<div class="empty">Nenhum trade ainda</div>';
 
@@ -1350,7 +1356,7 @@ async function carregar(){
   // 14 numeros de importancia muito diferente exatamente o mesmo peso visual.
   const linhaMet=(rot,val,nota,cls)=>`<tr><td>${rot}</td><td class="mono${cls?' '+cls:''}">${val}${nota?`<span class="met-nota">${nota}</span>`:''}</td></tr>`;
   let mh='<table class="tbl-met"><thead><tr><th>Métrica</th><th class="num">Valor</th></tr></thead><tbody>'+
-    linhaMet('Trades',m.n_trades||0)+
+    linhaMet('Trades',escH(m.n_trades||0))+
     linhaMet('Win rate',(m.win_rate||0).toFixed(1)+'%')+
     linhaMet('Profit factor',(m.profit_factor||0).toFixed(2))+
     linhaMet('P&L total',brl(m.pnl_total),'',m.pnl_total>=0?'pos':'neg')+
@@ -1368,8 +1374,8 @@ async function carregar(){
   if(m.por_conviccao&&m.por_conviccao.length){
     mh+=`<h2 style="margin-top:24px">🎯 Win rate por convicção — a tunagem</h2>
     <table><thead><tr><th>Faixa</th><th class="num">Trades</th><th class="num">Win rate</th><th class="num">P&L</th></tr></thead><tbody>`+
-    m.por_conviccao.map(c=>`<tr><td class="mono">${c.faixa}</td><td class="mono num mut">${c.n}</td>
-      <td class="mono num ${c.win_rate>=50?'pos':'neg'}" style="font-weight:600">${c.win_rate}%</td>
+    m.por_conviccao.map(c=>`<tr><td class="mono">${escH(c.faixa)}</td><td class="mono num mut">${escH(c.n)}</td>
+      <td class="mono num ${c.win_rate>=50?'pos':'neg'}" style="font-weight:600">${escH(c.win_rate)}%</td>
       <td class="mono num ${c.pnl>=0?'pos':'neg'}">${brl(c.pnl)}</td></tr>`).join('')+'</tbody></table>';
   } else mh+='<div class="empty">Confirme alguns trades pra ver o win rate por convicção.</div>';
   document.getElementById('metricas').innerHTML=mh;
@@ -1381,12 +1387,12 @@ async function carregar(){
       dcaEl.innerHTML='<table><thead><tr><th>Ativo</th><th class="num col-2">Investido</th>'+
         '<th class="num col-2">Preço médio</th><th class="num">Valor atual</th><th class="num">P&L</th>'+
         '<th class="col-3">Aportes</th><th class="flex"></th></tr></thead><tbody>'+
-        planos.map(p=>`<tr><td style="font-weight:600">${p.ativo.replace('/USDT','')}</td>
+        planos.map(p=>`<tr><td style="font-weight:600">${escH(p.ativo.replace('/USDT',''))}</td>
           <td class="mono mut num col-2">${brl(p.total_investido)}</td>
           <td class="mono mut num col-2">${num(p.preco_medio)}</td>
           <td class="mono num">${brl(p.valor_atual)}</td>
           <td class="mono num ${p.pnl>=0?'pos':'neg'}" style="font-weight:600">${brl(p.pnl)} <span class="met-nota ${p.pnl>=0?'pos':'neg'}">${pct(p.pnl_pct)}</span></td>
-          <td class="mono mut col-3">${p.n_aportes}× · R$${p.valor_aporte}/${p.freq_dias}d</td>
+          <td class="mono mut col-3">${escH(p.n_aportes)}× · R$${escH(p.valor_aporte)}/${escH(p.freq_dias)}d</td>
           <td class="acts-cell flex"><button class="btn-sug" onclick="aportarDca(${p.id})">aportar</button> <button class="btn-skip" onclick="removerDca(${p.id})" aria-label="remover plano DCA" title="remover">×</button></td></tr>`).join('')+'</tbody></table>';
     } else dcaEl.innerHTML='<div class="empty">Nenhum plano. Crie um abaixo pra acumular cripto de forma disciplinada (sem adivinhar timing).</div>';
     const dsel=document.getElementById('dca-ativo');
@@ -1418,11 +1424,11 @@ async function carregarSentimento(){
           <div class="fg-num mono" style="color:${cor}">${+fg.valor||0}<span class="fg-lbl">${escH(fg.label)}</span></div></div>
         <div class="fg-escala">
           <div class="fg-barra" role="img" aria-label="Fear and Greed em ${+fg.valor||0} de 100: ${escH(fg.label)}">
-            <span class="fg-agulha" style="left:${fg.valor}%"></span></div>
+            <span class="fg-agulha" style="left:${+fg.valor||0}%"></span></div>
           <div class="fg-pontas"><span>Medo extremo</span><span>Ganância extrema</span></div>
         </div></div>`;
     }
-    if(br) h+=`<div class="fg-breadth">📊 <b>${br.pct_subindo}%</b> das ${br.n} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
+    if(br) h+=`<div class="fg-breadth">📊 <b>${escH(br.pct_subindo)}%</b> das ${escH(br.n)} moedas subindo hoje · variação média <span class="${br.variacao_media>=0?'pos':'neg'}">${pct(br.variacao_media)}</span></div>`;
     document.getElementById('sentimento').innerHTML=h||'sentimento indisponível';
   }catch(e){}
 }
@@ -1435,15 +1441,15 @@ async function carregarFunding(){
     if(!arr||!arr.length){el.innerHTML='<div class="mut">indisponível</div>';return;}
     const gordos=arr.filter(x=>x.gordo);
     const banner=gordos.length
-      ? `<div class="fund-alert on">🔥 ${gordos.length} moeda(s) com funding GORDO — possível janela de CARRY! (${gordos.map(x=>x.ativo.replace('/USDT','')).join(', ')})</div>`
+      ? `<div class="fund-alert on">🔥 ${gordos.length} moeda(s) com funding GORDO — possível janela de CARRY! (${escH(gordos.map(x=>x.ativo.replace('/USDT','')).join(', '))})</div>`
       : `<div class="fund-alert">😴 Mercado calmo — funding fraco, sem prêmio de carry agora. Gatilho: funding anualizado ≥ 15%/ano.</div>`;
     // barra comparativa dentro da propria lista: a escala e o maior |anual| que veio agora
     const max=Math.max(1,...arr.map(x=>Math.abs(x.anual)));
     const linhas=arr.map(x=>{const w=Math.min(Math.abs(x.anual)/max*100,100);
-      return `<tr><td class="fund-a">${x.gordo?'🔥 ':''}${x.ativo.replace('/USDT','')}</td>
+      return `<tr><td class="fund-a">${x.gordo?'🔥 ':''}${escH(x.ativo.replace('/USDT',''))}</td>
         <td class="flex"><span class="fund-bar"><i class="${x.anual>=0?'b-pos':'b-neg'}" style="width:${w}%"></i></span></td>
-        <td class="mono num ${x.anual>=0?'pos':'neg'}" style="font-weight:600">${x.anual>=0?'+':''}${x.anual}%</td>
-        <td class="mono num mut">${x.funding_pct}%</td></tr>`;
+        <td class="mono num ${x.anual>=0?'pos':'neg'}" style="font-weight:600">${x.anual>=0?'+':''}${escH(x.anual)}%</td>
+        <td class="mono num mut">${escH(x.funding_pct)}%</td></tr>`;
     }).join('');
     // Sem sparkline aqui, e de proposito: o /funding devolve so o instante, nao serie. Inventar
     // uma curva a partir de um ponto seria desenho, nao dado.
@@ -1586,18 +1592,18 @@ function renderAnalise(s,a){
   const snap=a.snapshot, pa=_precos[s.ativo]||snap.preco, st=statusEntrada(s,pa);
   el.innerHTML=`<div class="analise-box">
     <div class="gs-titulo" style="display:flex;justify-content:space-between;align-items:center">🔍 Análise do sinal <span style="cursor:pointer;font-size:13px" onclick="fecharAnalise()">✕</span></div>
-    <div style="font-size:14px;font-weight:700;margin-bottom:7px">${s.ativo} <span class="tag ${s.direcao==='LONG'?'long':'short'}">${s.direcao}</span> <span class="tipo-badge tipo-${s.tipo}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span> <span class="tf-badge">${s.tf}</span></div>
-    <div style="font-size:12px;line-height:1.6;color:var(--txt3)">${a.leitura}</div>
+    <div style="font-size:14px;font-weight:700;margin-bottom:7px">${escH(s.ativo)} <span class="tag ${s.direcao==='LONG'?'long':'short'}">${escH(s.direcao)}</span> <span class="tipo-badge tipo-${escH(s.tipo)}">${s.tipo==='reversao'?'↩ reversão':'📈 tendência'}</span> <span class="tf-badge">${escH(s.tf)}</span></div>
+    <div style="font-size:12px;line-height:1.6;color:var(--txt3)">${escH(a.leitura)}</div>
     <div class="grid-ind">
-      <span class="mut">RSI</span><b>${snap.rsi}</b>
-      <span class="mut">ADX</span><b>${snap.adx}</b>
+      <span class="mut">RSI</span><b>${escH(snap.rsi)}</b>
+      <span class="mut">ADX</span><b>${escH(snap.adx)}</b>
       <span class="mut">EMA20</span><b style="color:var(--accent-txt)">${num(snap.ema20)}</b>
       <span class="mut">EMA50</span><b style="color:var(--warn)">${num(snap.ema50)}</b>
       <span class="mut">Bollinger</span><b style="color:var(--txt2)">${num(snap.bb_lo)}–${num(snap.bb_up)}</b><!-- mesma cor da banda no grafico -->
     </div>
     <div style="margin-top:9px;font-size:12px">entrada <b>${num(s.preco)}</b> · stop <b class="neg">${num(s.stop_sugerido)}</b></div>
     <div class="entry-status ${st.cls}" style="margin-top:8px">${st.txt}</div>
-    <button class="btn-op" style="width:100%;margin-top:11px" onclick='abrirModal(${JSON.stringify(s)})'>⚡ Operar este sinal</button>
+    <button class="btn-op" style="width:100%;margin-top:11px" onclick='abrirModal(${escH(JSON.stringify(s))})'>⚡ Operar este sinal</button>
   </div>`;
 }
 function fecharAnalise(){_analiseSig=null;const el=document.getElementById('g-analise');if(el)el.innerHTML='';}
@@ -1608,8 +1614,8 @@ async function carregarSmartMoney(ativo){
     (s.liquidez_acima||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.warn,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↑'})));
     (s.liquidez_abaixo||[]).forEach(p=>_zlines.push(_candles.createPriceLine({price:p,color:TEMA.warn,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:'liq ↓'})));
     const el=document.getElementById('g-smart');
-    if(el)el.innerHTML=`<div style="font-size:13px">Funding: <b class="${(s.funding_pct||0)>=0?'pos':'neg'}">${s.funding_pct??'—'}%</b></div>
-      <div class="mut" style="font-size:11px;margin:5px 0 9px">${s.leitura_funding||''}</div>
+    if(el)el.innerHTML=`<div style="font-size:13px">Funding: <b class="${(s.funding_pct||0)>=0?'pos':'neg'}">${escH(s.funding_pct??'—')}%</b></div>
+      <div class="mut" style="font-size:11px;margin:5px 0 9px">${escH(s.leitura_funding||'')}</div>
       <div class="mut" style="font-size:11px">🟡 liquidez acima: ${(s.liquidez_acima||[]).map(num).join(' · ')||'—'}</div>
       <div class="mut" style="font-size:11px;margin-top:3px">🟡 liquidez abaixo: ${(s.liquidez_abaixo||[]).map(num).join(' · ')||'—'}</div>`;
   }catch(e){}
@@ -1622,10 +1628,10 @@ async function carregarBook(ativo){
     el.innerHTML=`
       <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">Pressão no book (±1%)</div>
       <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:6px">
-        <div style="width:${b.pressao_compra}%;background:var(--pos)"></div><div style="flex:1;background:var(--neg)"></div></div>
-      <div style="font-size:11.5px;display:flex;justify-content:space-between"><span class="pos">${b.pressao_compra}% compra</span><span class="neg">${(100-b.pressao_compra).toFixed(1)}% venda</span></div>
-      <div style="font-size:12.5px;margin-top:10px">Fluxo taker: <b class="${b.fluxo_comprador>=50?'pos':'neg'}">${b.fluxo_comprador}% comprando</b></div>
-      <div style="font-size:12.5px;margin-top:6px">💰 Dinheiro grande: <b class="${corLado}">${b.lado_grande}</b> <span class="mut" style="font-size:10.5px">(C R$${(b.grande_compra/1000).toFixed(0)}k · V R$${(b.grande_venda/1000).toFixed(0)}k)</span></div>
+        <div style="width:${escH(b.pressao_compra)}%;background:var(--pos)"></div><div style="flex:1;background:var(--neg)"></div></div>
+      <div style="font-size:11.5px;display:flex;justify-content:space-between"><span class="pos">${escH(b.pressao_compra)}% compra</span><span class="neg">${(100-b.pressao_compra).toFixed(1)}% venda</span></div>
+      <div style="font-size:12.5px;margin-top:10px">Fluxo taker: <b class="${b.fluxo_comprador>=50?'pos':'neg'}">${escH(b.fluxo_comprador)}% comprando</b></div>
+      <div style="font-size:12.5px;margin-top:6px">💰 Dinheiro grande: <b class="${corLado}">${escH(b.lado_grande)}</b> <span class="mut" style="font-size:10.5px">(C R$${(b.grande_compra/1000).toFixed(0)}k · V R$${(b.grande_venda/1000).toFixed(0)}k)</span></div>
       <div class="mut" style="font-size:10.5px;margin-top:8px">🟢 parede ${num(b.parede_compra.preco)} · R$${(b.parede_compra.valor/1000).toFixed(0)}k</div>
       <div class="mut" style="font-size:10.5px">🔴 parede ${num(b.parede_venda.preco)} · R$${(b.parede_venda.valor/1000).toFixed(0)}k</div>`;
   }catch(e){}
@@ -1648,9 +1654,9 @@ function marcar(e,ativo,tf){
 function sidebar(e){
   const gp=document.getElementById('g-posicoes');
   if(gp)gp.innerHTML=(e.posicoes&&e.posicoes.length)?e.posicoes.map(p=>{const roe=p.valor_reais?p.pnl/p.valor_reais*100:0, sd=_saidas[p.id];
-    return `<div style="font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)">${p.ativo} <span class="tag ${p.direcao==='LONG'?'long':'short'}">${p.direcao}</span><br><span class="mut" style="font-size:11px">R$${p.valor_reais}·${p.alavancagem}x</span> <span class="mono ${p.pnl>=0?'pos':'neg'}">${brl(p.pnl)} <b>${pct(roe)}</b></span>${(sd&&sd.acao)?`<div class="saida-side saida-${sd.nivel}" style="font-size:10.5px;margin-top:4px;padding:3px 6px;border-radius:5px">${sd.acao}</div>`:''}</div>`}).join(''):'<div class="mut" style="font-size:12px">nenhuma</div>';
+    return `<div style="font-size:13px;padding:7px 0;border-bottom:1px solid var(--line)">${escH(p.ativo)} <span class="tag ${p.direcao==='LONG'?'long':'short'}">${escH(p.direcao)}</span><br><span class="mut" style="font-size:11px">R$${escH(p.valor_reais)}·${escH(p.alavancagem)}x</span> <span class="mono ${p.pnl>=0?'pos':'neg'}">${brl(p.pnl)} <b>${pct(roe)}</b></span>${(sd&&sd.acao)?`<div class="saida-side saida-${escH(sd.nivel)}" style="font-size:10.5px;margin-top:4px;padding:3px 6px;border-radius:5px">${escH(sd.acao)}</div>`:''}</div>`}).join(''):'<div class="mut" style="font-size:12px">nenhuma</div>';
   const gt=document.getElementById('g-trades');
-  if(gt)gt.innerHTML=(e.trades&&e.trades.length)?e.trades.slice(0,15).map(t=>`<div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">${t.ativo} <span class="tag ${t.direcao==='LONG'?'long':'short'}">${t.direcao}</span> <span class="mono ${t.pnl_reais>=0?'pos':'neg'}">${brl(t.pnl_reais)}</span></div>`).join(''):'<div class="mut" style="font-size:12px">nenhum</div>';
+  if(gt)gt.innerHTML=(e.trades&&e.trades.length)?e.trades.slice(0,15).map(t=>`<div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line)">${escH(t.ativo)} <span class="tag ${t.direcao==='LONG'?'long':'short'}">${escH(t.direcao)}</span> <span class="mono ${t.pnl_reais>=0?'pos':'neg'}">${brl(t.pnl_reais)}</span></div>`).join(''):'<div class="mut" style="font-size:12px">nenhum</div>';
 }
 function atualizarGrafico(e){
   if(_aba!=='grafico'||!_tv)return;
@@ -1709,7 +1715,7 @@ function previa(){
     ${(_est&&_est.risco&&_est.risco.risco_aberto_max_rs)?(()=>{const nt=_est.risco.risco_aberto_rs+perdaStop,tt=_est.risco.risco_aberto_max_rs;return `<div class="row"><span class="mut">Exposição após este trade</span><span class="mono ${nt>tt?'neg':''}">${brl(nt)} / ${brl(tt)} ${nt>tt?'⛔ estoura o teto':''}</span></div>`;})():''}
     ${liqAntes?`<div class="aviso-liq">⚠️ Alavancagem alta pra esse stop — você LIQUIDA antes do stop agir (perde ~a margem). Baixe pra ≤ ${Math.floor(0.9/sd)}x pro stop valer.</div>`:''}
     <div class="row" style="margin-top:7px"><span class="mut">💡 Tamanho p/ arriscar ${(sug.risco*100).toFixed(1)}%</span><span><b class="mono">${brl(sug.valor)}</b> <button class="btn-sug" onclick="usarSugestao()">usar</button></span></div>
-    ${wr?`<div class="mut" style="font-size:11px;margin-top:7px">📊 Win rate histórico nessa faixa: <b>${wr.win_rate}%</b> (${wr.n} trades) — referência, não garantia.</div>`:''}`;
+    ${wr?`<div class="mut" style="font-size:11px;margin-top:7px">📊 Win rate histórico nessa faixa: <b>${escH(wr.win_rate)}%</b> (${escH(wr.n)} trades) — referência, não garantia.</div>`:''}`;
 }
 
 async function confirmarTrade(){if(_busy||!_sig)return; _busy=true;        // trava: evita abrir 2 trades no duplo-clique
@@ -1816,15 +1822,15 @@ function renderAuto(e){
     else{ const ab=(a.abertos||[]).length, fc=(a.fechados||[]).length;
       let txt='<span class="auto-badge on"></span> ativo — ';
       if(ab||fc) txt+=`última ação: ${ab} aberto(s), ${fc} fechado(s)`;
-      else if(a.motivo) txt+=a.motivo;
+      else if(a.motivo) txt+=escH(a.motivo);
       else txt+='monitorando sinais frescos…';
-      if(a.ts) txt+=` <span class="mut">(${String(a.ts).slice(11,19)})</span>`;
+      if(a.ts) txt+=` <span class="mut">(${escH(String(a.ts).slice(11,19))})</span>`;
       st.innerHTML=txt; } }
   const lg=document.getElementById('auto-log');
   if(lg){ const ls=[];
-    (a.abertos||[]).forEach(o=>ls.push(`🟢 abriu ${o.direcao} ${o.ativo} ${o.tf||''} — R$${o.valor} @ ${o.lev}x (conv ${o.conviccao})`));
-    (a.fechados||[]).forEach(f=>ls.push(`⚪ fechou ${f.ativo} — P&L R$${f.pnl} (${f.motivo})`));
-    (a.rejeitados||[]).forEach(r=>ls.push(`<span class="mut">⏭️ pulou ${r.ativo}: ${r.erro}</span>`));
+    (a.abertos||[]).forEach(o=>ls.push(`🟢 abriu ${escH(o.direcao)} ${escH(o.ativo)} ${escH(o.tf||'')} — R$${escH(o.valor)} @ ${escH(o.lev)}x (conv ${escH(o.conviccao)})`));
+    (a.fechados||[]).forEach(f=>ls.push(`⚪ fechou ${escH(f.ativo)} — P&L R$${escH(f.pnl)} (${escH(f.motivo)})`));
+    (a.rejeitados||[]).forEach(r=>ls.push(`<span class="mut">⏭️ pulou ${escH(r.ativo)}: ${escH(r.erro)}</span>`));
     lg.innerHTML=ls.length?ls.join('<br>'):''; }
 }
 async function toggleAuto(){
