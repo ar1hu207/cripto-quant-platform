@@ -35,7 +35,7 @@
   if (A.CONTA !== 'A') document.body.classList.add('conta-teste');
   var NOME_CONTA = A.NOME_CONTA;
   /* [LIVE-6] O que a conta É vem do backend (A.modo lê o /estado), não da aba. `valendo` = a ordem vai à
-     Binance com dinheiro de verdade: só aí a moldura fica vermelha. No demo e no dry-run a marca é âmbar. */
+     Binance com dinheiro de verdade: só aí a conta e a marca ficam vermelhas. No demo e no dry-run a marca é âmbar. */
   function modoConta() {
     var md = A.modo(), seco = String(((A.estado || {}).config || {}).corretora_dry_run) === '1';
     return { md: md, seco: seco, valendo: md === 'binance' && !seco,

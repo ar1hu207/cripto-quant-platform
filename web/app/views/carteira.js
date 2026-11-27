@@ -178,7 +178,7 @@
     var passo = eu !== 'R' ? -1 : A.modo() === 'papel' ? 0 : A.modo() === 'demo' ? 1 : String(cfg.corretora_dry_run) === '1' ? 2 : 3;
     var real = '<div class="card ct-conta"><div class="card-head"><h2 class="h2">Conta real · Binance</h2><span class="soon">' + (passo < 0 ? 'esteira' : 'degrau ' + (passo + 1) + ' de 4') + '</span></div>' +
       '<div class="esteira">' + ['papel', 'demo', 'dry-run', 'real'].map(function (n, i) { return '<span' + (i === passo ? ' class="on"' : '') + '>' + n + '</span>'; }).join('→') + '</div>' +
-      '<div class="s">Mede execução antes de encostar em dinheiro. Com dinheiro de verdade a moldura inteira fica vermelha: a conta real nunca parece paper.</div>' +
+      '<div class="s">Mede execução antes de encostar em dinheiro. Com dinheiro de verdade a marca do modo e a conta ficam vermelhas: a conta real nunca parece paper.</div>' +
       (eu !== 'R' ? '<div style="margin-top:10px"><button type="button" class="btn ghost sm" data-conta="R">Abrir a ' + A.esc(A.CONTAS.R.nome) + '</button></div>' : '') + '</div>';
     $('ct-contas').innerHTML = minha + outra + real;
   }

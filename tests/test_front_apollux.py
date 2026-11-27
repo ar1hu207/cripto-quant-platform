@@ -337,14 +337,14 @@ def test_a_moeda_da_tela_segue_o_modo_que_o_backend_diz():
 
 
 def test_dinheiro_real_nunca_parece_paper():
-    """A promessa que a Carteira fazia desde o primeiro front: com dinheiro de verdade a moldura
-    inteira fica vermelha. Vermelho so quando a ordem VAI com dinheiro (binance, sem dry-run):
-    no demo e no dry-run a marca e ambar, porque vermelho a toa deixa de avisar. E o rodape nao
-    pode dizer 'dinheiro ficticio' numa conta que opera."""
+    """Com dinheiro de verdade a conta e a marca do modo ficam vermelhas. Vermelho so quando a ordem
+    VAI com dinheiro (binance, sem dry-run): no demo e no dry-run a marca e ambar, porque vermelho a
+    toa deixa de avisar. E o rodape nao pode dizer 'dinheiro ficticio' numa conta que opera.
+    A moldura na tela inteira (`body.modo-real::after`) saiu a pedido do dono em 27/11."""
     for pagina, js in (("index.html", ("app", "casca.js")), ("m.html", ("app", "m", "app.js"))):
         css = _ler(WEB, pagina)
-        assert re.search(r"body\.modo-real::after\{[^}]*position:fixed;inset:0;border:2px solid var\(--neg\)[^}]*pointer-events:none",
-                         css), pagina
+        assert "body.modo-real::after" not in css, pagina
+        assert re.search(r"\.modo-real [^{]*\{[^}]*var\(--neg", css), pagina    # a conta segue vermelha
         s = _ler(WEB, *js)
         assert "classList.toggle('modo-real'" in s, js
         assert re.search(r"valendo ?[:=] ?md === 'binance' && !seco", s), js
