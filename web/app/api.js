@@ -94,9 +94,12 @@
   /* O instante é ancorado em -03:00 (São Paulo, sem horário de verão desde 2019), não no fuso do
      navegador: num aparelho fora de SP, "há 2 min" virava "há 3h 2m" e o "hoje" mudava de dia. */
   function ts(s) { if (!s) return null; var d = new Date(String(s).slice(0, 19).replace(' ', 'T') + '-03:00'); return isNaN(d) ? null : d; }
-  function dia(s) { return String(s || '').slice(0, 10); }
-  function ddmm(s) { s = String(s || ''); return s.slice(8, 10) + '/' + s.slice(5, 7); }
-  function hhmm(s) { return String(s || '').slice(11, 16); }
+  /* Os três devolvem pedaços da string que o backend mandou e vão direto para innerHTML em dezenas de
+     pontos: o escape mora aqui, na fonte. Em timestamp válido (dígitos, '-', ':', '/') esc() não muda nada,
+     então as comparações de data seguem iguais. */
+  function dia(s) { return esc(String(s || '').slice(0, 10)); }
+  function ddmm(s) { s = String(s || ''); return esc(s.slice(8, 10) + '/' + s.slice(5, 7)); }
+  function hhmm(s) { return esc(String(s || '').slice(11, 16)); }
   function idade(s) {
     var d = ts(s); if (!d) return '—';
     var m = Math.max(0, Math.round((Date.now() - d) / 60000));

@@ -367,10 +367,10 @@
     /* eventos reais do /estado: a esfera pulsa e o evento entra no histórico do mini chat */
     A.on('evento', function (ev) {
       var t = '';
-      if (ev.tipo === 'posicao_aberta') t = 'Posição aberta: <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + ev.p.direcao + ' ' + ev.p.alavancagem + 'x · ' + F.brl(ev.p.valor_reais);
-      else if (ev.tipo === 'posicao_fechada') t = 'Posição fechada: <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + ev.p.direcao + ' (último P&L marcado ' + F.money(ev.p.pnl) + ')';
-      else if (ev.tipo === 'sinal_novo') t = 'Sinal novo: <b>' + A.esc(F.par(ev.s.ativo)) + '</b> ' + ev.s.direcao + ' · convicção ' + Math.round(ev.s.conviccao);
-      else if (ev.tipo === 'ordem_nova') t = 'Ordem post-only descansando: <b>' + A.esc(F.par(ev.o.ativo)) + '</b> ' + ev.o.direcao + ' @ ' + F.px(ev.o.preco_limite);
+      if (ev.tipo === 'posicao_aberta') t = 'Posição aberta: <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + A.esc(ev.p.direcao) + ' ' + A.esc(ev.p.alavancagem) + 'x · ' + F.brl(ev.p.valor_reais);
+      else if (ev.tipo === 'posicao_fechada') t = 'Posição fechada: <b>' + A.esc(F.par(ev.p.ativo)) + '</b> ' + A.esc(ev.p.direcao) + ' (último P&L marcado ' + F.money(ev.p.pnl) + ')';
+      else if (ev.tipo === 'sinal_novo') t = 'Sinal novo: <b>' + A.esc(F.par(ev.s.ativo)) + '</b> ' + A.esc(ev.s.direcao) + ' · convicção ' + Math.round(ev.s.conviccao);
+      else if (ev.tipo === 'ordem_nova') t = 'Ordem post-only descansando: <b>' + A.esc(F.par(ev.o.ativo)) + '</b> ' + A.esc(ev.o.direcao) + ' @ ' + F.px(ev.o.preco_limite);
       else if (ev.tipo === 'trava') t = '<b class="neg">Trava diária disparou</b>: perda do dia ' + F.money(ev.r.pnl_dia) + '. Sem trades novos até a virada.';
       if (!t) return;
       addMsg('ev', t); A.mesh('pulse');

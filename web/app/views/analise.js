@@ -132,7 +132,7 @@
     $('an-tb').innerHTML = rows.map(function (r) {
       return '<tr class="' + (r.a === S.ativo ? 'is-on' : '') + '"><td class="par"><b>' + A.esc(F.par(r.a)) + '</b><span>' + A.esc(r.a) + '</span></td><td class="mono num">' + (r.px != null ? F.px(r.px) : '—') + '</td>' +
         '<td class="mono num ' + F.cls(r.ch) + '">' + (r.ch != null ? F.pct(r.ch, 1) : '—') + '</td>' +
-        '<td>' + (r.s ? '<div class="cv"><span class="mono">' + Math.round(r.cv) + '</span><div class="bar"><i style="--w:' + Math.round(r.cv) + '%"></i></div><span class="chip ' + (r.s.direcao === 'LONG' ? 'long' : 'short') + '">' + r.s.direcao + '</span></div>' : '<span class="mute">sem sinal</span>') + '</td>' +
+        '<td>' + (r.s ? '<div class="cv"><span class="mono">' + Math.round(r.cv) + '</span><div class="bar"><i style="--w:' + Math.round(r.cv) + '%"></i></div><span class="chip ' + (r.s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(r.s.direcao) + '</span></div>' : '<span class="mute">sem sinal</span>') + '</td>' +
         '<td class="mono num">' + (r.atr != null ? F.f2(r.atr) + '%' : '—') + '</td><td>' + chipT(r.t1) + '</td><td>' + chipT(r.td) + '</td>' +
         '<td class="mono num ' + (r.fu < 0 ? 'neg' : '') + '">' + (r.fu != null ? F.pct(r.fu, 4) : '—') + '</td><td><button type="button" class="btn ghost sm" data-ver="' + A.esc(r.a) + '">ver</button></td></tr>';
     }).join('') || '<tr><td colspan="9" class="mute">Nenhum par passa nesses filtros.</td></tr>';
