@@ -4,8 +4,8 @@
    Contratos herdados do painel clássico (web/classico.html), mantidos IGUAIS de propósito para quem já
    tem o app instalado não ser deslogado nem trocar de banca sem perceber:
    - credencial em localStorage 'cbAuth' ("Basic ..."), header Authorization em toda requisição;
-   - conta em localStorage 'cbConta' ('A' | 'B' | 'C' | 'R'); B, C e R são outras instâncias, expostas em
-     /testeB/..., /testeC/... e /testeR/... [AB-1, AB-2, LIVE-5], então trocar de conta é trocar o
+   - conta em localStorage 'cbConta' ('A' | 'B' | 'C' | 'D' | 'R'); B, C, D e R são outras instâncias, expostas em
+     /testeB/..., /testeC/..., /testeD/... e /testeR/... [AB-1, AB-2, AB-3, LIVE-5], então trocar de conta é trocar o
      prefixo de TODAS as rotas;
    - 401 nunca insiste com a mesma credencial (15 senhas erradas bloqueiam o IP): para o poll, descarta,
      abre o gate uma vez só (single-flight) e religa quando a credencial nova passa;
@@ -32,6 +32,8 @@
     A: { nome: 'Paper A', papel: 'produção', rota: '' },
     B: { nome: 'Conta B', papel: 'teste A/B', rota: '/testeB' },
     C: { nome: 'Conta C', papel: 'A sem TP2 e TP3', rota: '/testeC' },
+    /* [AB-3] filtro d1 + saída da C + tamanho da B: a melhor peça de cada uma, juntas */
+    D: { nome: 'Conta D', papel: 'd1 + saída C + tamanho B', rota: '/testeD' },
     /* [LIVE-6] A instância que pode operar em corretora (deploy/cripto-bot-r.service). O nome é o da
        conta; o que ela É agora (papel, demo ou dinheiro real) quem diz é o backend: ver modo(). */
     R: { nome: 'Conta real', papel: 'Binance Futures', rota: '/testeR' }
