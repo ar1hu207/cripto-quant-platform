@@ -757,10 +757,10 @@ tela mostra sobre ela não sai da aba, sai do `config.corretora` que o `/estado`
 (`APX.modo()`): a mesma instância é papel no primeiro degrau da esteira, demo no segundo e
 dinheiro no último. Disso dependem três coisas. A **moeda**: `fmt.moeda()` dá `R$` no papel e
 `US$` em corretora, e nenhuma tela escreve o símbolo à mão. A **marca** ao lado da conexão:
-"demo da Binance", "Binance · dry-run" ou "dinheiro real". E a **moldura vermelha** na tela
-inteira (`body.modo-real`), só quando a ordem vai à Binance com dinheiro, isto é, `binance`
-sem `corretora_dry_run`: no demo e no dry-run a marca é âmbar, porque vermelho que aparece à
-toa deixa de avisar. O rodapé deixa de dizer "dinheiro fictício" fora do papel.
+"demo da Binance", "Binance · dry-run" ou "dinheiro real". E o **vermelho** na marca, na borda
+do topo e na conta (`body.modo-real`), só quando a ordem vai à Binance com dinheiro, isto é,
+`binance` sem `corretora_dry_run`: no demo e no dry-run a marca é âmbar, porque vermelho que
+aparece à toa deixa de avisar. A moldura vermelha na tela inteira saiu a pedido do dono em 27/11. O rodapé deixa de dizer "dinheiro fictício" fora do papel.
 
 ---
 

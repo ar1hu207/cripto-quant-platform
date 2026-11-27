@@ -298,10 +298,10 @@
       ct.textContent = (vivo ? 'ao vivo' : 'ciclo parado') + (health && health.j.ciclo_ha_s != null ? ' · ciclo há ' + Math.round(health.j.ciclo_ha_s) + ' s' : '');
     }
     if (!e) return;
-    /* [LIVE-6] Em que a conta opera, dito pelo backend (A.modo lê o /estado). O que o front prometia
-       na Carteira desde o primeiro dia: com dinheiro de verdade a moldura inteira fica vermelha, para
-       a conta real nunca parecer paper. Vermelho só quando a ordem VAI à Binance com dinheiro: no demo
-       e no dry-run a marca é âmbar, porque vermelho que aparece à toa deixa de avisar. */
+    /* [LIVE-6] Em que a conta opera, dito pelo backend (A.modo lê o /estado). Com dinheiro de verdade
+       a marca, a borda do topo e a conta ficam vermelhas, para a conta real nunca parecer paper (a
+       moldura na tela inteira saiu a pedido do dono em 27/11). Vermelho só quando a ordem VAI à
+       Binance com dinheiro: no demo e no dry-run a marca é âmbar, porque vermelho à toa deixa de avisar. */
     var md = A.modo(), seco = String(cfg.corretora_dry_run) === '1', valendo = md === 'binance' && !seco;
     var chip = $('modo-conta');
     chip.hidden = md === 'papel';
