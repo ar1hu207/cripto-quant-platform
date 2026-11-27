@@ -248,15 +248,20 @@ LOOPBACK = {"127.0.0.1", "::1"}
 # [AB-2] A conta C é a terceira instância, do mesmo jeito: cópia da config da A com UMA
 # diferença de regra (`tp_resto_livre`, T50/T51), exposta em `/testeC/...`. Conta nova é uma
 # linha em `_url_teste`, uma unit em `deploy/` e uma pasta própria -- o resto é o mesmo código.
+#
+# [AB-3] A conta D é a quinta instância, de papel: a combinação que as medições apontam como a
+# melhor de cada peça (entrada com o filtro d1 do T38/T70, saída da C do T51/T71, tamanho da B
+# do T24), que nenhuma das outras roda junta. Exposta em `/testeD/...`, porta 8004.
 CONTA = (os.environ.get("CONTA") or "A").strip().upper()
 TESTEB_URL = (os.environ.get("TESTEB_URL") or "http://127.0.0.1:8001").rstrip("/")
 TESTEC_URL = (os.environ.get("TESTEC_URL") or "http://127.0.0.1:8002").rstrip("/")
+TESTED_URL = (os.environ.get("TESTED_URL") or "http://127.0.0.1:8004").rstrip("/")
 # [LIVE-5] A conta R é a quarta instância, e a única que pode operar em corretora: sobe com
 # `CORRETORA_HABILITADA=1` e com a chave da Binance num arquivo que só a unit dela lê
 # (`deploy/cripto-bot-r.service`). Chega ao painel pelo mesmo repasse das contas de teste, em
 # `/testeR/...` -- o nome da rota é o do mecanismo, não o da conta: ela não é teste.
 REAL_URL = (os.environ.get("REAL_URL") or "http://127.0.0.1:8003").rstrip("/")
-CONTAS_TESTE = ("B", "C", "R")
+CONTAS_TESTE = ("B", "C", "D", "R")
 ROTULO_CONTA = {"R": "Conta real"}
 HEALTH_PUBLICOS = ("/health",) + tuple(f"/teste{c}/health" for c in CONTAS_TESTE)
 MARCA_CONTA = ".conta"          # arquivo na pasta do banco: diz de qual conta a pasta é
@@ -265,7 +270,7 @@ MARCA_CONTA = ".conta"          # arquivo na pasta do banco: diz de qual conta a
 def _url_teste(conta):
     """Endereço da instância de teste. Lido na chamada, não no import: é o que deixa o teste
     apontar a conta para um servidor falso sem reimportar o módulo."""
-    return {"B": TESTEB_URL, "C": TESTEC_URL, "R": REAL_URL}[conta]
+    return {"B": TESTEB_URL, "C": TESTEC_URL, "D": TESTED_URL, "R": REAL_URL}[conta]
 
 
 def _dona_da_pasta(pasta):
@@ -1254,6 +1259,10 @@ def _repassar_c(metodo, caminho, query, corpo, auth, ctype):
     return _repassar("C", metodo, caminho, query, corpo, auth, ctype)
 
 
+def _repassar_d(metodo, caminho, query, corpo, auth, ctype):
+    return _repassar("D", metodo, caminho, query, corpo, auth, ctype)
+
+
 def _repassar_r(metodo, caminho, query, corpo, auth, ctype):
     return _repassar("R", metodo, caminho, query, corpo, auth, ctype)
 
@@ -1287,6 +1296,11 @@ async def teste_b(caminho: str, request: Request):
 @app.api_route("/testeC/{caminho:path}", methods=["GET", "POST"])
 async def teste_c(caminho: str, request: Request):
     return await _rota_teste("C", _repassar_c, caminho, request)
+
+
+@app.api_route("/testeD/{caminho:path}", methods=["GET", "POST"])
+async def teste_d(caminho: str, request: Request):
+    return await _rota_teste("D", _repassar_d, caminho, request)
 
 
 @app.api_route("/testeR/{caminho:path}", methods=["GET", "POST"])

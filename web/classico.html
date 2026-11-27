@@ -688,6 +688,7 @@
     <button type="button" data-conta="A" onclick="trocaConta('A')" title="Produção: as regras de hoje">A · Produção</button>
     <button type="button" data-conta="B" onclick="trocaConta('B')" title="Teste B: as regras dos backtests, banca própria">B · Teste</button>
     <button type="button" data-conta="C" onclick="trocaConta('C')" title="Teste C: a conta A sem TP2 e TP3, banca própria">C · Teste</button>
+    <button type="button" data-conta="D" onclick="trocaConta('D')" title="Teste D: filtro d1 + saída da C + tamanho da B, banca própria">D · Teste</button>
   </div>
   <!-- Os dois botoes de vista mantem class="tab" e data-v: aba() mira
        document.querySelectorAll('.tab') e liga o .on por dataset.v. -->
@@ -895,7 +896,8 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 // que o backend expõe em /testeB/...: trocar de conta é só trocar o prefixo de TODAS as rotas.
 // Fica no localStorage por ser preferência deste navegador; sem storage, cai na A.
 // [AB-2] A C é a terceira instância, em /testeC/...: a conta A sem TP2 e TP3.
-const CONTA=(()=>{try{const c=localStorage.getItem('cbConta');return c==='B'||c==='C'?c:'A';}catch{return 'A';}})();
+// [AB-3] A D é a quinta, em /testeD/...: filtro d1 + saída da C + tamanho da B.
+const CONTA=(()=>{try{const c=localStorage.getItem('cbConta');return c==='B'||c==='C'||c==='D'?c:'A';}catch{return 'A';}})();
 const API=(window.API_BASE||'').replace(/\/+$/,'')+(CONTA==='A'?'':'/teste'+CONTA);
 function trocaConta(c){ if(c===CONTA) return; try{localStorage.setItem('cbConta',c);}catch{} location.reload(); }
 let _cred=localStorage.getItem('cbAuth')||'';
