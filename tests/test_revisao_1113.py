@@ -488,7 +488,7 @@ def test_leva2_front_nao_reenvia_post_depois_do_login_nem_some_com_recusa():
         txt = ler(*arq)
         assert "r.falhas" in txt, arq                    # panico incompleto aparece
         assert "hasOwnProperty" in txt, arq              # #constructor nao e rota
-    classico = ler("classico.html")
+    classico = ler("classico.js")          # o app do classico saiu do HTML (CSP sem unsafe-inline)
     assert "escH(fg.label)" in classico and "${fg.label}" not in classico
     assert "Nenhuma posição aberta');return" not in classico     # o panico chama o backend sempre
     assert "modoAtual==='conviccao'||modoAtual==='fixo'" in classico   # nao troca o modo "risco"

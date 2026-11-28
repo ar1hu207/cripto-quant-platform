@@ -63,7 +63,9 @@ def test_o_painel_classico_continua_no_ar():
     """`web/classico.html` e o index de antes, intacto: comparacao e fuga para o que a casca
     ainda nao cobre."""
     html = _ler(WEB, "classico.html")
-    assert "cbAuth" in html and "lightweight-charts" in html
+    # o app dele mora em classico.js desde que a CSP do classico perdeu o 'unsafe-inline'
+    assert 'src="classico.js"' in html and "lightweight-charts" in html
+    assert "cbAuth" in _ler(WEB, "classico.js")
 
 
 # ---------------------------------------------------------------- contrato das views
