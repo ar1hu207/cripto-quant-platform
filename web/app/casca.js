@@ -159,7 +159,7 @@
       if (x) { h += '<div class="r"><span>Exposição após este trade</span><span class="' + (x.estoura ? 'neg' : '') + '">' + F.brl(x.nt) + ' / ' + F.brl(x.tt) + (x.estoura ? ' · estoura o teto' : '') + '</span></div>' + (nOrd ? '<div class="mute" style="font-size:11.5px">Sem contar ' + nOrd + (nOrd === 1 ? ' ordem descansando' : ' ordens descansando') + ': o backend conta, então pode recusar mesmo abaixo do teto.</div>' : ''); }
       h += '<div class="r"><span>Tamanho p/ arriscar ' + F.f2(c.risco * 100) + '%</span><span><b>' + F.brl(c.valor) + '</b> <button type="button" class="btn ghost sm" id="tk-usar">usar</button></span></div>';
       if (P.liqAntes) h += '<div class="aviso neg">Alavancagem alta para esse stop: a liquidação vem antes do stop e o backend recusa o trade. Baixe para ≤ ' + P.levMax + 'x.</div>';
-      if (P.wr) h += '<div class="mute" style="font-size:11.5px">Win rate histórico nesta faixa de convicção: <b>' + P.wr.win_rate + '%</b> (' + P.wr.n + ' trades). Referência, não garantia.</div>';
+      if (P.wr) h += '<div class="mute" style="font-size:11.5px">Win rate histórico nesta faixa de convicção: <b>' + F.f0(P.wr.win_rate) + '%</b> (' + F.f0(P.wr.n) + ' trades). Referência, não garantia.</div>';
       if (P.trava) h += '<div class="aviso neg">Trava diária ativa: o backend vai recusar.</div>';
       box.querySelector('#tk-prev').innerHTML = h;
       box.querySelector('#tk-usar').addEventListener('click', function () { box.querySelector('#tk-valor').value = c.valor; previa(box); });
