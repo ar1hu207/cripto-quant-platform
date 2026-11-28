@@ -59,13 +59,26 @@ def test_gsap_vendorado_e_a_versao_declarada():
     assert "GSAP 3.12.5" in cab
 
 
-def test_o_painel_classico_continua_no_ar():
-    """`web/classico.html` e o index de antes, intacto: comparacao e fuga para o que a casca
-    ainda nao cobre."""
-    html = _ler(WEB, "classico.html")
-    # o app dele mora em classico.js desde que a CSP do classico perdeu o 'unsafe-inline'
-    assert 'src="classico.js"' in html and "lightweight-charts" in html
-    assert "cbAuth" in _ler(WEB, "classico.js")
+def test_o_painel_classico_saiu_do_ar_e_nao_volta():
+    """`web/classico.html` era o index de antes do Apollux, mantido "ate o dono assinar a
+    paridade". Em 2026-11-28 o dono disse que so usa o Apollux, e o classico saiu: enquanto
+    existia era mais uma pagina publicada lendo a mesma credencial do localStorage, com escape,
+    CSP e testes proprios para manter. Tudo que esta em `web/` vai ao ar no merge, entao quem
+    precisar dele para comparar le do git (`git show 7ecaa0d:web/classico.html`), sem publicar."""
+    for nome in ("classico.html", "classico.js"):
+        assert not os.path.exists(os.path.join(WEB, nome)), nome
+    # nada no front carrega nem aponta para ele (comentario de origem pode citar o nome)
+    aponta = re.compile(r"""(?:href|src|action|start_url|url)["']?\s*[=:]\s*["'][^"']*classico""", re.I)
+    for pasta, _, nomes in os.walk(WEB):
+        if os.path.basename(pasta) == "vendor":
+            continue
+        for nome in nomes:
+            if nome.endswith((".html", ".js", ".json", ".webmanifest")):
+                assert not aponta.search(_ler(pasta, nome)), os.path.join(pasta, nome)
+    assert "Painel clássico" not in _ler(WEB, "index.html")       # o item do menu Conta
+    # e nenhum vercel.json volta a ter regra, redirect ou excecao para ele
+    for vj in (os.path.join(RAIZ, "vercel.json"), os.path.join(WEB, "vercel.json")):
+        assert "classico" not in _ler(vj).lower(), vj
 
 
 # ---------------------------------------------------------------- contrato das views
@@ -160,10 +173,11 @@ def test_as_dez_rotas_estao_na_navegacao():
 
 # ---------------------------------------------------------------- PWA
 
-def test_service_worker_casca_v3_e_api_fora_do_cache():
+def test_service_worker_casca_v4_e_api_fora_do_cache():
     sw = _ler(WEB, "sw.js")
-    # v3 = logo nova: os icones trocaram sem trocar de nome, o activate apaga o cache que os guardava
-    assert re.search(r"const CASCA = 'casca-v3'", sw)
+    # v4 = o painel classico saiu: o activate apaga o cache v3, que guardava a copia do
+    # classico.html de quem o abriu e a devolveria numa navegacao sem rede
+    assert re.search(r"const CASCA = 'casca-v4'", sw)
     # /app/ rede-primeiro: HTML novo com JS velho do cache quebra a tela no dia do deploy
     assert "'/app/'" in sw
     # a API mora em outra origem e responde com a credencial: o SW nao toca nela
@@ -171,13 +185,12 @@ def test_service_worker_casca_v3_e_api_fora_do_cache():
 
 
 def test_a_logo_e_a_mesma_em_todo_lugar():
-    """Logo do Apollux (13/11): uma imagem so, icons/marca.png, no painel, no app do celular e no
-    classico. O glifo antigo (onda de pulso em SVG) e o emoji do classico nao voltam."""
-    for nome in ("index.html", "m.html", "classico.html"):
+    """Logo do Apollux (13/11): uma imagem so, icons/marca.png, no painel e no app do celular.
+    O glifo antigo (onda de pulso em SVG) e o emoji do painel classico nao voltam."""
+    for nome in ("index.html", "m.html"):
         html = _ler(WEB, nome)
         assert 'src="icons/marca.png"' in html, nome
         assert "polyline points=\"6,17" not in html, nome
-        # o emoji continua nos botoes do auto-trade do classico; como MARCA ele nao volta
         assert not re.search(r'class="(logo|gate-mark)"[^>]*>\U0001F916', html), nome
     assert os.path.isfile(os.path.join(WEB, "icons", "marca.png"))
 
@@ -208,11 +221,11 @@ def test_todo_endereco_de_icone_carrega_versao():
     nome de arquivo e o celular do dono seguiu com a antiga. Todo endereco de icone leva ?v=N, o
     mesmo N em todo lugar, e aponta para um arquivo que existe: trocar a logo de novo = subir o N."""
     achados = []
-    for nome in ("index.html", "m.html", "classico.html"):
+    for nome in ("index.html", "m.html"):
         achados += re.findall(r'href="(icons/(?:apple-touch-icon|favicon-32)\.png[^"]*)"', _ler(WEB, nome))
     achados += [i["src"] for i in json.loads(_ler(WEB, "manifest.webmanifest"))["icons"]]
     achados += re.findall(r"'(icons/icon-192\.png[^']*)'", _ler(WEB, "sw.js"))
-    assert len(achados) == 3 * 2 + 3 + 2
+    assert len(achados) == 2 * 2 + 3 + 2
     versoes = set()
     for url in achados:
         m = re.fullmatch(r"(icons/[a-z0-9-]+\.png)\?v=(\d+)", url)

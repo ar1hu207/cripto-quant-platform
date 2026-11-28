@@ -253,6 +253,6 @@ próprio alcance**. Uma sessão queimou seis tentativas nisso em 22/08; vá dire
 | `RUNBOOK-VM.md` | **operar a VM**: acesso, transferências, deploy, backup, diagnóstico (§5 completo) |
 | `deploy/cripto-bot-r.service` · `deploy/panico.sh` | **a conta R** (a que opera em corretora): instalação, a ordem de ligar, pânico sem painel |
 | `legado/README.md` · `pesquisa/__init__.py` | o que cada território é, e por que ele é assim |
-| `DESIGN.md` | direção visual do front: Apollux, direção Pulse, 12 paletas (o CMC night de antes vive em `web/classico.html`) |
+| `DESIGN.md` | direção visual do front: Apollux, direção Pulse, 12 paletas (o CMC night de antes vive no histórico do git: o `web/classico.html` saiu em 2026-11-28) |
 | `STATUS-SISTEMA-*.md`, `INVESTIGACAO-*.md`, `AUDITORIA-*.md`, `PLANO-SPRINTS.md`, `PLANO-DEV-*.md` | **histórico datado**: origem dos cards e a fase de construção. É aqui que mora o que não é regra |
 | `DEPLOY-AZURE.md` | roteiro de provisionamento (⚠️ descreve SSH; ver §5 acima) |

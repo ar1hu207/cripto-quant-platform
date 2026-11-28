@@ -1,7 +1,7 @@
 /* Apollux · cliente do backend (APX). Tudo que fala com a API passa por aqui: credencial, conta,
    poll do /estado, gate de login, estados de falha e os eventos que fazem a esfera do Apollo pulsar.
 
-   Contratos herdados do painel clássico (web/classico.html), mantidos IGUAIS de propósito para quem já
+   Contratos herdados do painel clássico (aposentado em 2026-11-28), mantidos IGUAIS de propósito para quem já
    tem o app instalado não ser deslogado nem trocar de banca sem perceber:
    - credencial em localStorage 'cbAuth' ("Basic ..."), header Authorization em toda requisição;
    - conta em localStorage 'cbConta' ('A' | 'B' | 'C' | 'D' | 'R'); B, C, D e R são outras instâncias, expostas em
