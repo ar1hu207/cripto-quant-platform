@@ -14,8 +14,8 @@ e o próprio `web/app/paletas.js`), não copiados de memória do mock. Contraste
 WCAG 2.1 sobre os hex das 12 paletas.
 
 Histórico: de 2026-08-22 a 2026-11-12 a direção foi a transposição do CoinMarketCap night (tabela
-protagonista, hairline, raio pequeno); ela vive intacta em `web/classico.html` e no histórico do git
-deste arquivo.
+protagonista, hairline, raio pequeno); ela vive no histórico do git deste arquivo e no do painel
+clássico, que saiu do ar em 2026-11-28 (`git show 7ecaa0d:web/classico.html`).
 
 ---
 

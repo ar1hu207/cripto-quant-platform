@@ -508,8 +508,7 @@ app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*
 # a página ser aberta direto no Funnel. Só acrescenta cabeçalho: não afrouxa guarda nenhuma.
 # `script-src 'self'`, SEM 'unsafe-inline': HTML injetado numa tela não executa, e é script
 # executando na página que lê a credencial do localStorage. O index.html não tem script embutido
-# nem handler em atributo por isso (tests/test_front_cabecalhos.py confere os dois lados). O
-# vercel.json guarda uma exceção só para o classico.html, que este processo não serve.
+# nem handler em atributo por isso (tests/test_front_cabecalhos.py confere os dois lados).
 _CSP = ("default-src 'self'; script-src 'self'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src https://fonts.gstatic.com; img-src 'self' data:; "

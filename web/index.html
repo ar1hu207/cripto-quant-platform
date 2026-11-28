@@ -6,8 +6,8 @@
 <title>Apollux</title>
 <!-- Apollux · direção Pulse (DESIGN.md v2). Casca: tokens, sidebar, topbar, roteador por hash, gate de
      login, widget global do Apollo e o diálogo de confirmação. As views moram em app/views/<id>.js, no
-     contrato window.PULSE_VIEWS (ver app/casca.js). O painel antigo continua em classico.html até o dono
-     assinar a paridade. -->
+     contrato window.PULSE_VIEWS (ver app/casca.js). O painel antigo (classico.html) saiu do ar em
+     2026-11-28, quando o dono disse que só usa este; ele vive no histórico do git. -->
 <!-- Nenhum <script> embutido e nenhum handler em atributo (onclick=, onload=) neste arquivo: a CSP é
      `script-src 'self'`, sem 'unsafe-inline', e o navegador os bloquearia em silêncio. Código novo vai em
      arquivo de app/. Celular é mandado para o m.html por app/desvio.js, antes de qualquer pintura. -->
@@ -416,7 +416,7 @@ select.inp{font-family:var(--f-ui)}
 <body>
 <div class="streaks" aria-hidden="true"><span class="streak s1"></span><span class="streak s2"></span></div>
 
-<!-- Gate de login: só abre quando o backend devolve 401 (ou no "Sair"). Mesma credencial do clássico. -->
+<!-- Gate de login: só abre quando o backend devolve 401 (ou no "Sair"). -->
 <div id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gate-h">
   <form class="gate-card" id="gate-form" autocomplete="on">
     <div class="brand" id="gate-h"><img class="brand-glyph" src="icons/marca.png" alt="" width="48" height="32"><span class="wordmark">Apollux</span></div>
@@ -479,7 +479,6 @@ select.inp{font-family:var(--f-ui)}
           <div class="menu-pop" id="menu-pop" hidden>
             <div class="menu-lbl" id="menu-conta">conta</div>
             <button type="button" class="mi" data-acao="scan">Escanear agora<small>POST /scan · varre o mercado fora do ciclo</small></button>
-            <a class="mi" href="classico.html">Painel clássico<small>a versão anterior, até a paridade ser assinada</small></a>
             <a class="mi" href="m.html" id="mi-celular">App do celular<small>a versão feita para o celular, sobre o mesmo backend</small></a>
             <button type="button" class="mi" data-acao="sair">Sair<small>encerra a sessão neste navegador</small></button>
             <hr>

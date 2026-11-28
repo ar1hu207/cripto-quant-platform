@@ -15,7 +15,9 @@
 // casca-v2 = front Apollux: o activate apaga o cache v1, que guardava o painel antigo como index.
 // casca-v3 = logo nova: os icones mudaram sem mudar de nome, e o cache-primeiro de /icons/ mostraria
 // o antigo na primeira abertura depois do deploy.
-const CASCA = 'casca-v3';
+// casca-v4 = o painel classico saiu do ar: o v3 guardava a copia do classico.html de quem o abriu
+// (ate as de antes da CSP estrita, com o app embutido), e sem rede a navegacao a devolveria.
+const CASCA = 'casca-v4';
 
 self.addEventListener('install', () => self.skipWaiting());
 
