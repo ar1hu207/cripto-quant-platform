@@ -140,7 +140,7 @@
     }
     box.innerHTML = l.map(function (x) {
       var p = S.bo[x.id], pct = x.v / tot * 100, cls = x.tipo === 'livre' ? 'livre' : (x.tipo === 'dca' ? 'dca ' : '') + (x.pnl > 0 ? 'pos' : x.pnl < 0 ? 'neg' : '');
-      return '<div class="bo ' + cls + '" data-id="' + x.id + '" style="left:' + p.x.toFixed(1) + 'px;top:' + p.y.toFixed(1) + 'px;width:' + (2 * x.r).toFixed(0) + 'px;height:' + (2 * x.r).toFixed(0) + 'px;--fs:' + Math.max(11, Math.min(22, x.r / 3.2)).toFixed(0) + 'px" title="' + A.esc(x.nome + ' · ' + x.sub + ' · ' + F.brl(x.v) + (x.tipo === 'livre' ? '' : ' · P&L ' + F.money(x.pnl))) + '"><div><b>' + A.esc(x.nome) + '</b><span>' + F.f0(pct) + '%</span></div></div>';
+      return '<div class="bo ' + cls + '" data-id="' + A.esc(x.id) + '" style="left:' + p.x.toFixed(1) + 'px;top:' + p.y.toFixed(1) + 'px;width:' + (2 * x.r).toFixed(0) + 'px;height:' + (2 * x.r).toFixed(0) + 'px;--fs:' + Math.max(11, Math.min(22, x.r / 3.2)).toFixed(0) + 'px" title="' + A.esc(x.nome + ' · ' + x.sub + ' · ' + F.brl(x.v) + (x.tipo === 'livre' ? '' : ' · P&L ' + F.money(x.pnl))) + '"><div><b>' + A.esc(x.nome) + '</b><span>' + F.f0(pct) + '%</span></div></div>';
     }).join('');
   }
   function arrasto(box) {
@@ -270,7 +270,7 @@
       return '<div class="dca-it"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="mono strong">' + A.esc(F.par(d.ativo)) + '</span><span class="chip neutro">' + F.brl(d.valor_aporte) + ' a cada ' + A.esc(d.freq_dias) + ' d</span><span class="mono ' + F.cls(d.pnl) + '" style="margin-left:auto">' + F.money(d.pnl) + ' · ' + F.pct(d.pnl_pct) + '</span></div>' +
         '<div class="dca-g"><div><div class="k">acumulado</div><div class="v">' + F.f2(d.unidades) + ' ' + A.esc(F.base(d.ativo)) + '</div></div><div><div class="k">investido → hoje</div><div class="v">' + F.brl(d.total_investido) + ' → ' + F.brl(d.valor_atual) + '</div></div><div><div class="k">preço médio</div><div class="v">' + F.px(d.preco_medio) + '</div></div>' +
         '<div><div class="k">aportes</div><div class="v">' + A.esc(d.n_aportes) + '</div></div><div><div class="k">último</div><div class="v">' + (d.ultimo_aporte ? A.ddmm(d.ultimo_aporte) : '—') + '</div></div><div><div class="k">próximo</div><div class="v">' + prox + '</div></div></div>' +
-        '<div class="sg-act" style="display:flex;gap:8px"><button type="button" class="btn ghost sm" data-aportar="' + d.id + '">Aportar agora</button><button type="button" class="btn danger sm" data-remover="' + d.id + '">Remover plano</button></div></div>';
+        '<div class="sg-act" style="display:flex;gap:8px"><button type="button" class="btn ghost sm" data-aportar="' + A.esc(d.id) + '">Aportar agora</button><button type="button" class="btn danger sm" data-remover="' + A.esc(d.id) + '">Remover plano</button></div></div>';
     }).join('') + '</div>' : '<div class="empty">Nenhum plano de DCA. Crie um abaixo: compra spot periódica, sem alavancagem.</div>');
     var sel = $('ct-dca-a');
     if (!sel.options.length) pares(e).forEach(function (a) { var o = document.createElement('option'); o.value = a; o.textContent = F.par(a); sel.appendChild(o); });

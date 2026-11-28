@@ -466,7 +466,7 @@
         '<span class="sig-exp" title="o auto-trade só opera sinal com até ' + ttl + ' min">há ' + A.idade(s.ts) + '</span></div>' +
         '<div class="sig-conv"><span>convicção</span><span class="conv-num">' + c + '</span><div class="bar"><i style="--w:' + c + '%"></i></div></div>' +
         '<div class="sig-why">' + A.esc((s.motivos || '').split(', ').slice(0, 3).join(' · ') || s.tipo || '') + '</div>' +
-        '<div class="sig-act"><button type="button" class="btn primary sm" data-conf="' + s.id + '">Confirmar</button><button type="button" class="btn ghost sm" data-pular="' + s.id + '">Pular</button><a class="btn ghost sm" href="#operar">ver no Operar</a></div></li>';
+        '<div class="sig-act"><button type="button" class="btn primary sm" data-conf="' + A.esc(s.id) + '">Confirmar</button><button type="button" class="btn ghost sm" data-pular="' + A.esc(s.id) + '">Pular</button><a class="btn ghost sm" href="#operar">ver no Operar</a></div></li>';
     }).join('') + '</ul>' + (l.length > 6 ? '<div class="mute" style="font-size:11.5px;margin-top:8px">+' + (l.length - 6) + ' na fila · <a href="#operar" style="color:var(--accent)">todos no Operar</a></div>' : '');
   }
   function anotaPnl(e) {
@@ -491,7 +491,7 @@
           '<dl class="pc-kv"><div><dt>entrada</dt><dd>' + F.px(p.entrada) + '</dd></div><div><dt>atual</dt><dd>' + F.px(p.preco_atual) + '</dd></div><div><dt>stop' + (mov ? ' · trailing' : '') + '</dt><dd class="neg">' + F.px(p.stop) + '</dd></div>' +
           '<div><dt>margem</dt><dd>' + F.brl(p.valor_reais) + '</dd></div><div><dt>idade</dt><dd>' + A.idade(p.aberto_em) + '</dd></div><div><dt>evolução</dt><dd>' + A.spark(S.pnlHist[p.id]) + '</dd></div></dl>' +
           (sd && sd.acao ? '<div class="pc-saida">' + A.esc(sd.acao) + '</div>' : '') +
-          '<button type="button" class="btn danger sm" data-fechar="' + p.id + '">Fechar a mercado</button></div>';
+          '<button type="button" class="btn danger sm" data-fechar="' + A.esc(p.id) + '">Fechar a mercado</button></div>';
       }).join('') + '</div>';
       return;
     }
@@ -503,7 +503,7 @@
           '<td class="mono num">' + F.px(p.entrada) + '</td><td class="mono num">' + F.px(p.preco_atual) + '</td>' +
           '<td class="mono num ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + ' · ' + F.pct(roe, 1) + '</td>' +
           '<td class="mono num">' + F.px(p.stop) + (mov ? '<span class="sub">movido pelo trailing</span>' : '') + '</td><td class="mono">' + A.idade(p.aberto_em) + '</td>' +
-          '<td>' + A.spark(S.pnlHist[p.id]) + '</td><td><button type="button" class="btn danger sm" data-fechar="' + p.id + '">Fechar</button></td></tr>' +
+          '<td>' + A.spark(S.pnlHist[p.id]) + '</td><td><button type="button" class="btn danger sm" data-fechar="' + A.esc(p.id) + '">Fechar</button></td></tr>' +
           (sd && sd.acao ? '<tr class="saida"><td colspan="10">' + A.esc(sd.acao) + '</td></tr>' : '');
       }).join('') + '</tbody></table></div>';
   }
@@ -531,8 +531,8 @@
     var r = await Promise.all([A.api('/sentimento').catch(function () { return null; }), A.api('/funding').catch(function () { return null; })]);
     if (!S) return;
     var s = r[0], fu = r[1], h = '';
-    if (s && s.fear_greed) h += '<div class="mkt-row"><span class="k">Fear &amp; Greed</span><span class="v">' + s.fear_greed.valor + ' <span class="txt2">' + A.esc(s.fear_greed.label) + '</span></span></div><div class="fg" aria-hidden="true"><i style="--w:' + s.fear_greed.valor + '%"></i></div>';
-    if (s && s.breadth) h += '<div class="mkt-row"><span class="k">Breadth</span><span class="v">' + s.breadth.pct_subindo + '% <span class="txt2">das ' + s.breadth.n + ' subindo hoje</span></span></div><div class="mkt-row"><span class="k">Variação média</span><span class="v ' + F.cls(s.breadth.variacao_media) + '">' + F.pct(s.breadth.variacao_media) + '</span></div>';
+    if (s && s.fear_greed) h += '<div class="mkt-row"><span class="k">Fear &amp; Greed</span><span class="v">' + F.f0(s.fear_greed.valor) + ' <span class="txt2">' + A.esc(s.fear_greed.label) + '</span></span></div><div class="fg" aria-hidden="true"><i style="--w:' + F.f0(s.fear_greed.valor) + '%"></i></div>';
+    if (s && s.breadth) h += '<div class="mkt-row"><span class="k">Breadth</span><span class="v">' + F.f0(s.breadth.pct_subindo) + '% <span class="txt2">das ' + F.f0(s.breadth.n) + ' subindo hoje</span></span></div><div class="mkt-row"><span class="k">Variação média</span><span class="v ' + F.cls(s.breadth.variacao_media) + '">' + F.pct(s.breadth.variacao_media) + '</span></div>';
     if (fu && fu.length) {
       var med = fu.reduce(function (a, x) { return a + (x.funding_pct || 0); }, 0) / fu.length;
       var neg = fu.slice().sort(function (a, b) { return a.funding_pct - b.funding_pct; }).slice(0, 2);

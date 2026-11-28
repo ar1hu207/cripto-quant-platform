@@ -255,7 +255,7 @@
     var a = S.anal, sn = a.snapshot || {}, st = A.statusEntrada(s, S.precos[s.ativo] || sn.preco);
     el.innerHTML = '<div class="anal"><div class="sg-top"><b>Análise do sinal</b><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(s.direcao) + '</span><span class="chip neutro">' + A.esc(s.tf) + ' · ' + A.esc(s.tipo || '') + '</span><span class="chip ' + st.cls + '">' + st.txt + '</span><button type="button" class="btn ghost sm" data-fecha-anal style="margin-left:auto">fechar</button></div>' +
       '<p>' + A.esc(F.decBR(a.leitura)) + '</p><div class="g"><div><span>RSI</span>' + (sn.rsi != null ? F.f1(+sn.rsi) : '—') + '</div><div><span>ADX</span>' + (sn.adx != null ? F.f1(+sn.adx) : '—') + '</div><div><span>EMA 20</span>' + F.px(sn.ema20) + '</div><div><span>EMA 50</span>' + F.px(sn.ema50) + '</div><div><span>Bollinger</span>' + F.px(sn.bb_lo) + '–' + F.px(sn.bb_up) + '</div></div>' +
-      '<div class="sg-act" style="margin-top:10px"><button type="button" class="btn primary sm" data-conf="' + s.id + '">Confirmar com prévia de risco</button><button type="button" class="btn ghost sm" data-pular="' + s.id + '">Pular</button></div>' +
+      '<div class="sg-act" style="margin-top:10px"><button type="button" class="btn primary sm" data-conf="' + A.esc(s.id) + '">Confirmar com prévia de risco</button><button type="button" class="btn ghost sm" data-pular="' + A.esc(s.id) + '">Pular</button></div>' +
       (S.tf !== s.tf ? '<div class="mute" style="font-size:11px;margin-top:8px">O sinal nasceu no ' + A.esc(s.tf) + '; a leitura acima é do ' + S.tf + '.</div>' : '') + '</div>';
   }
 
@@ -296,7 +296,7 @@
       return '<div class="sg-item' + (s.id === S.sinalSel ? ' is-on' : '') + '"><div class="sg-top"><span class="mono strong">' + A.esc(F.par(s.ativo)) + '</span><span class="chip ' + (s.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(s.direcao) + '</span><span class="chip neutro">' + A.esc(s.tf) + '</span><span class="t">há ' + A.idade(s.ts) + '</span></div>' +
         '<div class="sg-kv"><div><span>convicção</span>' + Math.round(s.conviccao) + '</div><div><span>entrada</span>' + F.px(s.preco) + '</div><div><span>stop</span><span class="neg" style="font-size:11.5px;letter-spacing:0;text-transform:none">' + F.px(s.stop_sugerido) + ' · ' + F.f2(sd) + '%</span></div></div>' +
         '<div><span class="chip ' + st.cls + '">' + st.txt + '</span></div>' +
-        '<div class="sg-act"><button type="button" class="btn primary sm" data-conf="' + s.id + '">Confirmar</button><button type="button" class="btn ghost sm" data-pular="' + s.id + '">Pular</button><button type="button" class="btn ghost sm" data-ver="' + s.id + '">Ver no gráfico</button></div></div>';
+        '<div class="sg-act"><button type="button" class="btn primary sm" data-conf="' + A.esc(s.id) + '">Confirmar</button><button type="button" class="btn ghost sm" data-pular="' + A.esc(s.id) + '">Pular</button><button type="button" class="btn ghost sm" data-ver="' + A.esc(s.id) + '">Ver no gráfico</button></div></div>';
     }).join('') : '<div class="empty">Nenhum sinal na fila agora.</div>';
   }
   function posicoes(e) {
@@ -308,7 +308,7 @@
       return '<div class="ps-item' + (p.ativo === S.ativo ? ' is-on' : '') + '"><div class="ps-top"><button type="button" class="mono strong" data-par="' + A.esc(p.ativo) + '" style="background:none;border:0;color:inherit;padding:0;cursor:pointer;font:inherit">' + A.esc(F.par(p.ativo)) + '</button><span class="chip ' + (p.direcao === 'LONG' ? 'long' : 'short') + '">' + A.esc(p.direcao) + '</span><span class="amt ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '</span></div>' +
         '<div class="ps-meta"><span>' + A.esc(p.alavancagem) + 'x · ' + A.idade(p.aberto_em) + '</span><span class="' + F.cls(roe) + '">' + F.pct(roe) + ' ROE</span><span>entrada ' + F.px(p.entrada) + '</span><span>stop <span class="neg">' + F.px(p.stop) + '</span></span><span>margem ' + F.brl(p.valor_reais) + '</span></div>' +
         (sd && sd.acao ? '<div class="ps-saida">' + A.esc(sd.acao) + '</div>' : '') +
-        '<div class="sg-act"><button type="button" class="btn danger sm" data-fechar="' + p.id + '">Fechar a mercado</button></div></div>';
+        '<div class="sg-act"><button type="button" class="btn danger sm" data-fechar="' + A.esc(p.id) + '">Fechar a mercado</button></div></div>';
     }).join('') : '<div class="empty">Nenhuma posição aberta.</div>';
   }
   function ordens(e) {

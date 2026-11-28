@@ -252,7 +252,7 @@
   function posItem(p) {
     var roe = p.valor_reais ? p.pnl / p.valor_reais * 100 : 0, sd = M.saidas[p.id];
     var mov = p.stop_abertura != null && Math.abs(p.stop - p.stop_abertura) > 1e-12;
-    return '<a class="m-pos" href="#pos/' + p.id + '"><div><div class="top"><b>' + esc(F.par(p.ativo)) + '</b>' + chipLado(p.direcao, p.alavancagem + 'x') + '</div>' +
+    return '<a class="m-pos" href="#pos/' + esc(p.id) + '"><div><div class="top"><b>' + esc(F.par(p.ativo)) + '</b>' + chipLado(p.direcao, p.alavancagem + 'x') + '</div>' +
       '<div class="meta">' + F.px(p.preco_atual) + ' · stop ' + F.px(p.stop) + (mov ? ' (trailing)' : '') + ' · ' + A.idade(p.aberto_em) + '</div>' + A.spark(M.pnlHist[p.id]) + '</div>' +
       '<div class="pnl ' + F.cls(p.pnl) + '">' + F.money(p.pnl) + '<small>' + F.pct(roe, 1) + ' ROE</small></div>' +
       (sd && sd.nivel === 'risco' ? '<div class="aviso-s">' + esc(F.decBR(sd.acao)) + '</div>' : '') + '</a>';
@@ -263,7 +263,7 @@
       '<span class="sig-exp" title="o auto-trade só opera sinal com até ' + ttl + ' min">há ' + A.idade(s.ts) + '</span></div>' +
       '<div class="sig-conv"><span>convicção</span><span class="n">' + c + '</span><span class="bar"><i style="--w:' + c + '%"></i></span></div>' +
       '<div class="sig-why">' + esc(F.decBR((s.motivos || '').split(', ').slice(0, 3).join(' · ') || s.tipo || '')) + '</div>' +
-      '<div class="sig-act"><a class="btn primary sm" href="#sinal/' + s.id + '">Ver e confirmar</a><button type="button" class="btn secondary sm" data-pular="' + s.id + '">Pular</button></div></div>';
+      '<div class="sig-act"><a class="btn primary sm" href="#sinal/' + esc(s.id) + '">Ver e confirmar</a><button type="button" class="btn secondary sm" data-pular="' + esc(s.id) + '">Pular</button></div></div>';
   }
   function ordItem(o) {
     var falta = A.ts(o.expira_em) ? Math.max(0, Math.round((A.ts(o.expira_em) - Date.now()) / 60000)) : null;
@@ -522,7 +522,7 @@
       if (x && P.nOrd) av += '<div class="aviso">Sem contar ' + P.nOrd + (P.nOrd === 1 ? ' ordem descansando' : ' ordens descansando') + ': o backend conta, então pode recusar mesmo abaixo do teto.</div>';
       if (P.trava) av += '<div class="aviso neg">Trava diária ativa: o backend vai recusar.</div>';
       $('tk-avisos').innerHTML = av;
-      $('sn-wr').innerHTML = P.wr ? 'Win rate histórico nesta faixa de convicção: <b>' + P.wr.win_rate + '%</b> (' + P.wr.n + ' trades). Referência, não garantia.' : '';
+      $('sn-wr').innerHTML = P.wr ? 'Win rate histórico nesta faixa de convicção: <b>' + F.f0(P.wr.win_rate) + '%</b> (' + F.f0(P.wr.n) + ' trades). Referência, não garantia.' : '';
       this.ok = v > 0 && l >= 1 && !P.liqAntes && !P.trava;
       $('tk-slide').classList.toggle('is-off', !this.ok || !this.naFila);
     },
